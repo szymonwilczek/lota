@@ -30,8 +30,8 @@ int lota_copy_xattr(const char *from, const char *to, const char *name);
  * @out_len: bytes read; 0 for a missing or empty file.
  *
  * Return: 0 (also for a missing or empty file), -EINVAL for a NULL
- * argument, -EMSGSIZE before any read for a file larger than @max,
- * or another negative errno.
+ * argument, -EISDIR for a directory, -EMSGSIZE before any read for
+ * a file larger than @max, or another negative errno.
  */
 int lota_read_file_bounded(const char *path, void *buf, size_t max,
 			   size_t *out_len);

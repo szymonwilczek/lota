@@ -383,6 +383,42 @@ static void test_leftover_sidecar_is_still_a_record(void)
 	PASS();
 }
 
+/* a sealed copy left from before would be loaded ahead of the new value */
+static void test_plaintext_save_drops_an_old_sealed_copy(void)
+{
+	struct tpm_context ctx;
+	uint8_t auth[TPM_AIK_AUTH_SIZE];
+	char sealed[512];
+	int fd;
+
+	TEST("plaintext save removes a sealed copy of the old value");
+	init_ctx(&ctx);
+	if (tpm_test_aik_sealed_path(&ctx, sealed, sizeof(sealed)) != 0) {
+		FAIL("path");
+		return;
+	}
+	fd = open(sealed, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0 || write(fd, "old", 3) != 3) {
+		if (fd >= 0)
+			close(fd);
+		FAIL("seed sealed copy");
+		return;
+	}
+	close(fd);
+
+	for (unsigned i = 0; i < TPM_AIK_AUTH_SIZE; i++)
+		auth[i] = (uint8_t)(0x61 + i);
+	if (tpm_test_aik_save_auth(&ctx, auth) != 0) {
+		FAIL("save");
+		return;
+	}
+	if (file_exists(sealed)) {
+		FAIL("old sealed copy kept");
+		return;
+	}
+	PASS();
+}
+
 /* write @len bytes of @magic with @version + 1 */
 static int write_bumped_record(const char *path, uint32_t magic,
 			       uint32_t version, size_t len)
@@ -783,6 +819,7 @@ int main(void)
 	test_unreadable_record_is_not_a_missing_one();
 	test_recovery_decision();
 	test_leftover_sidecar_is_still_a_record();
+	test_plaintext_save_drops_an_old_sealed_copy();
 	test_state_files_at_an_unknown_version();
 	test_reseal_reprovision_arg_guards();
 	test_mask_selection_default();

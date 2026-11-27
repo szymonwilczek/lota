@@ -121,6 +121,26 @@ static void test_oversize_rejected(void)
 	unlink(path);
 }
 
+/* a directory opens O_RDONLY and may report size 0 */
+static void test_directory_is_not_absent(void)
+{
+	char path[] = "/tmp/lota-iotest-dir-XXXXXX";
+	uint8_t buf[16];
+	size_t out = 0;
+
+	if (!mkdtemp(path)) {
+		fprintf(stderr, "FAIL: could not create temp dir\n");
+		g_failures++;
+		return;
+	}
+
+	CHECK(lota_read_file_bounded(path, buf, sizeof(buf), &out) == -EISDIR,
+	      "read_file_bounded refuses a directory");
+	CHECK(out == 0, "read_file_bounded leaves length zero for a directory");
+
+	rmdir(path);
+}
+
 static void test_argument_validation(void)
 {
 	uint8_t buf[16];
@@ -143,6 +163,7 @@ int main(void)
 	test_missing_file_is_absent();
 	test_empty_file_is_absent();
 	test_oversize_rejected();
+	test_directory_is_not_absent();
 	test_argument_validation();
 
 	if (g_failures) {

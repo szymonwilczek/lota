@@ -18,6 +18,7 @@
 #include "../../include/lota_envelope.h"
 #include "../../include/lota_seal.h"
 #include "agent.h"
+#include "aik_cert.h"
 #include "iommu.h"
 #include "profile.h"
 #include "publishers.h"
@@ -615,6 +616,10 @@ int do_unseal(void)
 			fprintf(stderr,
 				"(the host may not be in the sealed boot "
 				"state)\n");
+		else
+			fprintf(stderr,
+				"(the blob is damaged, or was sealed on "
+				"another TPM)\n");
 		goto out;
 	}
 
@@ -635,6 +640,81 @@ out:
 	return rc;
 }
 
+struct aik_cert_result {
+	int err;
+	bool key_err;
+};
+
+/*
+ * A certificate is stale when it names another key than the one now at the
+ * profile's handle: -EKEYREJECTED. Any other error leaves it unchecked.
+ */
+static struct aik_cert_result aik_cert_check(struct tpm_context *ctx,
+					     const struct profile_paths *paths)
+{
+	struct aik_cert_result res = { 0 };
+	uint8_t spki[LOTA_MAX_AIK_PUB_SIZE];
+	size_t spki_len = 0;
+
+	res.err = tpm_get_aik_public(ctx, spki, sizeof(spki), &spki_len);
+	if (res.err < 0) {
+		res.key_err = true;
+		return res;
+	}
+	res.err = aik_cert_matches_key(paths->aik_cert, spki, spki_len);
+	return res;
+}
+
+static void report_unchecked_cert(const char *id,
+				  const struct aik_cert_result *res)
+{
+	if (res->key_err)
+		fprintf(stderr, "  %s: the key could not be read (%s)\n", id,
+			tpm_strerror(res->err));
+	else if (res->err == -ENOENT)
+		fprintf(stderr, "  %s: no certificate is stored\n", id);
+	else if (res->err == -EINVAL)
+		fprintf(stderr,
+			"  %s: the certificate does not parse as DER X.509\n",
+			id);
+	else
+		fprintf(stderr,
+			"  %s: the certificate could not be read (%s)\n", id,
+			tpm_strerror(res->err));
+}
+
+/* the host key keeps its records beside its metadata file */
+static enum profile_aik_auth_state
+host_aik_auth_state(const struct tpm_context *ctx)
+{
+	const char *meta = ctx->aik_meta_path[0] ? ctx->aik_meta_path :
+						   TPM_AIK_META_PATH;
+	struct profile_paths paths;
+	size_t dir_len = (size_t)(strrchr(meta, '/') - meta);
+
+	memset(&paths, 0, sizeof(paths));
+	memcpy(paths.dir, meta, dir_len);
+	return profile_aik_auth_state(&paths);
+}
+
+/*
+ * A refused sealed copy with no plaintext beside it leaves the key with
+ * no readable authorization; a busy TPM or a failed write does not.
+ */
+static void report_reseal_failure(const char *label, int err,
+				  enum profile_aik_auth_state before)
+{
+	fprintf(stderr, "  %s: %s (its authorization is %s)\n", label,
+		tpm_strerror(err), profile_aik_auth_state_str(before));
+	if (before == PROFILE_AIK_AUTH_SEALED &&
+	    (err == -LOTA_ERR_TPM_POLICY_FAIL || err == -EBADMSG))
+		fprintf(stderr,
+			"  %s: the sealed copy did not open; run "
+			"--reprovision-aik to give the key a new "
+			"authorization\n",
+			label);
+}
+
 /* read back after the verb, so the count is what is stored */
 static unsigned aik_auth_exposed_count(const struct publisher_entry *entries,
 				       size_t count)
@@ -650,6 +730,9 @@ static unsigned aik_auth_exposed_count(const struct publisher_entry *entries,
 		if (profile_aik_auth_exposed(profile_aik_auth_state(&paths)))
 			exposed++;
 	}
+	if (publishers_default_key_in_use(count) &&
+	    profile_aik_auth_exposed(host_aik_auth_state(&g_agent.tpm_ctx)))
+		exposed++;
 	return exposed;
 }
 
@@ -658,7 +741,6 @@ int do_seal_aik_auth(void)
 	struct publisher_entry *entries = NULL;
 	size_t count = 0;
 	unsigned sealed = 0;
-	unsigned strict = 0;
 	unsigned failed = 0;
 	int rc = 1;
 	int ret;
@@ -701,20 +783,7 @@ int do_seal_aik_auth(void)
 
 		ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
 		if (ret < 0) {
-			/* already strict: nothing to seal, so not a failure */
-			if (!profile_aik_auth_needs_sealing(before) &&
-			    before != PROFILE_AIK_AUTH_NONE) {
-				fprintf(stderr,
-					"  %s: already %s, so there was "
-					"nothing to seal\n",
-					entries[i].id,
-					profile_aik_auth_state_str(before));
-				strict++;
-				continue;
-			}
-			fprintf(stderr, "  %s: %s (its authorization is %s)\n",
-				entries[i].id, tpm_strerror(ret),
-				profile_aik_auth_state_str(before));
+			report_reseal_failure(entries[i].id, ret, before);
 			failed++;
 			continue;
 		}
@@ -722,34 +791,29 @@ int do_seal_aik_auth(void)
 	}
 
 	if (publishers_default_key_in_use(count)) {
+		enum profile_aik_auth_state before =
+			host_aik_auth_state(&g_agent.tpm_ctx);
+
 		ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
 		if (ret < 0) {
-			fprintf(stderr, "Could not seal AIK auth: %s\n",
-				tpm_strerror(ret));
-			tpm_cleanup(&g_agent.tpm_ctx);
-			goto out;
+			report_reseal_failure("host key", ret, before);
+			failed++;
+		} else {
+			sealed++;
 		}
-		sealed++;
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
 
-	if (sealed == 0 && strict > 0) {
-		fprintf(stderr,
-			"Nothing to seal: %u attestation key%s already hold "
-			"the authorization sealed with no plaintext copy.\n",
-			strict, strict == 1 ? "" : "s");
-		rc = failed ? 1 : 0;
-		goto out;
-	}
-
-	if (sealed == 0) {
+	if (sealed == 0 && failed == 0) {
 		fprintf(stderr,
 			"No attestation key to seal: this host holds none "
 			"yet. Enroll with a publisher first.\n");
-		rc = failed ? 1 : 0;
+		rc = 0;
 		goto out;
 	}
+	if (sealed == 0)
+		goto report;
 
 	fprintf(stderr,
 		"Sealed the authorization of %u attestation key%s to the "
@@ -762,20 +826,16 @@ int do_seal_aik_auth(void)
 
 		if (exposed)
 			fprintf(stderr,
-				"%u still keep a plaintext copy beside the "
+				"%u still keep%s a plaintext copy beside the "
 				"sealed one; set seal_aik_auth_strict to drop "
-				"it.\n",
-				exposed);
+				"%s.\n",
+				exposed, exposed == 1 ? "s" : "",
+				exposed == 1 ? "it" : "them");
 		else
 			fprintf(stderr, "No plaintext copy remains on disk.\n");
 	}
 
-	if (strict)
-		fprintf(stderr,
-			"%u already held the authorization sealed with no "
-			"plaintext copy, so there was nothing to seal.\n",
-			strict);
-
+report:
 	if (failed) {
 		fprintf(stderr,
 			"%u could not be sealed; the line for each names the "
@@ -797,6 +857,11 @@ int do_reprovision_aik(void)
 	unsigned keys_moved = 0;
 	unsigned failed = 0;
 	bool key_changed = false;
+	struct aik_cert_result *cert_err = NULL;
+	bool host_moved = false;
+	bool any_stale = false;
+	unsigned unchecked = 0;
+	int host_had;
 	int rc = 1;
 	int ret;
 
@@ -809,6 +874,12 @@ int do_reprovision_aik(void)
 		return 1;
 	}
 
+	cert_err = calloc(count ? count : 1, sizeof(*cert_err));
+	if (!cert_err) {
+		fprintf(stderr, "Out of memory\n");
+		goto out;
+	}
+
 	ret = tpm_init(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
@@ -818,6 +889,7 @@ int do_reprovision_aik(void)
 
 	for (size_t i = 0; i < count; i++) {
 		struct profile_paths paths;
+		int had;
 
 		if (!entries[i].has_aik_handle)
 			continue;
@@ -831,6 +903,7 @@ int do_reprovision_aik(void)
 			continue;
 		}
 
+		had = tpm_aik_key_present(&g_agent.tpm_ctx);
 		ret = tpm_reprovision_aik(&g_agent.tpm_ctx, &key_changed);
 		if (ret < 0) {
 			fprintf(stderr, "  %s: %s\n", entries[i].id,
@@ -840,11 +913,14 @@ int do_reprovision_aik(void)
 			continue;
 		}
 		rotated++;
-		if (key_changed)
+		if (key_changed && had == 1)
 			keys_moved++;
+		if (entries[i].enrolled)
+			cert_err[i] = aik_cert_check(&g_agent.tpm_ctx, &paths);
 	}
 
 	if (publishers_default_key_in_use(count)) {
+		host_had = tpm_aik_key_present(&g_agent.tpm_ctx);
 		ret = tpm_reprovision_aik(&g_agent.tpm_ctx, &key_changed);
 		if (ret < 0) {
 			fprintf(stderr, "AIK re-provisioning failed: %s\n",
@@ -853,21 +929,28 @@ int do_reprovision_aik(void)
 			goto out;
 		}
 		rotated++;
-		if (key_changed)
+		if (key_changed && host_had == 1) {
 			keys_moved++;
+			host_moved = true;
+		}
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
 
-	if (rotated == 0) {
+	if (rotated == 0 && failed == 0) {
 		fprintf(stderr,
 			"No attestation key to rotate: this host holds none "
 			"yet.\n");
-		rc = failed ? 1 : 0;
+		rc = 0;
 		goto out;
 	}
+	if (rotated == 0)
+		goto report;
 
-	/* usually only the auth moved: userAuth does not derive the key */
+	/*
+	 * Usually only the auth moved: userAuth does not derive the key. A key
+	 * made where none was has no Name to compare and is not counted moved.
+	 */
 	if (keys_moved == rotated)
 		fprintf(stderr, "Rotated %u attestation key%s.\n", rotated,
 			rotated == 1 ? "" : "s");
@@ -892,50 +975,62 @@ int do_reprovision_aik(void)
 	{
 		unsigned exposed = aik_auth_exposed_count(entries, count);
 
-		if (count == 0)
-			fprintf(stderr,
-				"Set seal_aik_auth in lota.conf and run "
-				"--seal-aik-auth to seal the new "
-				"authorization at rest.\n");
-		else if (exposed == 0)
+		if (exposed == 0)
 			fprintf(stderr,
 				"Every new authorization is sealed to the "
 				"platform state, with no plaintext copy.\n");
 		else
 			fprintf(stderr,
-				"%u of the new authorization%s on disk in the "
-				"clear; run --seal-aik-auth to seal %s.\n",
+				"%u new authorization%s on disk in the clear; "
+				"run --seal-aik-auth to seal %s.\n",
 				exposed, exposed == 1 ? " is" : "s are",
 				exposed == 1 ? "it" : "them");
 	}
 
-	/* a certificate names a key: it is stale only where the key moved */
-	if (keys_moved == 0) {
+	for (size_t i = 0; i < count; i++) {
+		if (cert_err[i].err == -EKEYREJECTED)
+			any_stale = true;
+		else if (cert_err[i].err < 0)
+			unchecked++;
+	}
+	any_stale |= host_moved;
+
+	if (unchecked) {
+		fprintf(stderr, "%u certificate%s could not be checked:\n",
+			unchecked, unchecked == 1 ? "" : "s");
+		for (size_t i = 0; i < count; i++)
+			if (cert_err[i].err < 0 &&
+			    cert_err[i].err != -EKEYREJECTED)
+				report_unchecked_cert(entries[i].id,
+						      &cert_err[i]);
+	}
+
+	if (!any_stale && !unchecked) {
 		fprintf(stderr,
 			"No certificate is stale: each still names the key it "
 			"was issued over.\n");
-	} else if (count > 0) {
+	} else if (any_stale) {
 		fprintf(stderr,
 			"Their certificates are now stale -- re-enroll each:\n");
 		for (size_t i = 0; i < count; i++)
-			if (entries[i].has_aik_handle && entries[i].enrolled)
+			if (cert_err[i].err == -EKEYREJECTED)
 				fprintf(stderr,
 					"  lota-agent --reenroll --publisher "
 					"%s\n",
 					entries[i].id);
-	} else {
-		fprintf(stderr,
-			"The previous AIK certificate is now stale -- "
-			"re-enroll:\n"
-			"  lota-agent --enroll --ca-server <host> ...\n");
+		if (host_moved)
+			fprintf(stderr, "  lota-agent --enroll --ca-server "
+					"<host> ...\n");
 	}
 
+report:
 	if (failed) {
 		fprintf(stderr, "%u could not be rotated.\n", failed);
 		goto out;
 	}
 	rc = 0;
 out:
+	free(cert_err);
 	free(entries);
 	return rc;
 }
