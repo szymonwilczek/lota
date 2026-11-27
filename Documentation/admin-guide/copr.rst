@@ -5,56 +5,57 @@
 COPR repository
 ===============
 
-Alongside the self-hosted dnf repository of nfpm-built binary packages, LOTA is
-published through `COPR <https://copr.fedorainfracloud.org>`_. COPR rebuilds the
-subpackages -- ``lota-agent``, ``lota-verifier``, ``lota-attest-ca``,
-``lota-sdk`` and ``lota-sdk-devel`` -- from source in a clean chroot for each
-target Fedora and EPEL release, validating the build across releases, and
-hosts a signed dnf repository operators enable directly.
+`COPR <https://copr.fedorainfracloud.org>`_ builds the five packages of
+:doc:`packages` from the source RPM in a clean chroot and serves them as a
+dnf repository:
 
-Installing
-==========
-
-::
+.. code-block:: sh
 
    sudo dnf copr enable szymon-wilczek/lota
    sudo dnf install lota-agent
 
-The agent still fails closed and is not started by the package. Complete the
-host bring-up with ``lota-install`` as for any other install path; see
-:doc:`bringup/index`.
+The install runs the same scripts as any other (:doc:`packages`); bring-up
+ends with ``sudo lota-install`` (:doc:`lota-install`).
 
-Rebuilding from the source RPM
-==============================
+The source RPM
+==============
 
-The COPR packages are built from ``packaging/rpm/lota.spec``, and the same
-source RPM rebuilds anywhere. ``make srpm`` archives the current commit, fills
-the spec's version and newest changelog entry from ``VERSION`` and builds the
-source RPM; the spec in the tree carries placeholders and is not built with
-``rpmbuild`` directly.
+COPR runs ``make -f .copr/Makefile srpm outdir=DIR``, which runs ``make
+srpm OUTDIR=DIR`` (:ghsrc:`.copr/Makefile`). ``make srpm``:
 
-Three properties of the spec matter to a rebuild:
+#. runs ``make check-package-manifests``, which fails when the spec and the
+   nfpm configurations describe different packages
+   (:ghsrc:`scripts/check-package-manifests.sh`, checks listed in
+   :doc:`../dev-tools/testing`);
+#. archives ``HEAD`` with ``git archive``;
+#. fills the spec's ``@VERSION@`` and ``@CHANGELOG@`` from ``VERSION``, the
+   version ``0.9.0-rc1`` becoming ``0.9.0~rc1``;
+#. builds the source RPM with ``rpmbuild -bs`` into ``OUTDIR``,
+   ``build/srpm`` by default.
 
-* **The builder signs the enforcement object.** ``lota-agent`` ships a BPF LSM
-  object it refuses to load unsigned, and the public half of the key that
-  verifies it ships beside it, so whoever builds the package is who signs it.
-  The spec takes the key as a define and refuses before compiling anything
-  without one::
+:ghsrc:`packaging/rpm/lota.spec` carries the placeholders, so ``rpmbuild``
+does not build it directly. The source RPM is built without a key and
+compiles nothing.
 
-     rpmbuild --rebuild --define "lota_signing_key /path/to/enforcement.key" \
-         lota-<version>.src.rpm
+Rebuilding
+==========
 
-  ``lota_signing_pubkey`` overrides where the public half is read from; by
-  default it is the key's own path with a ``.pub`` suffix, which is where
-  ``lota-agent --gen-signing-key`` writes it. Building the *source* RPM needs
-  no key: ``make srpm`` compiles and signs nothing.
-* **The build needs network access.** The Go services (verifier, attest-CA)
-  are not vendored; ``%build`` fetches their modules read-only from the proxy.
-* **No debuginfo subpackage.** ``debug_package`` is disabled because rpm's
-  debuginfo extraction strips the binaries, but the agent binary is
-  fsverity-measured and its hash is pinned, so it must ship exactly as built.
+.. code-block:: sh
 
-In a chroot build, rpmbuild's dependency generator derives the library
-Requires from the binaries' sonames rather than listing them by hand as in the
-nfpm path. The package contents are otherwise identical to the
-nfpm packages.
+   rpmbuild --rebuild --define "lota_signing_key /path/to/enforcement.key" \
+       lota-VERSION.src.rpm
+
+``%build`` refuses before compiling without ``lota_signing_key``, and signs
+the enforcement object with ``make sign-bpf``. The public half is read from
+the key's path ending in ``.pub``, or from ``lota_signing_pubkey``.
+
+The Go modules of the verifier and the CA are not vendored: ``%build``
+fetches them from the module proxy, so the chroot needs network access.
+
+Debuginfo extraction and the strip steps are off, since each rewrites ELF
+files: the verifier pins the SHA-256 of the agent binary and the object is
+signed. ``%check`` verifies the packaged object against the packaged key
+and compares the packaged ``lota-agent`` with the built one.
+
+rpmbuild derives the library dependencies from the sonames of the binaries;
+the nfpm configurations list them by hand.

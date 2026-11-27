@@ -1,15 +1,22 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-=============
+============
 RPM packages
-=============
+============
 
-LOTA ships as native RPMs so a host does not have to reproduce the build
-toolchain. The packages are built with `nfpm <https://nfpm.goreleaser.com>`_
-from the configs under ``packaging/nfpm`` and target the RPM/dracut family
-(Fedora first, then RHEL/Rocky/Alma). Debian/Ubuntu use a different initramfs
-generator and are handled separately.
+``make packages`` builds five RPMs with `nfpm <https://nfpm.goreleaser.com>`_
+from the configurations in :ghsrc:`packaging/nfpm`.
+:ghsrc:`packaging/rpm/lota.spec` builds packages of the same names that
+install the same files, for COPR (:doc:`copr`). Their dependencies differ.
+The nfpm configurations name the libraries by hand: ``lota-agent`` requires
+``tpm2-tss``, ``libbpf``, ``openssl-libs``, ``libseccomp`` and ``systemd``
+beside the requirements in the table, ``lota-sdk`` requires
+``openssl-libs``, and ``lota-verifier`` and ``lota-attest-ca`` require
+nothing. The spec leaves the libraries to the requirements rpmbuild
+generates from the binaries and requires ``systemd`` for the agent's
+scriptlets through ``%{?systemd_requires}``. Both require
+``pkgconfig(libcrypto)`` for ``lota-sdk-devel``.
 
 The packages
 ============
@@ -21,111 +28,79 @@ The packages
    * - Package
      - Contents
      - License
-   * - lota-agent
-     - agent, BPF LSM object, PCR14 initramfs helper, 90lota dracut module,
-       systemd/dbus/udev integration, lota-install
+   * - ``lota-agent``
+     - ``lota-agent``, ``lota-install``, ``lota-protect``,
+       ``lota-proton-hook`` and ``lota-steam-setup``; the signed enforcement
+       object and its key; ``lota-pcr14-lock`` and the dracut module
+       ``90lota``; the systemd units, the sysusers fragment, the D-Bus
+       policy, the udev rule, the SELinux module and the IMA policy example.
+       Requires ``lota-sdk`` of the same version and ``dracut``.
      - MIT AND GPL-2.0-only
-   * - lota-verifier
-     - the verifier service binary
+   * - ``lota-verifier``
+     - ``lota-verifier``.
      - MIT
-   * - lota-attest-ca
-     - the attestation CA service binary
+   * - ``lota-attest-ca``
+     - ``lota-attest-ca``.
      - MIT
-   * - lota-sdk
-     - versioned SDK runtime libraries (gaming, anti-cheat, server, Proton hook)
+   * - ``lota-sdk``
+     - The versioned shared libraries of the gaming, server and anti-cheat
+       SDKs and the Wine hook, and a 32-bit Wine hook in ``/usr/lib``.
      - MIT
-   * - lota-sdk-devel
-     - SDK headers, linker symlinks and Proton/Steam helpers (needs lota-sdk)
+   * - ``lota-sdk-devel``
+     - The headers in ``/usr/include/lota``, the unversioned ``.so`` links
+       and the pkg-config files. Requires ``lota-sdk`` of the same version.
      - MIT
 
-Only ``lota-agent`` is host-coupled (TPM, BPF, initramfs); the verifier and CA
-can equally run as container images on a cluster. ``lota-sdk`` carries the
-versioned shared libraries and ``lota-sdk-devel`` the headers and linker
-symlinks to build against them -- together the integrator surface for building
-on top of LOTA.
+The verifier and the CA also run as container images
+(:doc:`container-images`).
 
 Building
 ========
 
-::
+.. code-block:: sh
 
-   make packages
+   make sign-bpf SIGNING_KEY=release.key
+   make packages SIGNING_KEY=release.key
 
-builds every RPM under ``build/packages`` (``PKG_DIR``), each named from the
-project version. The target depends on a full build so the configs find the
-binaries and libraries they reference. It ends in ``make package-lint``, which
-runs ``rpmlint`` with ``packaging/nfpm/lota.rpmlintrc`` and fails on any error
-that file does not filter; CI runs the same target. Without ``rpmlint``
-installed the lint is skipped.
+``make packages`` builds from ``./build`` and refuses another
+``BUILD_DIR``. It refuses without ``build/lota_lsm.bpf.o.sig`` or a readable
+``SIGNING_PUBKEY``, by default the path of ``SIGNING_KEY`` ending in
+``.pub``, since the package ships the object with its signature and the key
+that verifies it (:doc:`bringup/manual-reference`). It writes the RPMs to
+``build/packages`` (``PKG_DIR``) and ends with ``make package-lint``, which
+runs ``rpmlint`` with :ghsrc:`packaging/nfpm/lota.rpmlintrc` and fails on an
+error that file does not filter. Without ``rpmlint`` the lint is skipped.
 
 Installing
 ==========
 
-Once the packages are served from a signed dnf repository::
+.. code-block:: sh
 
    sudo dnf install lota-agent
 
-On RHEL-family hosts, enable EPEL before that command. The agent requires
-``fsverity-utils`` to measure the objects a title maps, and el9 serves that
-package from EPEL rather than from baseos, appstream or crb::
+After the files are in place the post-install script creates the ``lota``
+group, reloads the SELinux module when one is loaded, relabels
+``/etc/lota`` with ``restorecon -R``, and runs ``lota-install
+--unattended``, whose exit status it ignores. That run leaves the initramfs
+lock and the kernel integrity floor to ``sudo lota-install``, unless
+``/etc/lota/auto-bringup`` exists or ``LOTA_AUTO_BRINGUP=1`` is set, and it
+starts the units only when no stage is left ("Package installs" in
+:doc:`lota-install`).
 
-   sudo dnf install epel-release
+An upgrade runs the same script and leaves the running units alone; the new
+agent takes effect at the next cold boot (:doc:`agent-update`).
 
-The agent **fails closed** and is not started by the package. The post-install
-hook runs ``lota-install --unattended``, which does the host-local half of
-bring-up: it verifies the shipped BPF object against the public key beside it,
-records that key in ``/etc/lota/lota.conf``, restores fs-verity on the binary
-the package just wrote, and loads the SELinux fence. Each of those is
-reversible and none of them changes how the machine boots.
+State
+=====
 
-What it deliberately leaves alone is the boot path -- the 90lota initramfs
-module and the kernel integrity floor on the command line -- and it names the
-stages it left before exiting with code ``11``, which a tool that runs
-``lota-install --unattended`` itself reads as "not finished". Finish with::
+``lota-agent`` owns ``/etc/lota`` (0755), ``/var/lib/lota`` and
+``/var/lib/lota/profiles`` (0700); ``lota-verifier`` owns ``/var/lib/lota``
+(0700) as well. No package owns the files in them: ``lota.conf``,
+``/etc/lota/policy.pub``, the AIK records and authorization files, the clock
+state and the publisher profiles. They stay on removal and reinstall, as do
+the TPM's persistent objects. "Clearing the agent's state" in
+:doc:`bringup/manual-reference` removes them.
 
-   sudo lota-install
-
-The policy store keeps its own copy of a loaded SELinux module, so the hook
-reloads ``/usr/share/lota/selinux/lota.pp`` over it on every transaction. A host
-that loaded its own build through ``--selinux-module`` loads it again after an
-upgrade.
-
-The hook's failure is never the transaction's failure: the package installs
-either way and the run reports what is left. A host that wants the boot-path
-stages unattended as well opts in **before** installing, by creating
-``/etc/lota/auto-bringup`` or setting ``LOTA_AUTO_BRINGUP=1``; that is the
-image-build and managed-fleet case, where whoever builds the image is the
-person making that decision.
-
-The BPF object ships **signed** by whoever built the package, with the public
-key beside it at ``/usr/lib/lota/enforcement.pub``; an upgrade replaces the
-object, the signature and the key together. A fleet that signs enforcement
-itself puts its own public key at ``/etc/lota/policy.pub``, which the agent
-prefers and which no package owns, so it survives every upgrade. The agent
-refuses to load an unsigned object, and nothing signs one on the player's
-machine.
-
-Package upgrades follow the same rule and do not rewrite the boot path. An
-agent upgrade still needs the initramfs and the PCR 14 commitment refreshed,
-since the binary is measured; ``sudo lota-install`` after the upgrade does
-that.
-
-State the packages own, and state they leave alone
-==================================================
-
-``lota-agent`` owns ``/var/lib/lota`` and ``/var/lib/lota/profiles``, both
-``0700``; ``lota-verifier`` owns ``/var/lib/lota``, also ``0700``, so
-``rpm -V`` reports a changed mode.
-
-``lota-agent`` also owns ``/etc/lota``, ``0755``, so ``lota.conf`` can be
-written on a fresh host; no package owns ``lota.conf`` itself.
-
-The files inside are **not** owned: the AIK authorisation value and its
-sealed form, the AIK metadata, the monotonic clock state and the publisher
-profiles. They are the machine's identity and survive removal and reinstall,
-as do the files in ``/etc/lota`` and the TPM's persistent objects. To hand the machine
-on or re-enrol from scratch, remove them by hand.
-
-Removing ``lota-agent`` first stops the daemon, its socket and the
-attestation loop. Stopping the daemon extends PCR 14, so the host fails
-attestation until it reboots.
+Removing ``lota-agent`` stops and disables ``lota-agent.service``,
+``lota-agent.socket`` and ``lota-attest.service``. The stop extends PCR 14,
+so the host attests again only after a reboot with the package installed.

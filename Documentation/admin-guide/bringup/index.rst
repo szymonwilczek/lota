@@ -1,41 +1,30 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-========================
-LOTA production bring-up
-========================
+===================
+Production bring-up
+===================
 
-This document walks an operator through the full set of prerequisites the
-``lota-agent`` daemon enforces at startup. The agent is deliberately strict:
-every gate documented below is a hard fail in production because the
-corresponding bypass is part of the threat model (kernel module load, ptrace,
-/proc/mem inspection, tampered BPF object, PCR14 rebind, ...).
+These pages bring up a host step by step, without ``lota-install``: a host
+built from source, where the operator signs the enforcement object with a
+key of their own, or a fleet that provisions hosts with its own tooling.
+``lota-install`` walks one machine through the same requirements and asks
+before each change (:doc:`../lota-install`). The requirements of the
+platform are in :doc:`../platform-support`, and the order in which the
+daemon checks them in :doc:`../../agent/index`.
 
-There is **no shortcut**. The full chain is documented here and automated by
-``scripts/lota-dev-bringup.sh`` for developer-host iteration. Production hosts
-run the equivalent steps through their distro integrity tooling (signed RPMs,
-kernel cmdline provisioned at install, IMA policy from
-``/etc/sysconfig/integrity``, operator key in a sealed store).
-
-This document is the operator/fleet reference. Somebody installing the agent on
-one machine by hand uses the guided, reboot-resumable ``lota-install`` instead --
-same gates, consent prompts and live-state probes -- see
-:doc:`../lota-install`, including the list of inputs
-the operator must ship for it.
-
-Contents
-========
-
-* :doc:`Startup gate matrix and automated bring-up <gate-matrix>` -- the gates
-  the agent enforces and the developer bring-up script.
-* :doc:`Manual reference: host gates <manual-reference>` -- operator key, signed
-  BPF object, IMA, the TPM SELinux label, and the AIK / PCR14 reset.
-* :doc:`Attestation CA enrollment <ca-enrollment>` -- standing up the CA,
-  enrolling a host, tenants and enrollment tokens.
-* :doc:`Sealed keys (offline local attestation) <sealed-keys>` -- sealing
-  secrets to boot state and anti-rollback.
-* :doc:`What still fails, and operational constraints <limitations>` --
-  post-bring-up failures, the dev-path threat model, and restart/VM caveats.
+* :doc:`Startup checks <gate-matrix>` -- what the daemon checks before it
+  starts, what a failed check does, and ``scripts/lota-dev-bringup.sh``,
+  which meets them on a development host.
+* :doc:`Manual steps <manual-reference>` -- the enforcement key, the
+  SELinux module and the label of the TPM device, the initramfs lock, the
+  kernel command line, the IMA policy, and clearing the agent's state.
+* :doc:`Attestation CA enrollment <ca-enrollment>` -- the CA of a publisher
+  and enrolling a host with it.
+* :doc:`Sealed keys <sealed-keys>` -- secrets the TPM releases only in an
+  expected boot state.
+* :doc:`After bring-up <limitations>` -- what still fails on a host that
+  passes every check.
 
 .. toctree::
    :hidden:

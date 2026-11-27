@@ -1,273 +1,170 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-============================
-Manual reference: host gates
-============================
+============
+Manual steps
+============
 
-This is the manual equivalent of the developer bring-up script: the host-side
-gates an operator provisions before the agent will start. Attestation CA
-enrollment and sealed keys are covered in their own documents
-(:doc:`ca-enrollment`,
-:doc:`sealed-keys`).
+The steps below meet the startup checks in :doc:`gate-matrix` by hand. On a
+packaged host ``lota-install`` runs most of them and asks first
+(:doc:`../lota-install`).
 
-1. Operator key + signed BPF object
-===================================
+Enforcement key
+===============
 
-**A packaged host has this gate already.** The agent package installs
-``lota_lsm.bpf.o``, its detached ``.sig`` and the key that signed it at
-``/usr/lib/lota/enforcement.pub``, and an upgrade replaces all three together,
-so the object on disk and the signature over it never disagree. Nothing below
-is needed to start the agent; the rest of this section is the road a fleet
-takes when it wants enforcement signed by its own key instead of the
-packager's.
+The agent package installs ``/usr/lib/lota/lota_lsm.bpf.o``, its signature
+``lota_lsm.bpf.o.sig`` and the key that verifies it,
+``/usr/lib/lota/enforcement.pub``, and an upgrade replaces the three
+together. A packaged host needs nothing from this section.
 
-The signing key is generated and kept on the fleet's signing host -- never on
-the host that runs the agent -- and only the public half travels:
+A fleet that signs the object with its own key keeps the private half on a
+signing host and installs the public half on each agent host:
 
 .. code-block:: sh
 
-    # on the signing host, once per fleet
-    lota-agent --gen-signing-key ./enforcement        # enforcement.key + .pub
-    lota-agent --sign-policy ./lota_lsm.bpf.o \
-        --signing-key ./enforcement.key           # writes lota_lsm.bpf.o.sig
+   # on the signing host, once
+   lota-agent --gen-signing-key ./enforcement
+   # for each object
+   lota-agent --sign-policy ./lota_lsm.bpf.o --signing-key ./enforcement.key
 
-    # on each agent host: the public half, the object and the signature
-    sudo install -m 0644 enforcement.pub /etc/lota/policy.pub
-    sudo install -m 0644 lota_lsm.bpf.o /usr/lib/lota/lota_lsm.bpf.o
-    sudo install -m 0644 lota_lsm.bpf.o.sig /usr/lib/lota/lota_lsm.bpf.o.sig
+   # on each agent host
+   sudo install -m 0644 enforcement.pub /etc/lota/policy.pub
+   sudo install -m 0644 lota_lsm.bpf.o lota_lsm.bpf.o.sig /usr/lib/lota/
+   lota-agent --verify-policy /usr/lib/lota/lota_lsm.bpf.o
 
-A key at ``/etc/lota/policy.pub`` is used without being named: the agent
-prefers it over the key the package shipped, and no package owns that path, so
-it survives every upgrade -- which also means putting a key there moves the
-host off the packaged trust root, and the object must be re-signed with that
-key after every agent upgrade that replaces it. ``policy_pubkey`` in
-``/etc/lota/lota.conf`` (copy :ghsrc:`configs/lota.conf.example` and edit) is
-only needed to name a key somewhere else. The agent reads that file by default;
-pass ``--config /path`` if the operator policy lives elsewhere.
+The daemon takes the key from ``--policy-pubkey``, then ``policy_pubkey`` in
+``lota.conf``, then ``/etc/lota/policy.pub``, then
+``/usr/lib/lota/enforcement.pub``, the first it can read
+(:doc:`../../agent/command-line`). No package owns
+``/etc/lota/policy.pub``, so the key stays across upgrades, and the object
+each upgrade installs has to be signed with it again.
 
-The ``make sign-bpf SIGNING_KEY=/path/to/enforcement.key`` target wires the
-sign call into the build system for CI / packaging.
+In a build tree, ``make sign-bpf`` signs the object with ``SIGNING_KEY``,
+``/etc/lota/policy.key`` by default, and copies ``SIGNING_PUBKEY``, the same
+path ending in ``.pub``, to ``build/lota-enforcement.pub``, which ``make
+install`` installs as ``/usr/lib/lota/enforcement.pub``.
 
-.. note::
+``scripts/lota-dev-bringup.sh`` generates the key on the agent host
+itself (:doc:`gate-matrix`). That key is readable by root on the host it
+protects, so it is a development setup.
 
-   ``lota-install`` only verifies the signature; it never signs on the host,
-   and it generates no key there either -- a signing key on the machine it
-   protects lets local malware re-sign a tampered object, which is the whole
-   reason the fleet key stays off it. The developer bring-up script
-   :ghsrc:`scripts/lota-dev-bringup.sh` does generate one on the host: that is
-   a development convenience and not a production path.
+SELinux and the TPM device
+==========================
 
-2. IMA appraisal policy
-=======================
-
-The agent parses ``/proc/cmdline`` and counts appraisal as blocking only when
-the last ``ima_appraise=`` on it, the one the kernel keeps, is ``enforce``
-(block on integrity failure). A cmdline without the parameter leaves the
-kernel in its default, ``enforce``.
-``ima_appraise=fix`` writes missing xattrs and lets the access through, and
-``log`` and ``off`` do not block either, so none of them sets
-``LOTA_FLAG_KERNEL_APPRAISAL``.
-
-Appraisal applies only to the ``func=`` rules the loaded policy contains. The
-agent reads ``/sys/kernel/security/ima/policy`` as well and counts appraisal
-only for an ``appraise`` rule on ``BPRM_CHECK`` or one without ``func=``.
-``MMAP_CHECK`` appraises an ELF at exec but not a ``#!`` script, which only
-``BPRM_CHECK`` appraises, so it is not counted.
+``make install`` copies the policy module to
+``/usr/share/lota/selinux/lota.pp`` and the udev rule to
+``/usr/lib/udev/rules.d/99-lota-tpm.rules``; it loads neither:
 
 .. code-block:: sh
 
-    sudo grubby --update-kernel=ALL --args="ima_appraise=enforce"
-    sudo reboot
+   sudo semodule -i /usr/share/lota/selinux/lota.pp
+   sudo udevadm control --reload-rules
+   sudo udevadm trigger --action=add /dev/tpmrm0 /dev/tpm0
+   sudo restorecon -R /usr/bin/lota-agent /etc/lota /var/lib/lota
+   ls -Z /dev/tpmrm0 /dev/tpm0
 
-IMA needs no parameter to be on. The kernel takes ``ima=`` only in a kdump
-kernel and anywhere else ignores it, logging ``ima: Warning: ima setup option
-only permitted in kdump`` on every boot, so a cmdline carrying ``ima=on`` gains
-nothing but that line.
+The udev rule sets the label on an ``add`` event only; a ``trigger``
+without ``--action=add`` sends ``change``, leaves ``tpm_device_t`` in place
+and still exits 0. The daemon looks for ``lota_tpm_device_t`` in the
+label.
 
-**On a Secure Boot host the kernel discards that parameter.**
-``default_appraise_setup()`` refuses to be told the mode where
-``arch_ima_get_secureboot()`` is true, logging ``ima: Secure boot enabled:
-ignoring ima_appraise=... option``, and leaves its built-in default, which
-blocks. Since LOTA requires Secure Boot, that is the mode every supported host
-appraises in: setting ``ima_appraise=fix`` there stages nothing, and the agent
-reads the loaded policy rather than the parameter for exactly that reason. The staging advice below applies to a host booted without Secure Boot,
-where the parameter is honoured.
+Initramfs lock
+==============
 
-The cmdline only sets the appraisal mode; the kernel still needs a loaded IMA
-policy with ``appraise`` rules for anything to be checked. **The appraisal
-content -- the signatures on disk and the rule set -- is distribution or
-operator-supplied. LOTA ships neither an xattr-signing pipeline nor a production
-appraisal policy**; what the agent checks is that the rule set in force reaches
-executables at all, not where the signatures behind it came from. Two
-supported routes for the appraisal content:
-
-#. **Distribution signatures.** On Fedora/RHEL, packages can carry IMA file
-   signatures applied at install time (``rpm-plugin-ima``, with the
-   distribution's IMA certificate loaded onto the ``.ima`` keyring) and the
-   built-in ``ima_policy=appraise_tcb`` cmdline policy appraises the TCB ranges
-   against them. Verify the signatures actually exist
-   (``getfattr -m security.ima -d /usr/bin/lota-agent``) before enabling
-   ``enforce``.
-#. **Operator image pipeline.** Deployments that build their own images sign
-   executables at image-build time (``evmctl ima_sign --key <operator key>``
-   over the executable closure) and load the matching certificate onto the
-   ``.ima`` keyring (on a Secure Boot host, via a MOK-enrolled certificate). The
-   policy and key lifecycle are owned by the image pipeline, not by LOTA.
-
-Sequencing either route: ``ima_appraise=enforce`` with ``appraise`` rules loaded
-blocks every execution the rules match that lacks a valid signature -- on a
-rootfs without signatures that bricks the host at the next boot. Stage with
-``ima_appraise=fix`` for one boot (the kernel writes missing xattrs as it walks
-matched files) before switching to ``enforce``.
-
-A host whose loaded policy carries ``appraise func=POLICY_CHECK
-appraise_type=imasig`` -- the arch policy a Secure Boot machine boots with --
-appraises the policy buffer itself, so writing any unsigned rule set to
-``/sys/kernel/security/ima/policy`` fails with ``Permission denied``: on such a
-host the rule set has to be signed by a key on the ``.ima`` keyring. The
-kernel's built-in ``ima_policy=appraise_tcb`` needs no policy write, but it is
-not a way around the missing signatures either -- it appraises every root-owned
-file, and on a Secure Boot host that runs in ``enforce`` (see below), so a
-machine whose executables carry none stops booting.
-
-``lota-install`` therefore reports the missing scope; it never widens one. A
-rule set is loaded here by whoever owns the signatures.
-
-**A host without an exec appraise rule still runs the agent.** What is missing is
-coverage of what the machine executes, and that travels rather than blocking
--- ``LOTA_FLAG_KERNEL_APPRAISAL`` is clear in the status word, the TPM-signed
-token and the attestation report, and a verifier policy asks for it with
-``require_ima_appraisal: true``.
-
-**A host whose scope cannot be read reports no appraisal either.** The scope
-is read from ``/sys/kernel/security/ima/policy``, which a kernel without
-``CONFIG_IMA_READ_POLICY`` never publishes and which otherwise needs
-``CAP_SYS_ADMIN``, so the attestation loop (empty bounding set) never reads
-it. The agent starts, says at startup that the scope was unreadable, and
-leaves ``LOTA_FLAG_KERNEL_APPRAISAL`` clear: an unverified property is not
-reported. A fleet that wants the flag on appraising hosts builds kernels that
-publish their policy.
-
-The shipped :ghsrc:`configs/ima/lota-ima-policy` is the **developer baseline** that
-``scripts/lota-dev-bringup.sh`` loads on a dev host running ``ima_appraise=log``:
-it measures every exec/mmap for the IMA log and its ``appraise_type=imasig``
-rules verify signatures where they exist. IMA rules cannot match by path, so it
-is not a "LOTA-only" policy -- do not load it under ``enforce`` on a host without
-signatures.
-
-3. SELinux label on /dev/tpm
-============================
-
-The udev rule from :ghsrc:`configs/udev/99-lota-tpm.rules` lays this down on
-device-add. After ``make install``:
+The dracut module ``90lota`` puts ``lota-pcr14-lock`` into the initramfs,
+which extends PCR 14 before the agent starts (:doc:`../../agent/lifecycle`).
+Every installed kernel needs it, since each one can be booted:
 
 .. code-block:: sh
 
-    sudo udevadm control --reload-rules
-    sudo udevadm trigger --action=add /dev/tpmrm0 /dev/tpm0
-    ls -lZ /dev/tpm0 /dev/tpmrm0                # expect lota_tpm_device_t
+   sudo dracut -f --regenerate-all
+   lsinitrd -f usr/lib/lota/lota-pcr14-lock \
+       /boot/initramfs-$(uname -r).img | cmp - /usr/lib/lota/lota-pcr14-lock
 
-The trigger has to send an ``add`` event. Without ``--action`` it sends
-``change``, which re-runs the rules but re-applies no ``SECLABEL``: a node
-that carries the stock ``tpm_device_t`` keeps it and the command still exits
-0.
+A kernel installed later gets the helper from the module. An upgrade of the
+helper reaches an existing image only when the image is built again. PCR 14
+resets only at a cold boot, so the host needs one before the first start.
 
-The **type** is the check: ``lota_tpm_device_t`` is what the agent's gate looks
-for. The SELinux user in front of it follows from how the file arrived --
-``system_u`` on a device the policy labelled, ``unconfined_u`` on a file an
-unconfined session installed -- and neither the gate nor ``restorecon`` treats
-it as wrong.
+Kernel command line
+===================
 
-4. AIK + PCR14 reset
+On a kernel that does not reach the floor on its own
+(:doc:`../platform-support`):
+
+.. code-block:: sh
+
+   sudo grubby --update-kernel=ALL --args="lockdown=integrity module.sig_enforce=1"
+   sudo reboot
+
+IMA appraisal policy
 ====================
 
-The initramfs helper first pins PCR14 with the LOTA lock, then the agent binds
-PCR14 against its own ``self_hash`` once per boot. The TPM's clock counters
-take no part in either digest: a TPM obfuscates them per signing key, so a
-commitment that folded them in could only ever be rederived by one
-publisher's AIK, and they are in every token the agent hands out anyway.
+The daemon starts without IMA appraisal of executables; each token then
+reports ``KERNEL_APPRAISAL`` clear, and a verifier policy with
+``require_ima_appraisal`` refuses the host. The flag is set when both hold
+(:ghsrc:`src/agent/bpf_loader.c`):
 
-PCR14 is not pristine on every platform. On UEFI Secure Boot, shim measures
-the MOK state (``MokList``, ``SbatLevel``, ``MokListRT``) into PCR14 before the
-initramfs runs, so the register is already non-zero when the lock helper
-extends it. The helper therefore folds whatever PCR14 holds -- the *baseline*
--- into the chain instead of requiring ``0^32``, and records it at
-``/run/lota/pcr14_baseline`` (raw 32 bytes, on the ``/run`` tmpfs that survives
-the initramfs handoff). The agent reads that file so its derivations anchor on
-the same baseline, and the verifier reconstructs the baseline independently by
-replaying the signed TPM event log -- the LOTA extends happen after
-ExitBootServices and never enter that log, so the log's PCR14 events are exactly
-the firmware/shim baseline. A UEFI host that boots without shim measures nothing
-into PCR14, so its baseline is legitimately ``0^32`` and the chain anchors on
-zero. Because the verifier derives the baseline from the signed log, a forged
-``/run`` handoff cannot move trust: it only makes the host fail closed.
+* The appraisal mode blocks. Under Secure Boot the kernel keeps its
+  built-in mode, which blocks, and for ``off``, ``log`` or ``fix`` logs
+  ``ima: Secure boot enabled: ignoring ima_appraise=... option``.
+  Otherwise the last ``ima_appraise=`` on the command line before ``--``
+  decides: ``off``, ``log`` and ``fix`` block nothing, and any other value
+  or none leaves the default, ``enforce``.
+* ``/sys/kernel/security/ima/policy`` has an ``appraise`` rule whose
+  first ``func=`` is ``BPRM_CHECK``, or which has no ``func=``. Rules on
+  ``FILE_CHECK``, ``MMAP_CHECK`` or ``CREDS_CHECK`` do not count, and an
+  earlier ``dont_appraise`` rule is not read. The file reads only with
+  ``CAP_SYS_ADMIN`` on a kernel built with ``CONFIG_IMA_READ_POLICY``; when
+  it does not read, the flag stays clear.
 
-Both halves of that chain are mandatory, and both refuse a non-UEFI host before
-touching the TPM: the initramfs helper exits non-zero, which leaves PCR14
-unlocked without stopping the boot, and the agent asks the same question during
-bring-up, before ``Initializing TPM``, so a slow, absent or locked-out chip
-cannot delay the refusal. Self-measurement checks
-again and returns ``ENOTSUP``. Every refusal names the absent
-``/sys/firmware/efi``. Legacy BIOS/CSM is unsupported -- see
-:doc:`../platform-support`. When the lock did not run this boot the agent says
-so and names the fix: install the ``90lota`` dracut module, rebuild the
-initramfs (``dracut -f --add lota`` for the booted kernel, or
-``dracut -f --regenerate-all`` for every installed one) and cold reboot. It
-recognises that case by the absence of the handoff file above, not by the
-register's value -- on a shim host PCR14 holds the MOK measurement whether or
-not the lock ran, so the value alone cannot tell a machine that needs its
-initramfs rebuilt from one that was tampered with. The agent refuses to extend
-a commitment onto an unlocked register either way, because the verifier
-validates only the lock-then-commit chain.
+LOTA ships no signatures and no production policy. A rule cannot name a
+path, so a rule that appraises the agent appraises every executable it
+matches, and a blocking mode refuses each one without a valid signature or
+hash. The signatures come with the rules, from one of:
 
-The lock belongs in **every** installed kernel's initramfs, not only the
-running one. The kernel command-line floor is armed on every boot entry, so a
-kernel that can be selected from the boot menu without the lock boots a host
-with no commitment; ``lota-install`` regenerates them all and reports the stage
-unsatisfied while the initramfs of any installed kernel holds no helper, or
-one whose bytes differ from the installed ``/usr/lib/lota/lota-pcr14-lock``.
-A kernel installed later picks the helper up from the packaged dracut module
-without further action; a package upgrade replaces the helper on disk only,
-so an existing initramfs keeps the older one until it is regenerated.
+* packages carrying IMA signatures, with the distribution's IMA
+  certificate on the ``.ima`` keyring; ``getfattr -m security.ima -d
+  /usr/bin/lota-agent`` shows whether a file has one;
+* an image pipeline that signs the executables (``evmctl ima_sign``) and
+  puts its certificate on the ``.ima`` keyring.
 
-A MOK change (enrolling a key with ``mokutil``, a shim/SBAT update) shifts the
-baseline and therefore the final PCR14, so an enrolled host reports an
-``INTEGRITY_MISMATCH`` against its pinned baseline until an operator re-anchors
-it -- the same review gate a firmware change goes through, since enrolling a MOK
-key is a security-relevant boot-chain change. Under ``profile: consumer`` the
-verifier re-pins a change that moved only the MOK lists itself (see
-"Machine Owner Keys" in :doc:`../../verifier/index`); anything else in PCR14
-still needs the operator. The agent therefore provisions its AIK before
-``self_measure()`` runs; attestations issued before ``--enroll`` fall back to
-the unauthenticated clock and must be rebound on the next start. A re-install
-that changes either the initramfs helper or the agent binary without rebuilding
-initramfs and cold-rebooting reports a PCR14 derivation mismatch or
-``This is not the lota-agent build PCR 14 committed to when the host booted``.
-Wipe the witness file and the persistent AIK, then reboot. **Stop every unit
-that runs an agent, not only the daemon**: ``lota-attest.service`` runs
-``lota-agent --attest`` and keeps the TPM clock witness current, so a wipe that
-leaves it running deletes a file the next attestation round rewrites seconds
-later.
+With ``appraise func=POLICY_CHECK appraise_type=imasig`` loaded, which the
+arch policy of a Secure Boot kernel can carry, the kernel takes only the
+path of a signed policy file: rules written to
+``/sys/kernel/security/ima/policy`` directly fail with ``Permission
+denied``.
+
+:ghsrc:`configs/ima/lota-ima-policy` is the policy
+``scripts/lota-dev-bringup.sh`` loads on a host whose mode does not block.
+It appraises every ``BPRM_CHECK`` and executable ``MMAP_CHECK`` outside the
+pseudo file systems and tmpfs, with signatures required; under ``enforce``
+on a host without signatures it refuses every exec.
+
+Clearing the agent's state
+==========================
+
+Clearing the state destroys the host's attestation identity: the next start
+creates a new AIK, and certificates for the old one stop matching. Stop
+every unit that runs the agent first; ``lota-attest.service`` rewrites the
+state each round.
 
 .. code-block:: sh
 
-    sudo systemctl stop lota-agent.service lota-agent.socket \
-        lota-attest.service
-    sudo find /var/lib/lota -mindepth 1 -maxdepth 1 \
-        \( -name 'aik*' -o -name 'clock*' -o -name 'boot_commit*' \
-           -o -name 'snapshot*' \) -delete
-    # host that enrolled with publisher keeps that publisher's AIK in its profile;
-    # wiping the key means wiping the enrollment with it
-    sudo rm -rf /var/lib/lota/profiles
-    # LOTA's handles only: AIK, seal primary, eight per-profile AIKs
-    for h in 0x81010002 0x81010003 \
-             0x81010010 0x81010011 0x81010012 0x81010013 \
-             0x81010014 0x81010015 0x81010016 0x81010017; do
-        sudo tpm2_evictcontrol -C o -c "$h" 2>/dev/null || true
-    done
-    sudo reboot
+   sudo systemctl stop lota-agent.service lota-agent.socket lota-attest.service
+   # the host AIK at aik_handle, default 0x81010002
+   sudo tpm2_evictcontrol -C o -c 0x81010002
+   sudo find /var/lib/lota -mindepth 1 -maxdepth 1 \
+       \( -name 'aik*' -o -name 'clock*' -o -name 'boot_commit*' \
+          -o -name 'snapshot*' \) -delete
+   sudo lota-agent --seal-evict-primary
+   # each publisher's key and profile, as --list-publishers shows them
+   sudo lota-agent --forget-publisher ID
+   sudo reboot
 
-After reboot the agent's first start provisions a fresh AIK and extends PCR14
-cleanly. Subsequent starts that follow a clean shutdown reuse the witness so the
-gate is silent.
+The key and its record go together: a start that finds the AIK in the TPM
+and no record refuses with exit status 78 (:doc:`../../agent/tpm`). The
+stop spends PCR 14 for this boot, so the next start needs the reboot.
+``scripts/lota-dev-bringup.sh --reset`` deletes the same files and evicts
+the same keys, the AIK only when ``tpm2-tools`` is installed. It refuses
+while the agent runs, leaves the publishers, and does not reboot
+(:doc:`gate-matrix`).

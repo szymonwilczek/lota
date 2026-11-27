@@ -70,8 +70,8 @@ Two of them are settings you can change; one of them is not.
 Installing the package
 ======================
 
-LOTA is packaged for Fedora and for RHEL-compatible distributions (Rocky,
-Alma). Pick either channel -- they ship the same thing, built two ways.
+LOTA is packaged for Fedora. Pick either channel -- they ship the same
+thing, built two ways.
 
 **The project's COPR repository**, rebuilt from source for each Fedora
 release::
@@ -81,7 +81,7 @@ release::
 
 **The project's own signed repository**, which serves pre-built packages::
 
-    sudo dnf config-manager --add-repo https://lota.szymon-wilczek.me/rpm/lota.repo
+    sudo dnf config-manager addrepo --from-repofile=https://lota.szymon-wilczek.me/rpm/lota.repo
     sudo rpm --import https://lota.szymon-wilczek.me/rpm/RPM-GPG-KEY-lota
     sudo dnf install lota-agent
 
