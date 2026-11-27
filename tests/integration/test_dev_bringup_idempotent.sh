@@ -109,7 +109,11 @@ TPM2
 cat >"$STUB_BIN/systemctl" <<'SYSTEMCTL'
 #!/bin/bash
 if [[ "${1:-}" == "is-active" ]]; then
-	[[ "${LOTA_TEST_AGENT_ACTIVE:-0}" == "1" ]] && exit 0
+	unit="${*: -1}"
+	[[ "$unit" == lota-agent.service &&
+		"${LOTA_TEST_AGENT_ACTIVE:-0}" == "1" ]] && exit 0
+	[[ "$unit" == lota-attest.service &&
+		"${LOTA_TEST_ATTEST_ACTIVE:-0}" == "1" ]] && exit 0
 	exit 3
 fi
 exit 0
@@ -150,14 +154,14 @@ tpm_calls=$(cat "$TPM_LOG")
 agent_calls=$(cat "$AGENT_LOG")
 
 check "a re-run does not sign an object whose signature verifies" \
-    denies "$agent_calls" "sign-policy"
+      denies "$agent_calls" "sign-policy"
 check "a re-run says the signature is already good" \
-    says "$second" "signature already valid"
+      says "$second" "signature already valid"
 check "a re-run keeps the agent's state files" \
-    test -f "$STATE_DIR/aik_meta" -a -f "$STATE_DIR/clock_state"
+      test -f "$STATE_DIR/aik_meta" -a -f "$STATE_DIR/clock_state"
 check "a re-run evicts nothing from the TPM" test -z "$tpm_calls"
 check "a re-run names the flag that would reset the state" \
-    says "$second" "--reset"
+      says "$second" "--reset"
 
 # the IMA policy step reads the loaded rules the way the agent does
 IMA_RUNTIME="$ROOT/sys/kernel/security/ima/policy"
@@ -168,11 +172,11 @@ MOK_VAR="$EFIVARS/MokSBStateRT-605dab50-e046-4300-abb6-3dd810dd8b23"
 SETUP_VAR="$EFIVARS/SetupMode-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 VMLINUX_BTF="$ROOT/sys/kernel/btf/vmlinux"
 mkdir -p "$(dirname "$IMA_RUNTIME")" "$(dirname "$CMDLINE")" "$EFIVARS" \
-    "$(dirname "$VMLINUX_BTF")"
+      "$(dirname "$VMLINUX_BTF")"
 printf 'BTF\0ima_appraise_measurement\0' >"$VMLINUX_BTF"
 no_exec_rules() {
     printf '%s\n' 'dont_appraise fsmagic=0x9fa0' \
-        'appraise func=POLICY_CHECK appraise_type=imasig' >"$IMA_RUNTIME"
+           'appraise func=POLICY_CHECK appraise_type=imasig' >"$IMA_RUNTIME"
 }
 loads_policy() {
     local out
@@ -212,9 +216,9 @@ printf 'ro quiet\n' >"$CMDLINE"
 no_exec_rules
 ima_out=$(run_bringup) || true
 check "a kernel without IMA appraisal says so" \
-    says "$ima_out" "kernel does not appraise files"
+      says "$ima_out" "kernel does not appraise files"
 check "a kernel without IMA appraisal is not said to be in enforce" \
-    denies "$ima_out" "IMA appraisal in enforce"
+      denies "$ima_out" "IMA appraisal in enforce"
 printf 'ro ima_appraise=fix\n' >"$CMDLINE"
 no_exec_rules
 ima_out=$(run_bringup) || true
@@ -224,17 +228,17 @@ printf 'BTF\0ima_appraise_measurement\0' >"$VMLINUX_BTF"
 no_exec_rules
 ima_out=$(run_bringup) || true
 check "dont_appraise and POLICY_CHECK alone get the shipped rules" \
-    says "$ima_out" "loading IMA appraisal policy"
+      says "$ima_out" "loading IMA appraisal policy"
 check "the shipped rules reach the policy file" \
-    grep -q "^appraise func=BPRM_CHECK" "$IMA_RUNTIME"
+      grep -q "^appraise func=BPRM_CHECK" "$IMA_RUNTIME"
 ima_out=$(run_bringup) || true
 check "an exec appraise rule is left alone" \
-    says "$ima_out" "already appraises exec"
+      says "$ima_out" "already appraises exec"
 rm -f "$IMA_RUNTIME"
 mkdir "$IMA_RUNTIME"
 ima_out=$(run_bringup) || true
 check "an unreadable policy is not written blind" \
-    says "$ima_out" "cannot be read"
+      says "$ima_out" "cannot be read"
 check "an unreadable policy is left as it was" test -d "$IMA_RUNTIME"
 rmdir "$IMA_RUNTIME"
 
@@ -248,9 +252,9 @@ check "--reset clears the state files" test ! -e "$STATE_DIR/aik_meta"
 check "--reset evicts the profile-less AIK" says "$tpm_calls" "$AIK_HANDLE"
 check "--reset evicts the seal primary" says "$tpm_calls" "$SEAL_HANDLE"
 check "--reset evicts no handle LOTA does not own" \
-    denies "$tpm_calls" "0x81010004"
+      denies "$tpm_calls" "0x81010004"
 check "--reset says the per-profile AIKs are left alone" \
-    says "$reset" "profile"
+      says "$reset" "profile"
 
 # --reset must refuse while the agent runs
 printf 'aik\n' >"$STATE_DIR/aik_meta"
@@ -263,10 +267,26 @@ else
 fi
 tpm_calls=$(cat "$TPM_LOG")
 check "the refused reset says which unit is holding the key" \
-    says "$live" "lota-agent.service is active"
+      says "$live" "lota-agent.service is active"
 check "the refused reset keeps the state files" test -f "$STATE_DIR/aik_meta"
 check "the refused reset evicts nothing" test -z "$tpm_calls"
 unset LOTA_TEST_AGENT_ACTIVE
+
+# --reset must refuse while the attestation loop holds the AIK
+export LOTA_TEST_ATTEST_ACTIVE=1
+if live=$(run_bringup --reset 2>&1); then
+    echo "FAIL: --reset ran while lota-attest.service was active"
+    failures=$((failures + 1))
+else
+    echo "PASS: --reset refuses while lota-attest.service is active"
+fi
+tpm_calls=$(cat "$TPM_LOG")
+check "the refused reset names the attestation unit" \
+      says "$live" "lota-attest.service is active"
+check "the attest-held reset keeps the state files" \
+      test -f "$STATE_DIR/aik_meta"
+check "the attest-held reset evicts nothing" test -z "$tpm_calls"
+unset LOTA_TEST_ATTEST_ACTIVE
 
 # --reset must refuse while a daemon runs outside an active unit
 mkdir -p "$ROOT/run/lota"
@@ -294,18 +314,18 @@ run_bringup --reset >/dev/null 2>&1 || {
 }
 tpm_calls=$(cat "$TPM_LOG")
 check "a stale pid file does not block a reset" \
-    test ! -e "$STATE_DIR/aik_meta"
+      test ! -e "$STATE_DIR/aik_meta"
 check "the reset behind a stale pid file evicts the AIK" \
-    says "$tpm_calls" "$AIK_HANDLE"
+      says "$tpm_calls" "$AIK_HANDLE"
 rm -f "$ROOT/run/lota/lota-agent.pid"
 
 # a config with a profile keeps policy_pubkey at top level
 CONF="$ROOT/etc/lota/lota.conf"
 printf '%s\n' '[profile "demo"]' 'ca = ca.example.invalid' \
-    'ca_cert = /etc/lota/demo.pem' 'verifier = none' >"$CONF"
+       'ca_cert = /etc/lota/demo.pem' 'verifier = none' >"$CONF"
 prof_out=$(run_bringup) || true
 check "policy_pubkey is wired into a config with a profile" \
-    grep -q '^policy_pubkey' "$CONF"
+      grep -q '^policy_pubkey' "$CONF"
 loads() { "$REAL_AGENT" --config "$1" --dump-config >/dev/null 2>&1; }
 check "the agent loads the config the script wrote" loads "$CONF"
 check "the profile survives the edit" grep -q '^\[profile "demo"\]' "$CONF"
@@ -315,9 +335,9 @@ printf '%s\n' '# local settings' >"$CONF"
 chmod 0644 "$CONF"
 (umask 002 && run_bringup >/dev/null) || true
 check "policy_pubkey is wired in under umask 002" \
-    grep -q '^policy_pubkey' "$CONF"
+      grep -q '^policy_pubkey' "$CONF"
 check "the config keeps mode 0644 under umask 002" \
-    test "$(stat -c %a "$CONF")" = 644
+      test "$(stat -c %a "$CONF")" = 644
 check "no edited copy is left beside the config" test ! -e "$CONF.new"
 
 # an edited copy left group-writable by an earlier run is written anew
@@ -326,12 +346,12 @@ printf 'stale\n' >"$CONF.new"
 chmod 0664 "$CONF.new"
 stale_out=$(run_bringup) || true
 check "a stale group-writable copy does not stop the edit" \
-    grep -q '^policy_pubkey' "$CONF"
+      grep -q '^policy_pubkey' "$CONF"
 check "the stale copy is gone after the edit" test ! -e "$CONF.new"
 
 header_drops_the_rollback_claim() { ! grep -q "rolls back" "$BRINGUP"; }
 check "the header does not promise a rollback the script does not do" \
-    header_drops_the_rollback_claim
+      header_drops_the_rollback_claim
 
 echo ""
 if [[ $failures -gt 0 ]]; then

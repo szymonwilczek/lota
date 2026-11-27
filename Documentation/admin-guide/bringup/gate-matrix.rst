@@ -130,7 +130,8 @@ the TPM is the one step that is not repeatable, because it destroys the host's
 attestation identity -- the agent provisions a fresh key on the next start, and
 anything holding a certificate for the old one is talking about a key that no
 longer exists. It happens only under ``--reset``, and ``--reset`` refuses while an agent is
-running -- either because ``lota-agent.service`` is active, or because the pid
-file under ``/run/lota`` names a process that is still alive, which is the
-state a host is left in when the agent refuses the stop. Read the script
+running -- because ``lota-agent.service`` or ``lota-attest.service`` is
+active, or because the pid file under ``/run/lota`` names a process that is
+still alive, which is the state a host is left in when the agent refuses the
+stop. Read the script
 before running it.

@@ -267,13 +267,19 @@ state_files() {
 
 # Active unit, or a live pid in the daemon's pid file: after a refused
 # stop the unit is not active and the daemon still runs.
+# lota-attest.service runs an agent of its own on the same AIK and writes
+# no pid file.
 agent_is_running() {
     local pid=""
+    local unit
 
-    if command -v systemctl >/dev/null 2>&1 &&
-            systemctl is-active --quiet lota-agent.service; then
-        AGENT_HELD_BY="lota-agent.service is active"
-        return 0
+    if command -v systemctl >/dev/null 2>&1; then
+        for unit in lota-agent.service lota-attest.service; do
+            if systemctl is-active --quiet "$unit"; then
+                AGENT_HELD_BY="$unit is active"
+                return 0
+            fi
+        done
     fi
     if [[ -r "$PID_FILE" ]]; then
         read -r pid <"$PID_FILE" || true
@@ -299,7 +305,8 @@ else
         warn "$AGENT_HELD_BY."
         warn "--reset destroys the attestation key it is using."
         warn "Stop it first:"
-        warn "  systemctl stop lota-agent.service lota-agent.socket"
+        warn "  systemctl stop lota-agent.service lota-agent.socket \\"
+        warn "      lota-attest.service"
         fail "refusing to reset the state of a running agent"
     fi
     info "clearing agent state under $STATE_DIR"
