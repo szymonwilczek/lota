@@ -5,457 +5,413 @@
 Observability
 =============
 
-Verifier emits Prometheus metrics; this page covers shipping them into a
-working monitoring stack: scraping, the reference Grafana dashboard, the
-alert rules, and a runbook for every alert. The reference configs live in
-the tree under :ghsrc:`deploy/observability` and are validated by
-``make observability-lint`` in CI.
+The verifier serves Prometheus metrics on its monitoring API. A reference
+scrape configuration, dashboard and alert rules are under
+:ghsrc:`deploy/observability`, and ``make observability-lint`` checks them
+with ``promtool`` and ``jq``. Each alert has a runbook below; the rules link
+to it.
 
-Scraping the verifier
-=====================
+Scraping
+========
 
-Metrics are served at ``GET /metrics`` on the HTTP monitoring API, which is
-disabled until the verifier is started with ``--http-addr``:
+``GET /metrics`` is a reader route of the monitoring API, open once the
+verifier runs with ``--http-addr`` (:doc:`../verifier/monitoring-api`). On a
+loopback address it is plain HTTP; elsewhere it is HTTPS and needs a key,
+which the scraper sends as a bearer token. A key scoped to tenants is
+refused: the metrics hold no tenant.
 
-.. code-block:: sh
+:ghsrc:`deploy/observability/prometheus.yml` scrapes a remote verifier over
+HTTPS with a reader key from ``credentials_file`` and the CA in
+``tls_config``, every 30 seconds, and loads the alert rules. A commented job
+scrapes a verifier on the same host over HTTP. On Kubernetes the Helm chart
+opens the API with ``httpApi.enabled`` (:doc:`helm-chart`).
 
-    lota-verifier ... --http-addr 127.0.0.1:8080
+Metrics
+=======
 
-The endpoint sits on the *reader* tier of the monitoring API:
+The counters count from the instance's start, and each instance has its own.
+The gauges are read when ``/metrics`` is scraped.
 
-* On a **loopback** bind no key is required, but a configured key is still
-  enforced, so a co-located Prometheus carries the reader key whenever the
-  verifier has one.
-* On a **non-loopback** bind the API fails closed: the verifier refuses to
-  start unless a reader or admin key is configured, and every scrape must
-  present the reader key as a Bearer token
-  (``LOTA_READER_API_KEY``; see the deployment page for the key tiers).
-* The transport follows the bind: plain HTTP on loopback, **HTTPS** with
-  the verifier's certificate elsewhere. A remote scrape needs
-  ``scheme: https`` and the issuing CA.
+.. list-table::
+   :header-rows: 1
+   :widths: 40 10 50
 
-:ghsrc:`deploy/observability/prometheus.yml` is a complete reference
-configuration: an HTTPS job for a remote verifier, a commented loopback job,
-and the alert rules from the ``alerts`` directory next to it. On Kubernetes,
-the Helm chart exposes the same API
-through the ``httpApi`` values (off by default).
+   * - Metric
+     - Type
+     - Value
+   * - ``lota_attestations_total``
+     - counter
+     - Reports checked. A report refused for its magic or size before it is
+       read is not one (``lota_connection_errors_total``).
+   * - ``lota_attestations_success_total``
+     - counter
+     - Reports answered ``ok``.
+   * - ``lota_attestations_failed_total``
+     - counter
+     - Reports answered with any other verdict.
+   * - ``lota_rejections_total{reason}``
+     - counter
+     - Refusals by verdict name ("Verdicts" in :doc:`../verifier/index`),
+       and ``baseline_error`` (`Baseline errors`_).
+   * - ``lota_reanchors_total{outcome}``
+     - counter
+     - Baseline moves by outcome (`Re-anchor outcomes`_).
+   * - ``lota_connection_errors_total``
+     - counter
+     - Attestation connections that failed outside a verdict: an accept
+       error, a connection past ``--max-connections``, a failed TLS
+       handshake, a frame with a foreign magic or size, a report cut off, a
+       failed write. A peer that hangs up before it sends a byte is not
+       counted, and its challenge is dropped.
+   * - ``lota_attestation_log_dropped_total``
+     - counter
+     - Decision-log rounds shed from a full buffer (:doc:`../verifier/store`).
+   * - ``lota_attestation_log_failed_total``
+     - counter
+     - Decision-log rounds lost to a failed write.
+   * - ``lota_attestation_log_events_lost_total``
+     - counter
+     - The refusals among the two above.
+   * - ``lota_verification_duration_seconds``
+     - histogram
+     - Time to check a report, buckets from 1 ms to 10 s.
+   * - ``lota_pending_challenges``
+     - gauge
+     - Challenges this instance sent and has not seen answered. A challenge
+       lapses after five minutes.
+   * - ``lota_registered_clients``
+     - gauge
+     - Clients with a baseline in the store.
+   * - ``lota_active_revocations``
+     - gauge
+     - Revoked client IDs.
+   * - ``lota_active_bans``
+     - gauge
+     - Banned device pseudonyms, every tenant.
+   * - ``lota_used_nonces``
+     - gauge
+     - Rows of the used-nonce history.
+   * - ``lota_loaded_policies``
+     - gauge
+     - Policies loaded.
+   * - ``lota_uptime_seconds``
+     - gauge
+     - Seconds since the instance started.
 
-Metrics reference
-=================
+On a shared store the gauges ``lota_registered_clients``,
+``lota_active_revocations``, ``lota_active_bans`` and ``lota_used_nonces``
+read the whole store, so every instance reports the same value. Sum the
+counters and ``lota_pending_challenges`` across instances, and take any one
+of those four.
 
-Every labeled series is zero-filled with its known label values, so alert
-expressions match from the first scrape and never miss the first event
-after a verifier restart.
+Each ``reason`` and each ``outcome`` is exported at 0 before it first counts,
+so an alert on one has a series to match from the first scrape.
 
-=============================================== ========= =======================================================
-Metric                                          Type      Meaning
-=============================================== ========= =======================================================
-``lota_attestations_total``                     counter   Attestation attempts.
-``lota_attestations_success_total``             counter   Attestations that verified successfully.
-``lota_attestations_failed_total``              counter   Failed attestations (parse errors + rejections).
-``lota_rejections_total{reason}``               counter   Rejections by reason: ``pcr_fail`` (a
-                                                          register moved) and ``integrity_mismatch``
-                                                          (a pinned measurement moved) are the tamper
-                                                          signals; ``secureboot_required``,
-                                                          ``lockdown_required``,
-                                                          ``module_sig_required``,
-                                                          ``enforce_required``,
-                                                          ``ima_appraisal_required``,
-                                                          ``kernel_image_required``,
-                                                          ``cmdline_required``,
-                                                          ``iommu_fail`` and the
-                                                          ``policy_requirement`` remainder
-                                                          are host configuration the policy
-                                                          demands, one series per
-                                                          requirement; ``sig_fail``,
-                                                          ``nonce_fail``, ``identity_fail``,
-                                                          ``certificate_validity`` (the AIK
-                                                          certificate has expired or is not
-                                                          yet valid; the host re-enrolls),
-                                                          ``certificate_missing`` (the host
-                                                          presented none; its enrolment is
-                                                          unfinished), ``revoked``,
-                                                          ``banned``, ``old_version`` (an
-                                                          agent built for a report wire this
-                                                          verifier does not implement),
-                                                          ``report_malformed`` (a frame that
-                                                          did not arrive whole),
-                                                          ``internal_error`` and
-                                                          ``baseline_error`` (verifier store
-                                                          failure) complete the set. Every
-                                                          reason carries a zero series
-                                                          before it first fires, so an
-                                                          alert expression naming one
-                                                          matches on a verifier that has
-                                                          refused nothing yet.
-``lota_reanchors_total{outcome}``               counter   Boot-baseline re-anchors by outcome:
-                                                          ``strong`` and ``lfa`` (self-service,
-                                                          auto-applied; ``lfa`` also lands in the
-                                                          operator review queue), ``mok``
-                                                          (PCR 14 re-pinned after a MOK-only
-                                                          change), ``boot_entries`` (PCR 1
-                                                          re-pinned after a boot-entry-only
-                                                          change), ``escalate``
-                                                          (refused, device blocked until an operator
-                                                          acts), ``forced`` (operator-forced via the
-                                                          monitoring API), ``agent_hash`` (agent pin
-                                                          moved to an allow-listed build),
-                                                          ``agent_hash_escalate`` (agent re-pin
-                                                          refused).
-``lota_connection_errors_total``                counter   Protocol-level errors on the attestation port.
-                                                          A peer that connects and leaves without
-                                                          speaking -- a health check, a scanner -- is
-                                                          not one of them and is not counted.
-``lota_attestation_log_dropped_total``          counter   Decision records dropped because the log
-                                                          buffer was full. Non-zero means the decision
-                                                          log is missing rounds this verifier served:
-                                                          the backend stopped keeping up and buffered
-                                                          records went so the verify path would not
-                                                          wait. Trusted rounds go first. Not
-                                                          recoverable.
-``lota_attestation_log_failed_total``           counter   Decision records lost to a failed log write.
-                                                          Same consequence, different cause: the write
-                                                          reached the backend and did not land.
-``lota_attestation_log_events_lost_total``      counter   Events (refusals, bans, unparsable reports)
-                                                          among the records lost above. Alert on this
-                                                          one: lost trusted rounds cost only detail.
-``lota_verification_duration_seconds``          histogram Attestation verification latency.
-``lota_pending_challenges``                     gauge     Outstanding attestation challenges. A peer
-                                                          that leaves without answering releases its
-                                                          challenge, so an idle fleet reads zero.
-``lota_registered_clients``                     gauge     Registered attestation clients.
-``lota_active_revocations``                     gauge     Currently revoked client AIKs.
-``lota_active_bans``                            gauge     Currently banned hardware IDs.
-``lota_used_nonces``                            gauge     Consumed nonces retained for replay protection.
-``lota_loaded_policies``                        gauge     Loaded PCR policies.
-``lota_uptime_seconds``                         gauge     Verifier uptime.
-=============================================== ========= =======================================================
+Baseline errors
+---------------
 
-Grafana dashboard
-=================
+``baseline_error`` counts a round the baseline store failed, answered
+``internal_error``, and a first-use boot baseline refused for having no
+enrollment road, answered ``policy_requirement`` (:doc:`../verifier/index`).
+Both count under ``baseline_error`` alone: ``reason`` ``policy_requirement``
+is exported, and no round counts under it.
 
-:ghsrc:`deploy/observability/grafana/lota-verifier-dashboard.json` is a
-reference dashboard importable into a stock Grafana: *Dashboards -> New ->
-Import*, upload the JSON, and select the Prometheus datasource that scrapes
-the verifier. It shows the fleet at a glance (success ratio, clients,
-revocations, bans, challenge backlog, uptime) over time series for
-attestation rates, rejections stacked by reason, verification-latency
-quantiles, re-anchor outcomes, protocol errors, and the replay history.
-Panel thresholds mirror the alert rules, so a red stat on the dashboard and
-a firing alert say the same thing.
+Re-anchor outcomes
+------------------
 
-Alerts and runbooks
-===================
+``strong``, ``lfa``
+  PCR 0, 1 and 7 re-pinned on the strong or the low-firmware-assurance path.
+  An ``lfa`` client joins the review list.
 
-:ghsrc:`deploy/observability/alerts/lota-verifier-alerts.yaml` ships 12
-rules. Severity encodes the escalation tier:
+``boot_entries``
+  PCR 1 re-pinned after a boot-entry change.
 
-* **warning = L2**: operator triage. The fleet's integrity verdicts are
-  still sound; investigate during working hours.
-* **critical = L3**: integrity or service impact. Act immediately: either a
-  device failed integrity or the verifier cannot render verdicts.
+``mok``
+  PCR 14 re-pinned after a Machine Owner Key change.
 
-The runbooks below assume shell access to the verifier host and the
-monitoring API on ``127.0.0.1:8080``; on an authenticated deployment add
-``-H "Authorization: Bearer $(cat /path/to/key)"`` (reader key for reads,
-admin key for mutations).
+``agent_hash``
+  The agent pin moved to a listed build.
+
+``forced``
+  An operator forced a re-anchor through the API, counted at the call.
+
+``escalate``, ``agent_hash_escalate``
+  A boot or agent move refused; the round is ``integrity_mismatch``.
+
+The paths are in "Re-anchor" of :doc:`../verifier/index`.
+
+Dashboard
+=========
+
+:ghsrc:`deploy/observability/grafana/lota-verifier-dashboard.json` imports
+into Grafana with a Prometheus data source picked at import. Its stat panels
+show the success ratio over 5 minutes, the clients, revocations, bans,
+pending challenges and uptime; its time series show the attestation rate,
+the rejections by reason, the latency at the 50th, 95th and 99th percentile,
+the re-anchor outcomes, the connection errors and the used-nonce history.
+
+Alerts
+======
+
+:ghsrc:`deploy/observability/alerts/lota-verifier-alerts.yaml` holds 12
+rules in three groups. ``critical`` asks for action at once: the verifier
+gives no verdicts, or a host failed an integrity check. ``warning`` asks for
+triage.
+
+======================================= ======== ===========================
+Alert                                   Severity Condition
+======================================= ======== ===========================
+`LotaVerifierDown`_                     critical ``up`` is 0 for 2 minutes.
+`LotaAttestationStall`_                 warning  No report in 15 minutes,
+                                                 with clients, for 15
+                                                 minutes.
+`LotaIntegrityLoss`_                    critical A ``pcr_fail`` or
+                                                 ``integrity_mismatch`` in 5
+                                                 minutes.
+`LotaRevokedDeviceActivity`_            warning  A ``revoked`` or ``banned``
+                                                 in 15 minutes.
+`LotaReplayBurst`_                      warning  Over 3 ``nonce_fail`` in 5
+                                                 minutes.
+`LotaReanchorEscalation`_               warning  An ``escalate`` in 15
+                                                 minutes.
+`LotaBaselineStoreErrors`_              critical A ``baseline_error`` in 5
+                                                 minutes.
+`LotaAttestationFailureRatioHigh`_      warning  Over 10% failed over 10
+                                                 minutes, for 10 minutes.
+`LotaVerifyLatencyP99High`_             warning  99th percentile over 1 s,
+                                                 for 10 minutes.
+`LotaPendingChallengesHigh`_            warning  Over 1000 pending, for 5
+                                                 minutes.
+`LotaConnectionErrorBurst`_             warning  Over 1 error per second,
+                                                 for 5 minutes.
+`LotaDecisionLogLoss`_                  warning  A dropped or failed round
+                                                 in 10 minutes, for 5
+                                                 minutes.
+======================================= ======== ===========================
+
+The runbooks read the monitoring API on ``127.0.0.1:8080``; with keys
+configured, add ``-H "Authorization: Bearer $KEY"``, a reader key to read
+and an admin key to act.
 
 .. _alert-lotaverifierdown:
 
-LotaVerifierDown (critical)
----------------------------
+LotaVerifierDown
+----------------
 
-Prometheus cannot scrape the verifier. While it is down no verdicts are
-rendered and relying parties see stale or missing attestation state.
+Prometheus cannot scrape the verifier, and no verdict is given there.
 
-1. Check the service and its last words:
-   ``systemctl status lota-verifier`` / ``journalctl -u lota-verifier -n 100``
-   (or the pod logs on Kubernetes).
-2. A crash loop after a configuration change: roll the change back first,
-   ask questions later.
-3. If the process is healthy, the path Prometheus uses is broken: firewall,
-   reader key rotated without updating the credentials file, or the
-   monitoring bind address changed.
-4. Escalate to L3 if the verifier does not come back within one restart:
-   collect the journal and the database state before further restarts.
+#. ``systemctl status lota-verifier`` and ``journalctl -u lota-verifier``,
+   or the pod log. A start that fails logs its reason at error level
+   ("Startup refusals" in :doc:`../verifier/command-line`).
+#. With the process up, check the scrape path: the address, the firewall,
+   the key in ``credentials_file``.
 
 .. _alert-lotaattestationstall:
 
-LotaAttestationStall (warning)
-------------------------------
+LotaAttestationStall
+--------------------
 
-Registered clients exist but no attestation arrived for 30 minutes. The
-fleet went silent: agents down, network path broken, or the attestation
-port unreachable. A silent fleet is indistinguishable from a compromised
-one, so do not let this linger.
+Clients are on record and no report came for 30 minutes: the agents are
+down, or the attestation port is unreachable.
 
-1. Confirm the attestation listener is up and reachable from a fleet
-   subnet: ``curl -sk https://VERIFIER:8443/`` should at least open a TLS
-   connection.
-2. Pick a known host and check its attest unit:
-   ``systemctl status lota-attest.service`` on the device.
-3. Check ``GET /api/v1/attestations?limit=10`` for the last records and
-   their timestamps to bound when the fleet went quiet.
-4. Escalate if the outage window exceeds the fleet's attestation interval
-   several times over - decide whether stale sessions must be invalidated.
+#. Open a TLS connection to the attestation port from the hosts' network:
+   ``openssl s_client -connect verifier.example:8443 </dev/null`` prints the
+   certificate.
+#. On one host, ``systemctl status lota-attest.service``.
+#. ``GET /api/v1/attestations?limit=10`` dates the last rounds.
 
 .. _alert-lotaintegrityloss:
 
-LotaIntegrityLoss (critical)
-----------------------------
+LotaIntegrityLoss
+-----------------
 
-Device presented PCR or runtime state that does not match its policy or
-recorded baseline (``pcr_fail`` or ``integrity_mismatch``). This is the
-product's primary tamper signal and the alert the forced drill below
-exercises. A host missing a policy requirement counts under that
-requirement's reason instead (``secureboot_required``, ``lockdown_required``,
-``module_sig_required``, ``enforce_required``, ``ima_appraisal_required``,
-``kernel_image_required``, ``cmdline_required``): a configuration problem,
-not a tamper signal. ``policy_requirement`` covers the rest, such as a
-firmware baseline nobody enrolled.
+A host's quoted PCRs, event log, PCR 14 derivation, agent hash or pinned
+baseline did not match.
 
-1. Identify the device: ``GET /api/v1/attestations?limit=50`` and filter
-   the failed records; each carries the client ID and failure detail. A PCR
-   failure names every register that mismatched, in index order, so one
-   record holds the whole delta and repeated rounds read identically.
-2. Read that client's state: ``GET /api/v1/clients/{id}``.
-3. Decide benign versus hostile. How many registers moved is the first
-   clue: several at once is a reboot into a different boot chain, one alone
-   is a narrower change. Benign causes leave a paper trail: a
-   kernel or bootloader update changes PCRs after a reboot (the re-anchor
-   flow handles it), an agent binary update changes the agent hash pin, an
-   operator changed the kernel command line. No matching change record =
-   treat as hostile.
-4. Hostile: revoke the AIK
-   (``POST /api/v1/clients/{id}/revoke`` with an actor and a reason) and,
-   on the gaming deployment, consider a hardware ban
-   (``POST /api/v1/bans``). Preserve the device for forensics; do not
-   *fix* it back into the fleet.
-5. Benign: follow the re-anchor procedure in the bring-up documentation
-   and clear the finding through the review queue, not by loosening
-   policy.
+#. ``GET /api/v1/attestations?events=true&limit=50`` names the client and
+   the cause in ``details``. A PCR refusal names each PCR that differs, with
+   both values.
+#. ``GET /api/v1/clients/{id}`` shows the baseline and the machine keys.
+#. Match the change against a known one: a firmware or boot chain update, an
+   agent update off the policy's ``agent_hashes``, a changed kernel command
+   line. Several PCRs at once point at a different boot chain.
+#. A known change: let the host re-pin ("Re-anchor" in
+   :doc:`../verifier/index`), or force a re-anchor
+   (``POST /api/v1/clients/{id}/reanchor``). An unknown change: revoke the
+   client ID or ban the pseudonym, and keep the host for inspection.
+
+A host that misses a ``require_*`` key is refused under that key's verdict,
+not here.
 
 .. _alert-lotarevokeddeviceactivity:
 
-LotaRevokedDeviceActivity (warning)
------------------------------------
+LotaRevokedDeviceActivity
+-------------------------
 
-Revoked or banned device keeps attesting. Expected for a short window
-right after a revocation (the agent retries on its interval); persistent
-activity means the remediation never reached the host or someone is
-replaying its identity.
+A revoked or banned host keeps attesting. The agent retries on its interval,
+so a short run after a revocation is expected.
 
-1. ``GET /api/v1/revocations`` / ``GET /api/v1/bans`` - confirm the device
-   is intentionally listed and by whom (``GET /api/v1/audit``).
-2. If the device should have been reprovisioned, verify the host was
-   actually re-enrolled (a re-enrollment issues a fresh AIK certificate;
-   the old identity keeps knocking until the agent state is cleared).
-3. Sustained activity from a banned gaming device is an expected nuisance;
-   sustained activity from a revoked enterprise host is a process failure -
-   chase the owner.
+#. ``GET /api/v1/revocations``, ``GET /api/v1/bans`` and ``GET
+   /api/v1/audit`` show who listed the host and why.
+#. A host meant to come back needs a new client ID; its old one stays
+   revoked. A ban covers every certificate with the pseudonym.
 
 .. _alert-lotareplayburst:
 
-LotaReplayBurst (warning)
--------------------------
+LotaReplayBurst
+---------------
 
-More than a handful of nonce failures in 5 minutes. Isolated failures are
-benign retries after timeouts; a burst is either a replay attempt or a
-client whose clock is far enough off to keep missing the nonce window.
+More than three ``nonce_fail`` in 5 minutes: a nonce unknown, used, expired,
+answered on another connection or missing from the quote, or a client over
+30 rounds a minute.
 
-1. ``GET /api/v1/attestations`` - if the failures concentrate on one
-   client, check that host's clock and network latency first.
-2. Failures spread across many clients usually mean a verifier-side
-   problem (nonce store latency); correlate with
-   ``lota_verification_duration_seconds`` and the database.
-3. A concentrated burst from one source that is *not* a registered client
-   is an attack signature: capture the source address from the verifier
-   log and treat it as hostile traffic.
+#. ``GET /api/v1/attestations?result=nonce_fail`` shows whether one client
+   or many fail. One client: its rate, its link, the time a round takes.
+#. Many clients: the store, through ``lota_verification_duration_seconds``
+   and the database.
 
 .. _alert-lotareanchorescalation:
 
-LotaReanchorEscalation (warning)
---------------------------------
+LotaReanchorEscalation
+----------------------
 
-Device's boot baseline changed in a way the self-service re-anchor
-policy would not accept automatically. The re-anchor was refused and the
-device keeps failing attestation until an operator acts; this is not the
-post-fact review queue (that queue holds ``lfa`` re-anchors, which apply
-automatically).
+A boot baseline move was refused and the host fails with
+``integrity_mismatch`` until an operator acts. The rule watches
+``escalate``; ``agent_hash_escalate`` counts an agent move refused for the
+per-client interval or for a baseline with no pinned hash, or lost to a
+concurrent round.
 
-1. Identify the device from the verifier's security log (the escalation
-   is logged with the client ID and the refusal reason).
-2. Corroborate the change: a fleet-wide firmware or kernel rollout
-   produces a wave of escalations with the same measurement delta; a
-   single device with a unique delta deserves the LotaIntegrityLoss
-   treatment.
-3. For a legitimate platform change, force the re-baseline with
-   ``POST /api/v1/clients/{clientID}/reanchor`` (admin key, actor
-   recorded in the audit log); the next attestation re-establishes
-   trust. For anything suspect, revoke or ban instead.
+#. The verifier log has the refusal at security level, with the client ID
+   and the reason.
+#. Many hosts with the same change point at a rollout; one host with its own
+   change belongs to `LotaIntegrityLoss`_.
+#. For a known change, ``POST /api/v1/clients/{id}/reanchor``. Otherwise
+   revoke or ban.
 
 .. _alert-lotabaselinestoreerrors:
 
-LotaBaselineStoreErrors (critical)
-----------------------------------
+LotaBaselineStoreErrors
+-----------------------
 
-Attestations are being rejected because the verifier cannot read or write
-its baseline store. The verifier fails closed, so healthy devices are
-refused while the backend is broken - this is a service outage, not a
-security event.
+``baseline_error`` counted: the baseline store failed, or a host with no
+boot baseline had no enrollment road (`Baseline errors`_).
 
-1. Check the database: connectivity, disk space, and (Postgres) whether
-   the instance accepts writes.
-2. The verifier log names the failing operation; a migration mismatch
-   after a partial upgrade also lands here.
-3. Once the store recovers, rejected devices re-attest on their next
-   interval with no operator action.
+#. ``GET /api/v1/attestations?result=policy_requirement`` lists the hosts
+   refused for the enrollment road; :doc:`../verifier/index` gives the
+   roads.
+#. Otherwise, check the database: the connection, the disk, whether it
+   takes writes. The verifier log names the failed operation. Refused hosts
+   pass on their next round once the store answers.
 
 .. _alert-lotaattestationfailureratiohigh:
 
-LotaAttestationFailureRatioHigh (warning)
------------------------------------------
+LotaAttestationFailureRatioHigh
+-------------------------------
 
-More than 10% of all attestations failing for 10 minutes. One tampered
-device cannot move this needle - fleet-wide ratios point at policy,
-certificate, or infrastructure problems.
+More than one report in ten fails, for 10 minutes. One host does not move
+this ratio.
 
-1. The rejections-by-reason dashboard panel says which failure dominates:
-   ``sig_fail`` after a CA change means certificates (did the AIK CA
-   rotate without redistributing?), ``pcr_fail`` across the fleet means a
-   policy pushed with wrong pins, a ``*_required`` reason names the
-   requirement the fleet does not meet, and
-   ``integrity_mismatch`` across the fleet after an agent update means the
-   new build is not on the allow-list. ``baseline_error`` means the store.
-2. Correlate the onset with the last policy or infrastructure change and
-   roll it back.
+#. The *Rejections by reason* panel names the verdict that dominates.
+   ``sig_fail`` or ``certificate_validity`` point at the attestation CA,
+   ``pcr_fail`` at the policy pins, ``integrity_mismatch`` after an agent
+   update at ``agent_hashes``, a ``*_required`` verdict at a requirement the
+   hosts miss, ``internal_error`` at the store.
+#. Match the onset with the last policy or infrastructure change.
 
 .. _alert-lotaverifylatencyp99high:
 
-LotaVerifyLatencyP99High (warning)
-----------------------------------
+LotaVerifyLatencyP99High
+------------------------
 
-Verification p99 above one second, sustained. Agents tolerate this but
-their timeouts are finite; at several seconds the failure ratio starts
-climbing as a side effect.
+One check in a hundred takes over a second, for 10 minutes. The verifier
+reads a report in 30 seconds and writes the result in 10.
 
-1. Database pressure is the usual cause: check the backend's latency and
-   the verifier host's CPU.
-2. If load grew with the fleet, scale per the deployment page
-   (:doc:`ha-deployment`) rather than raising timeouts.
+#. Check the database latency and the verifier's CPU.
+#. With load grown with the fleet, add instances
+   (:doc:`ha-deployment`, :doc:`sizing`).
 
 .. _alert-lotapendingchallengeshigh:
 
-LotaPendingChallengesHigh (warning)
------------------------------------
+LotaPendingChallengesHigh
+-------------------------
 
-More than 1000 challenges issued but never answered. Either a fleet
-segment stalls mid-handshake (network drops the second leg) or an
-unauthenticated source is farming challenges.
+Over 1000 challenges unanswered: hosts drop the connection after the
+challenge, or a source opens connections and sends nothing.
 
-1. Compare with ``lota_registered_clients``: a backlog near the fleet size
-   is a fleet-wide network problem; a backlog far above it is a flood.
-2. Challenges expire on their own; the gauge should drain once the cause
-   stops. If it climbs unbounded, capture the source addresses from the
-   verifier log and filter upstream.
+#. Compare with ``lota_registered_clients``. Near the fleet size points at
+   the network; far above it at a flood.
+#. Challenges lapse after five minutes. A gauge that keeps climbing needs
+   the sources from the verifier log filtered upstream, or a lower
+   ``--max-connections``.
 
 .. _alert-lotaconnectionerrorburst:
 
-LotaConnectionErrorBurst (warning)
-----------------------------------
+LotaConnectionErrorBurst
+------------------------
 
-Sustained protocol-level errors on the attestation port: a scanner, a
-protocol-version mismatch after a partial upgrade, or a load balancer
-health-checking the TLS port with plain HTTP.
+Over one failed connection a second: a scanner, a load balancer probing the
+port with plain HTTP, connections past ``--max-connections``, or a frame
+the verifier does not read.
 
-1. The verifier log records the offending source and the parse error.
-2. If the onset matches an agent or verifier rollout, suspect a version
-   mismatch and finish or roll back the rollout.
+#. The verifier log names the source and the failure: ``TLS handshake
+   failed``, ``invalid report magic``, ``invalid report size``,
+   ``connection limit reached, rejecting``.
+#. An onset with a rollout points at mismatched versions
+   (:doc:`protocol-versions`).
 
 .. _alert-lotadecisionlogloss:
 
-LotaDecisionLogLoss (warning)
------------------------------
+LotaDecisionLogLoss
+-------------------
 
-The verifier is losing attestation decision records. Verdicts are
-unaffected -- the decision log never gates attestation, and the verify path
-never waits on it -- but the audit trail has holes for this window, and the
-records that went are not recoverable.
+Decision-log rounds were lost. Verdicts are unaffected, and the rounds lost
+are not recoverable (:doc:`../verifier/store`).
 
-Which counter moved says which half it is. ``lota_attestation_log_dropped_total``
-means the backend stopped keeping up and the full buffer shed records,
-trusted rounds first, so refusals usually survive.
-``lota_attestation_log_failed_total`` means the write reached the backend and
-did not land.
+#. ``lota_attestation_log_dropped_total`` moves when the buffer is full,
+   ``lota_attestation_log_failed_total`` when a write fails, and
+   ``lota_attestation_log_events_lost_total`` when refusals are among them.
+   The log says ``attestation-log buffer full; decision records shed`` or
+   ``attestation-log flush failed; records dropped``.
+#. Check the database latency, its connections, and locks on
+   ``attestation_log``.
+#. Note the window: for it, ``GET /api/v1/attestations`` misses rounds and
+   ``rounds`` can count low.
 
-``lota_attestation_log_events_lost_total`` says how bad either one is. At
-zero, only detail on quiet hosts is lost. Above zero, refusals and bans are
-missing from the log, and the warning's hint says so.
+Reading the decision log
+========================
 
-1. The verifier log carries the running total beside each event
-   (``attestation-log buffer full; decision records shed``, or
-   ``attestation-log flush failed``), and one summary line at shutdown.
-2. Both point at the database: check its latency, its connection count,
-   and whether anything holds a lock on ``attestation_log``. Enforcement
-   writes -- revocations, bans, baselines -- are synchronous and unaffected,
-   so a healthy verdict rate beside this alert is the expected picture.
-3. Note the window in the incident record. The API cannot serve what was
-   dropped, so an operator reading ``GET /api/v1/attestations`` for that
-   period is reading an incomplete log: ``rounds`` there can undercount,
-   never overcount.
+``GET /api/v1/attestations`` selects rows by window, verdict and client
+(:doc:`../verifier/monitoring-api`):
 
-Reading the log
+.. code-block:: sh
+
+   # every refusal in one day
+   curl -H "Authorization: Bearer $KEY" \
+       "http://127.0.0.1:8080/api/v1/attestations?events=true&since=2026-01-01T00:00:00Z&until=2026-01-02T00:00:00Z"
+
+   # one client
+   curl -H "Authorization: Bearer $KEY" \
+       "http://127.0.0.1:8080/api/v1/attestations?client_id=$CLIENT_ID&limit=50"
+
+   # one verdict
+   curl -H "Authorization: Bearer $KEY" \
+       "http://127.0.0.1:8080/api/v1/attestations?result=pcr_fail"
+
+A row covers a run of passing rounds, up to ``--attestation-log-window``; the
+time of each round in it is not kept.
+
+Integrity drill
 ===============
 
-A trusted round identical to the host's newest row extends it
-(``last_seen``, ``rounds``). A refusal, a verdict change and a host's first
-round always open a new row. A row extends for at most
-``--attestation-log-window`` from its opening (default one hour; zero writes
-a row per round), so a quiet period resolves to the window: the timestamps
-of the rounds a row covers are not kept.
+The drill checks the chain from a refusal to a page, on a staging verifier:
 
-``GET /api/v1/attestations`` narrows accordingly::
+#. Change one hex digit of the host's build in the policy's
+   ``agent_hashes`` and restart the verifier.
+#. Let one host attest. It is refused with ``integrity_mismatch``, and
+   ``lota_rejections_total{reason="integrity_mismatch"}`` steps.
+#. Within a scrape and an evaluation interval, the *Rejections by reason*
+   panel shows the step and `LotaIntegrityLoss`_ fires.
+#. Check the page arrives, restore the policy, restart, and see the host's
+   next round pass.
 
-   # what went wrong anywhere, yesterday
-   curl -H "Authorization: Bearer $READER_KEY" \
-     "http://127.0.0.1:8080/api/v1/attestations?events=true&since=2026-09-18T00:00:00Z&until=2026-09-19T00:00:00Z"
-
-   # one host's history
-   curl -H "Authorization: Bearer $READER_KEY" \
-     "http://127.0.0.1:8080/api/v1/attestations?client_id=$CLIENT&limit=50"
-
-   # every round refused for one reason
-   curl -H "Authorization: Bearer $READER_KEY" \
-     "http://127.0.0.1:8080/api/v1/attestations?result=pcr_fail"
-
-A window returns the rows that overlap it, including one opened before
-``since``.
-
-Forced integrity-loss drill
-===========================
-
-Run this drill after standing up the stack (and periodically after) to
-prove the pipeline end to end: a tampered measurement must light the
-dashboard and page within one scrape interval. It satisfies the "alerts
-fire on a forced integrity-loss event" acceptance test.
-
-The safe variant injects the mismatch on the verifier side, so no device
-is modified: edit a **staging** verifier's policy to pin an agent hash
-that cannot match (for example, flip one hex digit of the pinned value in
-``agent_hashes``), reload, and let one healthy device attest:
-
-1. The attestation is rejected; ``lota_rejections_total`` increments with
-   the corresponding reason.
-2. Within one scrape interval the *Rejections by reason* panel shows the
-   series step, and *LotaIntegrityLoss* enters pending/firing.
-3. Confirm the page arrives through the deployed notification channel,
-   then restore the correct policy and verify the device's next
-   attestation succeeds.
-
-The full-fidelity variant tampers with a scrap test device instead (edit
-its kernel command line and reboot, or strip the agent binary's integrity
-metadata): the device itself fails verification, exercising the same path
-an attacker would trip. Never run either variant against production
-policy state without a change record: the drill is indistinguishable from
-a real event by design, and the on-call rotation should treat it as one
-until the change record says otherwise.
+The drill reads as a real refusal, so it runs under a change record.

@@ -31,7 +31,7 @@ Contents
 * :doc:`Manual reference: host gates <manual-reference>` -- operator key, signed
   BPF object, IMA, the TPM SELinux label, and the AIK / PCR14 reset.
 * :doc:`Attestation CA enrollment <ca-enrollment>` -- standing up the CA,
-  enrolling a host, and the re-anchor and rotation surfaces.
+  enrolling a host, tenants and enrollment tokens.
 * :doc:`Sealed keys (offline local attestation) <sealed-keys>` -- sealing
   secrets to boot state and anti-rollback.
 * :doc:`What still fails, and operational constraints <limitations>` --

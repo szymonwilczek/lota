@@ -132,9 +132,9 @@ removing a device cannot shed a ban. The action is audited
 (``delete_client``).
 
 ``reanchor-review`` is the post-fact review queue for self-service
-re-anchors taken on the Low-Firmware-Assurance path; see the enrollment
-document (:doc:`bringup/ca-enrollment`) for when the verifier
-puts a client in that queue. ``reanchor-review ack`` takes ``-reason`` and
+re-anchors taken on the Low-Firmware-Assurance path; see "Re-anchor" in
+:doc:`../verifier/index` for when the verifier puts a client in that queue.
+``reanchor-review ack`` takes ``-reason`` and
 ``-actor`` like the other trust changes, because it is the record that a
 person looked; a client with nothing queued is refused, so an
 acknowledgement cannot stand for a review that never happened. It is
