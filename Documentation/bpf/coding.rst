@@ -82,8 +82,9 @@ with the change.
 Adding a map
 ============
 
-* Add its name to ``is_lota_managed_map()``, or ``lock_bpf`` leaves it open
-  to every process (:doc:`index`).
+* Add it to ``is_lota_managed_map()``, or ``lock_bpf`` leaves it open to
+  every process (:doc:`index`). :ghsrc:`tests/test_bpf_mount_hooks.c` fails
+  while ``lsm/bpf_map`` leaves out the address of any map in ``.maps``.
 * A structure the agent reads or writes is declared again in
   :ghsrc:`src/agent/bpf_loader.c` beside the others marked ``mirrors struct
   ... in lota_lsm.bpf.c``, with the same layout.

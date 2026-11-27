@@ -51,6 +51,10 @@ char LICENSE[] SEC("license") = "GPL";
 #define MS_BIND 4096
 #endif
 
+#ifndef MS_MOVE
+#define MS_MOVE 8192
+#endif
+
 #ifndef LOTA_O_ACCMODE
 #define LOTA_O_ACCMODE 00000003
 #endif
@@ -655,73 +659,30 @@ static __always_inline int is_lota_agent_task(struct task_struct *task)
 	return has_task_auth_flag(task, LOTA_TASK_AUTH_AGENT);
 }
 
+/* @map is one of the maps this object declares in .maps */
 static __always_inline int is_lota_managed_map(struct bpf_map *map)
 {
-	char name[16] = {};
-
-	if (!map)
-		return 0;
-
-	bpf_core_read(&name, sizeof(name), &map->name);
-
-	if (__builtin_memcmp(name, "lota_config", sizeof("lota_config")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "protected_pids",
-			     sizeof("protected_pids")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "trusted_libs", sizeof("trusted_libs")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "trusted_inodes",
-			     sizeof("trusted_inodes")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "guarded_files", sizeof("guarded_files")) ==
-	    0)
-		return 1;
-	if (__builtin_memcmp(name, "mapped_exec", sizeof("mapped_exec")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "mapped_seen", sizeof("mapped_seen")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "exec_history", sizeof("exec_history")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "lota_sock_owner",
-			     sizeof("lota_sock_owner")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "instance_actors",
-			     sizeof("instance_actors")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "events", sizeof("events")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "stats", sizeof("stats")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "event_budget", sizeof("event_budget")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "integrity_cfg", sizeof("integrity_cfg")) ==
-	    0)
-		return 1;
-	if (__builtin_memcmp(name, "allow_verity", sizeof("allow_verity")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "verity_scratch",
-			     sizeof("verity_scratch")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "lota_task_auth",
-			     sizeof("lota_task_auth")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "lota_instance", sizeof("lota_instance")) ==
-	    0)
-		return 1;
-	if (__builtin_memcmp(name, "instance_stops",
-			     sizeof("instance_stops")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "born_protected",
-			     sizeof("born_protected")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "lota_refusal", sizeof("lota_refusal")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "exe_hash_slots",
-			     sizeof("exe_hash_slots")) == 0)
-		return 1;
-
-	return 0;
+	return map == (struct bpf_map *)&events ||
+	       map == (struct bpf_map *)&stats ||
+	       map == (struct bpf_map *)&lota_config ||
+	       map == (struct bpf_map *)&integrity_cfg ||
+	       map == (struct bpf_map *)&event_budget ||
+	       map == (struct bpf_map *)&lota_task_auth ||
+	       map == (struct bpf_map *)&lota_instance ||
+	       map == (struct bpf_map *)&born_protected ||
+	       map == (struct bpf_map *)&instance_stops ||
+	       map == (struct bpf_map *)&lota_refusal ||
+	       map == (struct bpf_map *)&verity_scratch ||
+	       map == (struct bpf_map *)&protected_pids ||
+	       map == (struct bpf_map *)&trusted_libs ||
+	       map == (struct bpf_map *)&guarded_files ||
+	       map == (struct bpf_map *)&mapped_exec ||
+	       map == (struct bpf_map *)&mapped_seen ||
+	       map == (struct bpf_map *)&exec_history ||
+	       map == (struct bpf_map *)&lota_sock_owner ||
+	       map == (struct bpf_map *)&instance_actors ||
+	       map == (struct bpf_map *)&allow_verity ||
+	       map == (struct bpf_map *)&exe_hash_slots;
 }
 
 static __always_inline int in_non_init_userns(void)
@@ -1217,7 +1178,7 @@ static __always_inline void report_blocked_mount(const char *what, u32 len)
 	inc_stat(STAT_EVENTS_SENT);
 }
 
-/* enforce mode, strict_mmap: refuse a bind mount over a trusted library */
+/* enforce mode, strict_mmap: refuse a bind or move onto a trusted library */
 SEC("lsm/sb_mount")
 int BPF_PROG(lota_sb_mount, const char *dev_name, const struct path *path,
 	     const char *type, unsigned long flags, void *data, int ret)
@@ -1233,7 +1194,7 @@ int BPF_PROG(lota_sb_mount, const char *dev_name, const struct path *path,
 	if (ret != 0)
 		return -EPERM;
 
-	if (!(flags & MS_BIND))
+	if (!(flags & (MS_BIND | MS_MOVE)))
 		return 0;
 
 	mode = get_mode();
@@ -1257,7 +1218,10 @@ int BPF_PROG(lota_sb_mount, const char *dev_name, const struct path *path,
 	if (!is_trusted_inode(inode))
 		return 0;
 
-	report_blocked_mount("bind mount over a trusted file", 31);
+	if (flags & MS_BIND)
+		report_blocked_mount("bind mount over a trusted file", 31);
+	else
+		report_blocked_mount("move mount over a trusted file", 31);
 	return -EPERM;
 }
 
@@ -2498,14 +2462,14 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 	if (ret != 0)
 		return -EPERM;
 
+	inc_stat(STAT_PTRACE_ATTEMPTS);
+
 	lota_mode = get_mode();
 
 	child_pid = BPF_CORE_READ(child, pid);
 
-	if (lota_ptrace_agent_read_exempt(mode, is_current_lota_agent_task())) {
-		inc_stat(STAT_PTRACE_ATTEMPTS);
+	if (lota_ptrace_agent_read_exempt(mode, is_current_lota_agent_task()))
 		return 0;
-	}
 
 	target_protected = task_instance(child, &target_id);
 	if (target_protected) {

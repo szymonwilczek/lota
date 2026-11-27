@@ -39,7 +39,7 @@ After the load, in this order:
    refused in every mode``.
 #. ``guarded_files`` gets the ``cgroup.kill`` and ``cgroup.freeze`` files of
    the agent's cgroup and its ancestors, and is frozen. With no unified
-   cgroup hierarchy, or no such file, the map stays empty and is not frozen.
+   cgroup hierarchy, or no such file, the map is frozen empty.
 #. The startup policy writes ``lota_config`` (`Mode and switches`_).
 #. Each program is attached. The start fails when one does not attach, or
    when any of ``lota_ptrace_access_check``, ``lota_agent_exit``,
@@ -153,7 +153,7 @@ Files and mounts
 
 ``lsm/sb_mount``, ``lsm/move_mount``
   In ``enforce`` mode with ``strict_mmap``, refuse a ``mount(2)`` with
-  ``MS_BIND`` and a ``move_mount(2)`` over a trusted library
+  ``MS_BIND`` or ``MS_MOVE`` and a ``move_mount(2)`` onto a trusted library
   (``MOUNT_BLOCKED``).
 
 ``lsm.s/file_post_open``
@@ -224,10 +224,11 @@ Cgroups
 The bpf syscall
 ---------------
 
-With ``LOTA_CFG_LOCK_BPF`` set, ``lsm/bpf_map`` refuses a descriptor of a
-map to all but the agent when the map's name is one of the object's map
-names, and ``lsm/bpf`` refuses ``BPF_LINK_DETACH``. The name is the whole
-test, so a map of another program with one of these names is refused too.
+With ``LOTA_CFG_LOCK_BPF`` set, in every mode, ``lsm/bpf_map`` refuses a
+descriptor of a map the object declares in ``.maps`` to all but the agent,
+and ``lsm/bpf`` refuses ``BPF_LINK_DETACH``. The hook compares the map's
+address with those maps, so a map of another program with the same name
+stays open, and so does the frozen map of the object's string constants.
 
 Maps
 ====
@@ -281,7 +282,7 @@ Maps
      - Trusted libraries by device and inode (``trust_lib``).
    * - ``guarded_files``
      - hash, 64
-     - Guarded cgroup files, written at load.
+     - Guarded cgroup files, written at load and frozen.
    * - ``mapped_exec``
      - hash, 16384
      - Files the agent pinned while they are mapped.
@@ -368,9 +369,9 @@ the window yields to quieter ones (:ghsrc:`include/lota_event_budget.h`).
 Statistics
 ==========
 
-``stats`` counts executions, mappings, refusals, the agent's ``ptrace``
-read checks, events sent, ring-buffer drops, events suppressed or yielded
-by the budget, signal-0 probes, and the entries ``exec_history``,
+``stats`` counts executions, mappings, refusals, ``ptrace`` access checks,
+events sent, ring-buffer drops, events suppressed or yielded by the budget,
+signal-0 probes, and the entries ``exec_history``,
 ``instance_actors`` and ``instance_stops`` could not store. When the daemon
 leaves its event loop it logs them on one line that starts ``Shutdown
 statistics: exec=``, without the suppressed events, ``STAT_EXEC_BLOCKED``,
