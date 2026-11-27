@@ -71,3 +71,10 @@ int lota_startup_check_exit_status(int err)
 	}
 	return LOTA_EXIT_OPERATOR_ACTION;
 }
+
+int lota_bpf_load_refusal(int err)
+{
+	if (lota_startup_check_exit_status(err) == LOTA_EXIT_OPERATOR_ACTION)
+		return -ENOTSUP;
+	return err;
+}

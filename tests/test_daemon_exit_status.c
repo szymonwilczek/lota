@@ -6,9 +6,7 @@
  * The packaged unit carries RestartPreventExitStatus=78 and Restart=on-failure
  * with RestartSec=5s, so the exit status decides between a unit that sits failed
  * with the reason in the journal and one that starts again every five seconds
- * until the host reboots. StartLimitBurst does not save it: RestartSec spaces
- * the attempts wider than StartLimitIntervalUSec, so the burst counter never
- * fills.
+ * until its fifth start.
  *
  * The refusals that matter here are the PCR 14 verdicts. The boot commitment
  * can be spent once per boot and the register is not resettable from userspace,
@@ -23,6 +21,7 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "test.h"
@@ -212,6 +211,42 @@ static void test_a_startup_check_that_could_not_read_is_retried(void)
 	PASS();
 }
 
+/*
+ * A kernel that refuses the object refuses it again on the restart,
+ * which finds PCR 14 already committed and would exit 1.
+ */
+static void test_a_refused_object_needs_an_operator(void)
+{
+	static const int refused[] = { EINVAL, EACCES, EPERM,	ESRCH,
+				       ENOENT, E2BIG,  ENOTSUP, ENOEXEC };
+	static const int transient[] = { EIO,	 EMFILE, ENFILE, ENOMEM,
+					 EAGAIN, EINTR,	 EBUSY };
+	size_t i;
+
+	TEST("a refused object exits for an operator");
+	for (i = 0; i < sizeof(refused) / sizeof(*refused); i++) {
+		if (lota_daemon_exit_status(lota_bpf_load_refusal(-refused[i]),
+					    TPM_PCR14_ALREADY_COMMITTED) !=
+		    LOTA_EXIT_OPERATOR_ACTION) {
+			FAIL(strerror(refused[i]));
+			return;
+		}
+	}
+	PASS();
+
+	TEST("a load that could not finish exits 1");
+	for (i = 0; i < sizeof(transient) / sizeof(*transient); i++) {
+		int err = lota_bpf_load_refusal(-transient[i]);
+
+		if (lota_daemon_exit_status(err, TPM_PCR14_ALREADY_COMMITTED) !=
+		    1) {
+			FAIL(strerror(transient[i]));
+			return;
+		}
+	}
+	PASS();
+}
+
 /* A daemon that served and stopped carries its own status out. */
 static void test_a_served_daemon_carries_its_own_status(void)
 {
@@ -227,13 +262,9 @@ static void test_a_served_daemon_carries_its_own_status(void)
 		PASS();
 }
 
-/* whether @unit's RestartPreventExitStatus= lists @status */
-static bool unit_prevents_restart_on(const char *unit, int status)
+static FILE *open_unit(const char *unit)
 {
-	char line[512];
-	char wanted[64];
 	char path[256];
-	bool found = false;
 	FILE *fp;
 
 	snprintf(path, sizeof(path), "systemd/%s", unit);
@@ -242,6 +273,43 @@ static bool unit_prevents_restart_on(const char *unit, int status)
 		snprintf(path, sizeof(path), "../systemd/%s", unit);
 		fp = fopen(path, "re");
 	}
+	return fp;
+}
+
+/* copy the value of @unit's last [Unit] @key= into @out; false when none */
+static bool unit_value(const char *unit, const char *key, char *out, size_t cap)
+{
+	size_t len = strlen(key);
+	char line[512];
+	bool in_unit = false;
+	bool found = false;
+	FILE *fp = open_unit(unit);
+
+	if (!fp)
+		return false;
+	while (fgets(line, sizeof(line), fp)) {
+		if (line[0] == '[')
+			in_unit = strncmp(line, "[Unit]", 6) == 0;
+		if (!in_unit || strncmp(line, key, len) != 0 ||
+		    line[len] != '=')
+			continue;
+		snprintf(out, cap, "%.*s", (int)strcspn(line + len + 1, "\n"),
+			 line + len + 1);
+		found = true;
+	}
+	fclose(fp);
+
+	return found;
+}
+
+/* whether @unit's RestartPreventExitStatus= lists @status */
+static bool unit_prevents_restart_on(const char *unit, int status)
+{
+	char line[512];
+	char wanted[64];
+	bool found = false;
+	FILE *fp = open_unit(unit);
+
 	if (!fp)
 		return false;
 
@@ -264,6 +332,29 @@ static void test_the_unit_prevents_restarting_on_that_status(void)
 	if (!unit_prevents_restart_on("lota-agent.service",
 				      LOTA_EXIT_OPERATOR_ACTION))
 		FAIL("RestartPreventExitStatus does not list the status");
+	else
+		PASS();
+}
+
+/*
+ * A failure a restart does not clear exits 1 on every start. A finite interval
+ * misses one whose starts are spaced wider than interval / burst.
+ */
+static void test_the_unit_stops_a_failure_that_repeats(void)
+{
+	char interval[64] = "";
+	char burst[64] = "";
+
+	TEST("the packaged unit stops restarting a failure that repeats");
+	if (!unit_value("lota-agent.service", "StartLimitIntervalSec", interval,
+			sizeof(interval)) ||
+	    !unit_value("lota-agent.service", "StartLimitBurst", burst,
+			sizeof(burst)))
+		FAIL("the unit sets no start limit");
+	else if (strcmp(interval, "infinity") != 0)
+		FAIL("the interval is not infinity");
+	else if (strtol(burst, NULL, 10) <= 0)
+		FAIL("the burst is not a positive count");
 	else
 		PASS();
 }
@@ -331,8 +422,10 @@ int main(void)
 	test_refused_host_configuration_needs_an_operator();
 	test_a_key_with_no_record_needs_an_operator();
 	test_a_startup_check_that_could_not_read_is_retried();
+	test_a_refused_object_needs_an_operator();
 	test_a_served_daemon_carries_its_own_status();
 	test_the_unit_prevents_restarting_on_that_status();
+	test_the_unit_stops_a_failure_that_repeats();
 	test_the_unit_does_not_retry_a_running_instance();
 	test_the_attest_unit_stops_on_a_spent_commitment();
 	test_the_two_no_retry_statuses_differ();

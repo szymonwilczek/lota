@@ -12,6 +12,10 @@ After=network.target local-fs.target
 Before=multi-user.target getty.target
 Wants=tpm2-abrmd.service
 Requires=lota-agent.socket
+# five failed starts leave the unit failed until reset-failed,
+# however long each one runs
+StartLimitIntervalSec=infinity
+StartLimitBurst=5
 
 [Service]
 Type=notify

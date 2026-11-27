@@ -22,7 +22,9 @@ Units
   Runs ``/usr/bin/lota-agent``, the daemon, ``Type=notify`` with a 60-second
   watchdog. ``ExecStop`` is ``lota-agent --shutdown``, ``ExecReload`` sends
   ``SIGHUP``. ``Restart=on-failure`` after 5 seconds, except on exit status
-  78 or 3. It requires the socket unit.
+  78 or 3. Five starts, however far apart, use up its start limit: the next
+  fails with ``start-limit-hit`` until ``systemctl reset-failed``. It
+  requires the socket unit.
 
 ``lota-attest.service``
   Runs ``lota-agent --attest``, the attestation loop, with a 60-second
@@ -153,8 +155,8 @@ process from inside: the signal systemd sends is refused by this agent's
 own kill guard.`` and sends itself ``SIGKILL``.
 
 A kill, like a crash, skips the PCR 14 poison. ``Restart=on-failure``
-starts the daemon again, the commitment is found held, and the host carries
-``AGENT_RESTARTED`` until reboot.
+starts the daemon again while the start limit allows, the commitment is
+found held, and the host carries ``AGENT_RESTARTED`` until reboot.
 
 Reloading
 =========

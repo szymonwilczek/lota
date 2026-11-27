@@ -465,6 +465,10 @@ static int run_daemon(const struct run_daemon_params *params)
 	ret = bpf_loader_load(&g_agent.bpf_ctx, bpf_path, bpf_pubkey_path);
 	if (ret < 0) {
 		lota_err("Failed to load BPF program: %s", strerror(-ret));
+		ret = lota_bpf_load_refusal(ret);
+		if (ret == -ENOTSUP)
+			lota_err("A restart does not change the object or the "
+				 "kernel, so the agent stays stopped.");
 		goto cleanup_bpf;
 	}
 	lota_info("BPF program loaded (attach deferred until startup policy "
