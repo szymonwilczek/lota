@@ -5,64 +5,70 @@
 Branch model and release flow
 =============================
 
-LOTA uses a two-branch model: a stable storefront and an integration branch.
+LOTA has two long-lived branches. ``lota-next`` is the integration branch,
+where every change lands first. ``main`` is the default branch and carries
+released code only. Release candidates are tagged on ``lota-next``, stable
+releases on ``main``::
 
-::
+    feature branch --PR--> lota-next --PR, merge commit--> main
+                           v*-rc tags                      v* tags
 
-    features (PR) --> lota-next (1) --> PR (merge commit) --> main (2)
+Integration branch
+==================
 
-    (1) - v*-rc tags (pre-releases)
-    (2) - v* tags (stable releases)
+Pull requests open against ``lota-next``. A push to it runs the CI
+workflows, the packaging workflow and ``notify-fuzz``, which wakes the
+host that runs the long fuzzing campaigns
+(:ghsrc:`.github/workflows/notify-fuzz.yml`). :doc:`../dev-tools/index`
+describes the test layers; ``README-NEXT.rst`` in the repository root points
+there.
 
-``main`` as the storefront
+Release candidates are tagged here as ``v<version>-rc<n>``.
+
+Stable branch
+=============
+
+``main`` changes only through a pull request from ``lota-next``, merged as a
+merge commit so the commits keep the hashes they had on ``lota-next``. The
+maintainer opens and merges it and tags the stable release on ``main``.
+
+Releases
+========
+
+A ``v*`` tag runs the release workflow
+(:ghsrc:`.github/workflows/release.yml`), which builds the artifacts,
+signs them and publishes a GitHub release. A tag whose version starts with
+``0.`` or carries a ``-`` suffix is published as a pre-release; any other
+tag is a normal release. :doc:`../security/reproducible-builds` describes
+how a tag is built and how its artifacts are verified.
+
+Documentation site
+==================
+
+The documentation is published to GitHub Pages as two channels
+(:ghsrc:`.github/workflows/docs-deploy.yml`):
+
+stable
+  Built from ``main`` and served at the site root. It is labelled with the
+  tag being built, or else with the newest ``v*`` tag reachable from
+  ``main`` that is not a release candidate. Its source links point at
+  ``main``.
+
+development
+  Built from ``lota-next`` and served under ``/lota-next/``. It is labelled
+  ``lota-next (<short-sha>)``, carries a banner above every page and a
+  ``noindex`` robots tag, and its source links point at ``lota-next``.
+
+A push to either branch, or a ``v*`` tag without ``-rc``, rebuilds both
+channels and deploys them together, so one channel never overwrites the
+other. A switcher under the sidebar title links to the front page of the
+other channel (:ghsrc:`Documentation/_templates/layout.html`).
+
+Pull requests against main
 ==========================
 
-* The default branch: it is what visitors see first.
-* Holds **only** fully stable, released code.
-* No direct pushes. Changes enter only through a pull request from
-  ``lota-next``, merged as a **merge commit** (no squash, no rebase) so the
-  integration history is preserved. Done only by maintainers.
-* Stable releases are tagged here.
-
-See :doc:`reproducible-builds <../security/reproducible-builds>` for how a
-tag is built and signed.
-
-``lota-next`` as the integration branch
-=======================================
-
-* The permanent integration branch where all new work lands first.
-* Release **candidates** are tagged here (``v*-rc(x)``).
-  Release workflow marks any ``0.x`` or ``-``-suffixed tag as a GitHub
-  **pre-release**, so these show up under Releases as pre-releases.
-* The fuzzers and long-running CI (Syzkaller, configured separately) run
-  against this branch.
-* The developer and testing policy lives in
-  :doc:`../dev-tools/index`; ``README-NEXT.rst`` is a
-  short pointer to it, identical on both branches, so an integration merge
-  never touches it.
-
-Documentation hosting
-=====================
-
-The documentation site mirrors the branch model as two channels, both
-published to GitHub Pages from a single deploy
-(``.github/workflows/docs-deploy.yml``):
-
-* **stable** -- built from ``main`` and served at the site root. This is the
-  released documentation; its source links resolve against ``main``.
-* **development** -- built from ``lota-next`` and served under ``/lota-next/``.
-  It carries a banner, is labelled ``lota-next (<short-sha>)``, and is marked
-  noindex so it does not compete with the stable pages in search.
-
-Push to either branch rebuilds both channels and redeploys the whole site,
-so a change to one channel never overwrites the other. A switcher under the
-sidebar title moves between them.
-
-Contributing
-============
-
-Open pull requests against ``lota-next``, never ``main``.
-
-Because ``main`` is the default branch, a PR opened against it by an outside
-contributor is automatically retargeted to ``lota-next`` with an explanatory
-comment (``.github/workflows/pr-router.yml``).
+A pull request opened or reopened against ``main`` by anyone other than the
+maintainer, and not by a bot, is retargeted to ``lota-next`` with a comment
+that explains the branch model (:ghsrc:`.github/workflows/pr-router.yml`).
+If the branch then conflicts with ``lota-next``, rebase it onto
+``lota-next``.

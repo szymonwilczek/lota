@@ -3,16 +3,11 @@
 
 # Security Policy
 
-LOTA is security-sensitive infrastructure. Reports that affect the attestation
-chain, TPM enrollment, verifier policy, BPF LSM enforcement, release integrity,
-or SDK token validation should use a private channel.
+Report a suspected vulnerability privately through [GitHub Private
+Vulnerability Reporting][pvr], never in a public issue or pull request.
 
-Report a vulnerability through [GitHub Private Vulnerability Reporting](https://github.com/szymonwilczek/lota/security/advisories/new)
-for `github.com/szymonwilczek/lota`, or the fallback encrypted email channel.
+The encrypted-email fallback with its GPG fingerprint, the response targets,
+disclosure, supported versions and scope are in the
+[security bugs page](Documentation/process/security-bugs.rst).
 
-The full security policy - supported versions, reporting channels and GPG
-fingerprint, response targets, disclosure handling, and the security scope -
-lives in [Documentation/process/security-bugs.rst](Documentation/process/security-bugs.rst).
-
-Do not file public issues for exploitable vulnerabilities until the issue is
-triaged and disclosure is coordinated.
+[pvr]: https://github.com/szymonwilczek/lota/security/advisories/new

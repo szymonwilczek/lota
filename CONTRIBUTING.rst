@@ -5,19 +5,11 @@
 Contributing
 ============
 
-LOTA development happens on the ``lota-next`` integration branch. ``main``
-carries only stable released code. Open pull requests against ``lota-next``.
+Pull requests open against the ``lota-next`` integration branch. ``main``
+carries released code only.
 
-The full contribution rules -- security contract, DCO sign-off, commit style,
-code style, local validation, and pull request expectations -- live in
-`Documentation/process/contributing.rst
-<Documentation/process/contributing.rst>`_.
-
-See also:
-
-* `Branch model and release flow
-  <Documentation/process/branching.rst>`_
-* `Developer and testing policy
-  <Documentation/dev-tools/index.rst>`_
-* `Code of Conduct <Documentation/process/code-of-conduct.rst>`_
-* `Security policy <Documentation/process/security-bugs.rst>`_
+The contribution rules live in `Documentation/process/contributing.rst
+<Documentation/process/contributing.rst>`_. `Documentation/process/index.rst
+<Documentation/process/index.rst>`_ lists the other process pages: the
+branch model, the patch checks, the license boundary, security bugs and the
+code of conduct.

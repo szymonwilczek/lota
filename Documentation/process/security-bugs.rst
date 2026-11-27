@@ -1,87 +1,91 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-===============
-Security Policy
-===============
+=============
+Security bugs
+=============
 
-LOTA is security-sensitive infrastructure. Reports that affect the attestation
-chain, TPM enrollment, verifier policy, BPF LSM enforcement, release integrity,
-or SDK token validation should use a private channel.
+A suspected vulnerability in LOTA is reported privately, never in a public
+issue, pull request or review comment. This covers the attestation chain,
+TPM enrollment, verifier policy, BPF LSM enforcement, release integrity and
+SDK token validation, and any other path listed under `Scope`_.
 
-Supported versions
-==================
+Contact
+=======
 
-Before the first stable release, security fixes land on ``lota-next`` and are
-included in the next release candidate. After a stable release, supported
-versions are listed in the release notes for that series.
+The primary channel is GitHub Private Vulnerability Reporting for
+``github.com/szymonwilczek/lota``. It opens a private security advisory
+visible only to the reporter and the maintainer. The new-issue chooser
+links it as **Private Security Reporting**.
 
-Reporting a vulnerability
-=========================
-
-Preferred encrypted channel:
-
-* GitHub Private Vulnerability Reporting for ``github.com/szymonwilczek/lota``.
-
-Fallback encrypted channel:
+When that channel is not available, send the report by encrypted email:
 
 * Email: ``swilczek.lx@gmail.com``
 * GPG fingerprint: ``3EE5 3281 2DF0 F36A B7A1 F178 B8E9 4407 1CB7 EB8A``
 
-Reports should include:
+What to include
+===============
 
-* affected component and version or commit,
+* the affected component, and the version or commit,
 * reproduction steps or a minimal proof of impact,
-* expected and observed security boundary,
-* relevant logs, crash traces, attestation reports, tokens, or policy files,
-* whether the report is already shared with another party.
+* the security boundary expected and the one observed,
+* the relevant logs, crash traces, attestation reports, tokens or policy
+  files,
+* whether the report has been shared with anyone else.
 
-Do not file public issues for exploitable vulnerabilities until the issue is
-triaged and disclosure is coordinated.
+Response
+========
 
-Response targets
-================
+The maintainer:
 
-The project targets this response process:
+* acknowledges a report within 72 hours,
+* completes the initial triage within 72 hours of enough detail being
+  available,
+* aims to fix a critical vulnerability within 14 calendar days of
+  reproducing it,
+* agrees the disclosure date with the reporter when a public advisory is
+  needed.
 
-* acknowledge receipt within 72 hours,
-* complete initial triage within 72 hours after enough detail is available,
-* target a fix for critical vulnerabilities within 14 calendar days after
-  reproduction,
-* coordinate disclosure timing with the reporter when a public advisory is
-  required.
+A report that needs validation on a hardware TPM, coordination with a
+vendor, or a downstream release embargo can take longer.
 
-These targets can change when a report needs hardware TPM validation, vendor
-coordination, or a downstream release embargo.
+Disclosure
+==========
 
-Disclosure handling
-===================
+A fix whose public review would expose an active exploit is reviewed on a
+private branch. Until the advisory date, its public commits describe the
+functional change and carry no exploit details.
 
-Security fixes are reviewed on private branches when public review would expose
-an active exploit. Public commits should describe the functional fix without
-publishing exploit details before the advisory date.
+When the vulnerability affects a released artifact, the maintainer publishes
+a GitHub security advisory and a release whose ``SHA256SUMS`` manifest is
+signed with cosign. :doc:`../security/reproducible-builds` describes how to
+verify the artifacts against it.
 
-When the issue affects a released artifact, the maintainer (Szymon Wilczek)
-publishes a GitHub Security Advisory and a signed release artifact manifest.
-See :doc:`../security/reproducible-builds` for release artifact
-verification.
+Supported versions
+==================
 
-Security scope
-==============
+While every release is published as a pre-release (:doc:`branching`),
+security fixes land on ``lota-next`` and ship in the next release. Once a
+normal release is published, the release notes of each series list the
+versions that receive fixes.
+
+Scope
+=====
 
 In scope:
 
 * TPM 2.0 credential activation and AIK certificate issuance,
 * EK root validation and pinning,
-* TPM quote, nonce, PCR, boot-commitment, and event-log verification,
-* runtime protection digest and SDK token verification,
-* BPF LSM enforcement, signed BPF object loading, and fs-verity gates,
-* SELinux policy and systemd hardening that protect the LOTA agent,
-* reproducible build and release signing paths.
+* verification of TPM quotes, nonces, PCRs, boot commitments and event
+  logs,
+* the runtime protection digest and SDK token verification,
+* BPF LSM enforcement, signed BPF object loading and the fs-verity gates,
+* the SELinux policy and the systemd hardening that protect the agent,
+* the reproducible build and the release signing paths.
 
-Out of scope for this repository:
+Out of scope:
 
-* generic game-cheat behavior detection,
-* kernel vulnerabilities outside the LOTA BPF LSM surface,
-* distribution packaging not produced from this repository,
-* operator policy choices that intentionally disable required production gates.
+* detecting cheat behaviour in games,
+* kernel vulnerabilities outside the LOTA BPF LSM,
+* distribution packages not built from this repository,
+* operator policy that deliberately disables a required production gate.

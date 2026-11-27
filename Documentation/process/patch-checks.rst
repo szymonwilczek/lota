@@ -1,220 +1,386 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-==========================================
-Local patch checks and the PR quality gate
-==========================================
+============
+Patch checks
+============
 
-Local patch checks
-==================
+Three scripts check a change before it lands:
 
-Contributors can run ``scripts/check-patch [<base> [<head>]]`` before pushing a
-branch. The script reports each check with ``PASS`` or ``FAIL`` and includes a
-suggested fix for failures. It validates commit message shape, DCO trailers,
-commit signatures, message and patch whitespace, clang-format, gofmt,
-golangci-lint, the absence of compiled files in the index, the full
-build, include hygiene, the license boundary
-(:doc:`license-boundary`), the public API and ABI surface
-(:doc:`../userspace-api/stability`), the diagnostics the documentation quotes, the strict
-documentation build, and -- when the patch touches C -- the Sparse, Smatch and
-Coccinelle analyzers and the stack-frame ceiling described below.
+``scripts/check-patch``
+  Runs every local check over a commit range: the commit messages, the
+  changed files, the build, the tests and the analyzers.
 
-The Go linter (``golangci-lint``, configured by ``.golangci.yml``) is
-**blocking**. It lints each module the patch touches as a whole, since
-``unused`` needs the full module; a change to ``.golangci.yml`` lints every
-module. The module list comes from ``make print-lint-go-modules``, the list
-``make lint-go`` uses, and a Go module missing from it fails the gate. Without
-``golangci-lint`` installed the check is skipped; the ``Go static analysis``
-workflow runs it on every pull request.
+``scripts/check-pr-quality.sh``
+  Checks the sign-off and the column limits of each commit. ``check-patch``
+  runs it locally; the ``PR quality`` workflow runs it on every pull request.
 
-The tracked-file type check fails on any compiled file in the index: an
-executable, a shared library, an object file or an archive. Such files usually
-come from ``go build`` or ``make`` run inside a source directory, whose default
-output lands beside the sources; list those outputs in ``.gitignore``.
+``scripts/format-patch``
+  Rewrites the commit messages of a range into the shape the checks
+  require.
 
-The test build-directory check (``make check-test-build-dir``) fails on a test
-or example script that names the default build directory. C and Go tests take
-the path as a ``-D`` from their recipe; shell scripts read ``$LOTA_BUILD_DIR``
-and may name the default only as its fallback. A ``build`` directory that is
-not the tree's goes in ``scripts/test-build-dir-exemptions.txt``. The check
-runs on every patch.
+Running check-patch
+===================
 
-The fuzz check (``make fuzz-regress``) builds every C fuzz target and replays
-``fuzz/regressions/`` whenever a patch touches C, the Makefile or ``fuzz/``;
-targets link agent sources, so a change outside ``fuzz/`` can break one. It is
-skipped without clang; the ``fuzz`` CI job always runs it.
+.. code-block:: console
 
-The BPF mirror check (``make check-bpf-mirror``) runs when a patch touches
-``src/bpf/lota_lsm.bpf.c`` or ``fuzz/bpf_oracle/``. The oracle fuzzers run
-copies of BPF helpers, pinned by content in ``fuzz/bpf_oracle/mirror.lock``;
-when an original changes, re-verify the copy and run ``make
-update-bpf-mirror``. A line-number reference to the BPF source under
-``fuzz/bpf_oracle/`` also fails, since the lock misses a moved helper.
+   $ scripts/check-patch [<base> [<head>]]
 
-The syzkaller matrix check (``make check-syzkaller-matrix``) runs when a patch
-touches ``src/bpf/lota_lsm.bpf.c``, ``syzkaller/`` or the Makefile. It fails
-when an LSM program has no row in the hook matrix of ``syzkaller/README.rst``,
-when a row names a program the source lacks, or when it names a call
-``syzkaller/lota.cfg.example`` does not enable. Without it a new hook can go
-unfuzzed silently.
+The range is ``base..head``. ``head`` defaults to ``HEAD``. Without a
+``base``, the script takes the merge base of ``HEAD`` with its upstream,
+else with ``origin/lota-next``, else with ``lota-next``. An empty range
+fails.
 
-The strict documentation build (``make check-docs-strict``) is the build
-``docs.yml`` runs, with every warning promoted to an error, into a scratch
-output tree. It builds from nothing on purpose: Sphinx re-reads only the
-sources that changed, so an incremental build is silent about a problem in a
-file the patch did not touch, which is the case a gate exists for. It runs on
-every patch rather than only on the ones that touch ``Documentation/``, because
-a markup defect is introduced by whoever writes the markup and met by whoever
-next builds the docs. A contributor without Sphinx installed skips it; CI has
-it and decides.
+The changed files are those the range adds, copies, modifies, renames or
+retypes, together with the staged and unstaged changes in the working tree.
 
-The shipped-configuration check (``make check-config-commands``) requires every
-option a file under ``policies/`` or ``configs/`` passes to a ``lota-*`` command
-to be in that command's option table in the source. A command with no table in
-the gate fails it.
+Each check prints one line:
 
-The private-errno check (``make check-private-errno``) refuses a ``tpm_*`` or
-``net_*`` return code rendered through ``strerror()``. Both families answer
-above the POSIX range (TPM at 4097, transport at 4353), which ``strerror()``
-prints as ``Unknown error 4098``; 4098 is the authorization failure that warns
-of a dictionary-attack lockout. ``tpm_strerror()`` and ``net_strerror()`` fall
-through to ``strerror()`` for ordinary errnos, so each is always safe on a value
-from its own layer. The check is syntactic and per function: a value passed
-through a second variable is left to review.
+``PASS <check>``
+  The check passed, or the patch touches nothing it covers.
 
-Every commit in ``base..head`` must carry a good GPG or SSH signature; the
-check fails on any commit whose signature is missing, bad, or unverifiable.
-Set ``commit.gpgsign true`` with a configured signing key, or commit with
-``git commit -S``, so the commits match the repository ruleset that requires
-signed commits and GitHub marks them verified.
+``FAIL <check>``
+  The check failed. The findings are printed above the line and a
+  ``fix:`` line follows it.
 
-Commit body headings must use standalone ``Problem:`` and ``Solution:`` lines,
-with the explanatory text starting on the next line. **The version bump is the
-one exception**: the release tag sits on it, and ``release.yml`` publishes its
-description as the release notes, so its body is addressed to whoever reads the
-release page. The DCO ``Signed-off-by`` trailer must be separated from the
-description by one blank line.
+``SKIP <check>``
+  A tool the check needs is not installed. The next line names it.
 
-Subjects, pull request titles, branch names, and body lines are limited to 75
-columns. A body line over the limit
-fails ``check-pr-quality.sh``, locally and in CI, and
-``scripts/format-patch`` rewraps it; a subject, title, or branch name has to
-be shortened by hand. A body line keeps its length when it is a single word, a trailer (``*-by:``,
-``Fixes:``, ``Link:``, ``Closes:``, ``Docs-Not-Needed:``), a line with a URL, a
-``Merge branch`` line, a diffstat line, or a line led by a file path. Merge
-commits and subjects starting with ``Merge`` are exempt, and so is a pull
-request from ``lota-next``, whose commits were checked when they landed there.
+``INFO <text>``
+  A recommendation. It never fails the run.
 
-A body that is short for the size of the change is reported as ``INFO``. It
-recommends more detail and does not fail the check.
+The script exits 0 when no check failed, 1 when one did, and 2 outside a
+git repository or on a wrong number of arguments.
 
-A commit that changes a file listed in ``.github/pr-quality-hotpaths.txt``
-without touching the documentation named there is reported as ``INFO`` too.
-The manifest maps files to the pages that describe them, with the reason.
-The note is a recommendation and never fails a check: update the page when
-the change makes it wrong, and leave it alone otherwise. ``docs``, ``license``,
-and ``gitignore`` commits print no note.
+The build, the unit tests and the fuzz targets build into
+``$BUILD_DIR``, default ``/tmp/lota-build``, with ``$GOCACHE``, default
+``/tmp/lota-gocache``. ``$GOLANGCI_LINT`` names the linter binary.
+
+Commit messages
+===============
+
+These checks run on every commit in the range:
+
+DCO and column limits
+  ``scripts/check-pr-quality.sh`` over the same range, described in
+  `The pull request quality check`_. Its notes are printed as ``INFO``.
+
+commit signatures
+  Every commit carries a good GPG or SSH signature: ``git log`` reports
+  ``G`` or ``U``. A missing, bad, expired, revoked or unverifiable
+  signature fails.
+
+commit subject style
+  A subject with a Conventional Commits scope, such as ``fix(agent):``,
+  fails.
+
+commit body contract
+  The body has a ``Problem:`` line and a ``Solution:`` line, each alone on
+  its line. ``Problem: text`` on one line fails. The version-bump commit is
+  exempt: its subject is ``build: <version>``, it changes ``VERSION`` and
+  nothing else, and the release workflow publishes its body as the release
+  notes.
+
+commit body layout
+  A ``Signed-off-by:`` line follows a blank line or another
+  ``Signed-off-by:`` line.
+
+commit body detail
+  A commit that changes 5 files or 100 lines has at least 80 words in its
+  body; one that changes 3 files or 40 lines, at least 40. The subject and
+  the ``*-by:`` trailers are not counted; other trailers, such as
+  ``Link:``, are. A shorter body prints ``INFO`` and passes.
+
+patch trailing whitespace
+  ``git diff --check`` over each commit, the staged changes and the
+  unstaged changes.
+
+commit message trailing whitespace
+  No message line ends in a space or tab, and no message ends in a blank
+  line.
+
+Changed files and the tree
+==========================
+
+These checks run on every invocation:
+
+file trailing blank lines
+  No changed text file ends in a blank line.
+
+clang-format
+  ``clang-format --dry-run --Werror`` over the changed C and header files,
+  ``include/vmlinux.h`` excepted. ``clang-format-22`` is used when
+  installed. When the patch changes a C or header file and neither binary
+  is installed, the check fails.
+
+gofmt
+  ``gofmt -l`` over the changed Go files. When the patch changes a Go file
+  and ``gofmt`` is not installed, the check fails.
+
+build artifacts
+  No tracked file is an executable, a shared library, an object file or an
+  archive, read with ``file --mime-type``. Such a file is usually the output
+  of ``go build`` or ``make`` run inside a source directory; list it in
+  ``.gitignore``.
+
+build
+  ``make all``.
+
+lint-go
+  ``golangci-lint run`` with ``.golangci.yml`` over each Go module the
+  patch touches, as a whole module. A change to ``.golangci.yml`` lints
+  every module. The modules come from ``make print-lint-go-modules``. The
+  ``Go static analysis`` workflow runs the linter on every pull request
+  and every push to ``main`` or ``lota-next``.
+
+lint-go coverage
+  Every tracked ``go.mod`` is in ``LINT_GO_MODULES`` in the ``Makefile``.
+
+unit tests
+  ``make test-unit``.
+
+license-boundary
+  ``scripts/check-license-boundary.sh`` (:doc:`license-boundary`).
+
+test-build-dir
+  No test or example script names the default build directory. C and Go
+  tests take the path as a ``-D`` from their recipe; shell scripts read
+  ``$LOTA_BUILD_DIR`` and name the default only as its fallback. A
+  ``build`` directory that is not the tree's goes in
+  ``scripts/test-build-dir-exemptions.txt``.
+
+doc-diagnostics
+  Every sentence-shaped inline literal in the documentation is a message
+  the source can print, except a literal listed in
+  ``scripts/doc-diagnostics-exemptions.txt``. Adjacent C string literals are
+  joined, and a format specifier matches the text it stands for. A code
+  block is not checked.
+
+config-commands
+  Every option a file under ``policies/`` or ``configs/`` passes to a
+  ``lota-*`` command is in that command's option table in the source.
+
+docs-strict
+  ``make check-docs-strict``: a full documentation build into a scratch
+  tree with every warning an error, after the license check of the
+  documentation toolchain. A full build reads every page, so a defect in a
+  page the patch did not touch still fails.
+
+abi
+  ``scripts/check-abi.sh`` compares the SDK's exported symbols, sonames,
+  installed headers and type layouts with the baseline in
+  ``packaging/abi/``, then builds against a staged install
+  (:doc:`../userspace-api/stability`). A deliberate change updates the
+  baseline with ``make abi-baseline``.
+
+doc-references
+  ``make check-doc-references``: every symbol or command a comment or a
+  page names exists in the tree.
+
+When a patch touches
+====================
+
+These checks run only when the changed files match their trigger. A patch
+that matches nothing passes them.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 30 48
+
+   * - Check
+     - Trigger
+     - What it checks
+   * - include-hygiene
+     - C or header
+     - ``scripts/check-includes.sh``: no translation unit includes a header
+       it does not use, as ``clang-include-cleaner`` reports it. A header
+       used only through another header is not reported. Fix with
+       ``scripts/fix-includes.sh``.
+   * - stack-frames
+     - C or header
+     - See `C static analysis`_.
+   * - private-errno
+     - C or header
+     - See `C static analysis`_.
+   * - sparse, smatch, coccicheck
+     - C or header
+     - See `C static analysis`_.
+   * - fuzz
+     - C, header, ``Makefile``, ``fuzz/``
+     - ``make fuzz-regress``: every C fuzz target builds and passes
+       ``fuzz/regressions/``. The targets link agent sources, so a change
+       outside ``fuzz/`` can break one.
+   * - bpf-mirror
+     - ``src/bpf/lota_lsm.bpf.c``, ``fuzz/bpf_oracle/``
+     - ``make check-bpf-mirror``: the BPF helpers the oracle fuzzers copy
+       match ``fuzz/bpf_oracle/mirror.lock``, and nothing under
+       ``fuzz/bpf_oracle/`` cites the BPF source by line number. After
+       re-verifying a copy, ``make update-bpf-mirror`` updates the lock.
+   * - syzkaller-matrix
+     - ``src/bpf/lota_lsm.bpf.c``, ``syzkaller/``, ``Makefile``
+     - Every LSM program has a row in the hook matrix of
+       ``syzkaller/README.rst``, every row names a program the source has,
+       and ``syzkaller/lota.cfg.example`` enables every call a row names.
+   * - header-paths
+     - ``include/``, ``Makefile``, ``scripts/check-patch``
+     - Every tree path an installed header names exists.
+       ``include/linux/`` paths are skipped.
+   * - package-manifests
+     - a manifest under ``packaging/``, ``Makefile``, a page, ``conf.py``,
+       ``README.rst``
+     - The nfpm configs and ``packaging/rpm/lota.spec`` ship the same paths
+       and declare the same dependencies per package, and every page names
+       the repository address the documentation site serves.
+   * - player-build
+     - ``Documentation/player/``, ``Makefile``
+     - ``scripts/check-player-build.sh``: the build commands of the player
+       page install in a clean Fedora container.
+   * - helm-chart
+     - ``deploy/helm/``
+     - The chart takes its ``appVersion`` from ``VERSION`` and renders pods
+       that start.
+   * - container-images
+     - the ``ko`` configurations, ``Makefile``, the release workflow
+     - Each published image offers the CA key source its documentation
+       states.
+
+player-build, helm-chart, container-images and package-manifests also run
+when their own script changes, and header-paths when
+``scripts/check-patch`` changes.
 
 C static analysis
 =================
 
-Three semantic checkers and a stack-frame ceiling run over the C sources --
-every tracked ``*.c`` except ``src/bpf``, which targets the x86 BPF machine and
-trips the checkers, the same exclusion clang-analyzer uses. Each is a
-self-contained make target that passes a reduced flag set (includes,
-``_GNU_SOURCE`` and the ``pkg-config`` dependency flags), because the
-hardening, machine, and sanitizer flags in ``CFLAGS`` confuse the parsers:
+Sparse, Smatch and Coccinelle read every tracked ``.c`` file outside
+``src/bpf/``, which targets the BPF machine. Sparse and Smatch get the
+include paths, ``_GNU_SOURCE``, the ``pkg-config`` flags of the libraries
+the tree links, and the defines the sources are built with
+(``LOTA_INTERNAL_TESTS``, the SDK version, the benchmark include root).
+``CFLAGS`` is not passed: its hardening, machine and sanitizer flags
+confuse the parsers.
 
-* ``make sparse`` runs the Sparse semantic checker. It is **blocking**: any
-  finding fails the target. Only findings in tracked files count -- Sparse
-  does not know several glibc and gcc attributes and reports the C library by
-  the hundred, which says nothing about this tree and differs per
-  distribution. Sparse also gets the defines the sources are really built
-  with (``LOTA_INTERNAL_TESTS``, the build-identity string, the benchmark and
-  staged-SDK include roots); without them it walks a translation unit no build
-  produces. One warning is switched off tree-wide:
-  declaration-after-statement, a style rule rather than a defect class.
-  Everything else stays on. Where Sparse is wrong,
-  ``scripts/sparse-exemptions.txt`` drops that one message in that one file,
-  with the reason written out, so the same finding anywhere else still fails
-  the gate. It is not a backlog: an entry is only justified when Sparse
-  reports something the source does not do and no code change can say it more
-  clearly. The current entries cover constants folded through an inlined call
-  or macro and reported as if the source wrote the specialised result, the
-  flexible-array union that sizes a variable-length ioctl argument, and two
-  whole-struct ``memset`` calls above Sparse's 100 KB copy limit.
-* ``make smatch`` runs the Smatch flow analyzer. It is **blocking when it
-  runs**: any finding fails the target. Smatch has no distribution package, so
-  the target skips when the binary is absent -- build it from
-  ``https://repo.or.cz/smatch.git`` and put it on ``PATH`` (or pass
-  ``SMATCH=/path/to/smatch``). Skipping locally does not make it optional: the
-  ``smatch`` job in the ``C static analysis`` workflow builds a pinned revision
-  from source, caches it, and runs the same target on every pull request, so a
-  finding cannot reach ``lota-next`` because a contributor lacked the tool.
-  Build the revision that job pins if you want local results to match CI.
+``make sparse``
+  Runs Sparse with ``-Wsparse-all -Wno-declaration-after-statement``. A
+  finding in a tracked file, or a non-zero exit, fails that file. A
+  finding in a system header is not counted. An entry in
+  ``scripts/sparse-exemptions.txt`` drops one message in one file and
+  states why the source does not do what Sparse reports; the same message
+  in any other file still fails.
 
-  It takes the same corrected flag set as Sparse -- Smatch is built from Sparse
-  and parses with the same front end, so a translation unit one cannot assemble
-  is one neither can analyse. Two shapes of output count. Smatch's own findings
-  read ``file.c:LINE func() warn:``, with no column and ``warn`` rather than
-  ``warning``, which is why the Sparse filter does not match them; front-end
-  errors read ``file.c:LINE:COL: error:`` and mean the translation unit was
-  never assembled, so the file went unanalysed. A gate that ignored the second
-  kind would report success over sources it never read.
-* ``make check-stack-frames`` fails on a function in a shipped binary whose
-  stack frame exceeds 32 KB (``STACK_FRAME_LIMIT`` overrides it). The agent
-  is a long-running daemon and the installer runs on whatever stack its caller
-  has, so an object large enough to matter -- configuration, an allow-list, a
-  rollback snapshot -- belongs on the heap, where a failed allocation is a
-  value the caller can act on rather than a fault it cannot. Only the shipped
-  sources are measured; tests are short-lived processes on the main thread's
-  full stack. The compiler flags are pinned inside the script rather than
-  taken from ``CFLAGS``, because hardening, machine and sanitizer flags move
-  frame sizes and the gate is about the shape of the source, not of one build.
-  The ceiling is a ratchet: lower it as the largest frames come in, never raise
-  it to admit a new one. It currently sits just above the tree's high-water
-  mark, and every frame near that mark is one ``struct profile_paths`` (24592
-  bytes, six ``PATH_MAX`` strings by value) plus small locals -- so the next
-  step down is a decision about that struct rather, not a change to this number.
-* ``make coccicheck`` runs the Coccinelle semantic-patch rules under
-  ``scripts/coccinelle`` (configured by ``.cocciconfig``). It is **blocking**:
-  the rules are tuned to be clean on a healthy tree, so any match is a finding.
+``make smatch``
+  Runs Smatch with the same include paths and defines. A file fails on a
+  finding, ``file.c:LINE func() warn:`` or with ``error:``, ``info:`` or
+  ``warning:`` in its place, on a front-end error or warning,
+  ``file.c:LINE:COL: error:``, or on a non-zero exit. Output from system
+  headers is not counted.
+  Smatch has no distribution package: build it from
+  ``https://repo.or.cz/smatch.git`` and put it on ``PATH``, or pass
+  ``SMATCH=/path/to/smatch``. The ``C static analysis`` workflow builds
+  the revision pinned in ``SMATCH_REV``.
 
-Install the front ends with ``dnf install sparse coccinelle`` on Fedora or
-``apt-get install sparse coccinelle`` on Debian and Ubuntu, and build Smatch
-from source. ``scripts/check-patch`` runs all four when the patch touches C and
-skips each one whose tool is absent, so the gate stays usable without them --
-but CI has every tool, so skipping locally postpones a failure rather than
-avoiding one. The same four checks run in CI under the ``C static analysis``
-workflow.
+``make coccicheck``
+  Applies each rule under ``scripts/coccinelle/``, with ``.cocciconfig``.
+  Any match fails.
 
-Use ``scripts/format-patch [<base> [<head>]]`` only to normalize local commit
-messages before pushing. It rewrites commits in ``base..head`` to remove
-trailing spaces, trailing tabs, and blank lines after the final content line.
-It does not change file trees. It also fixes simple inline ``Problem:`` and
-``Solution:`` headings, inserts the required blank line before
-``Signed-off-by``, wraps body paragraphs to 75 columns, and tells the developer
-to review the rewritten descriptions. A trailer, a URL, a merge line, a
-diffstat line, and a line led by a file path are left as written. The script requires a clean index and working tree,
-refuses merge commits, and creates a backup branch before updating the current
-branch.
+``make check-stack-frames``
+  Fails on a function in a shipped binary whose stack frame exceeds
+  32 KiB; ``STACK_FRAME_LIMIT`` overrides the limit. The compiler flags
+  are fixed in ``scripts/check-stack-frames.sh``, so a frame measures the
+  same in every build mode. Tests are not measured. An object large enough
+  to fail belongs on the heap, as ``config_new()`` in
+  ``src/agent/config.c`` does it. The limit is only ever lowered.
 
-Pull request quality gate
+``make check-private-errno``
+  Fails when a value assigned from a ``tpm_*()`` or ``net_*()`` call
+  reaches ``strerror()`` negated, with no other assignment between. Those
+  layers return codes from 4097 and 4353, which ``strerror()`` prints as
+  ``Unknown error <n>``; 4098 is ``LOTA_ERR_TPM_AUTH_FAIL``, the warning
+  of a dictionary-attack lockout. ``tpm_strerror()`` and
+  ``net_strerror()`` print the private codes and fall through to
+  ``strerror()`` for the rest. A copy through a second variable is not
+  caught.
+
+Without the tool, Sparse, Smatch and Coccinelle print ``SKIP``. On Fedora,
+``dnf install sparse coccinelle`` installs two of them; on Debian and
+Ubuntu, ``apt-get install sparse coccinelle``. The ``C static analysis``
+workflow runs Sparse, Smatch, Coccinelle and the stack-frame check on every
+pull request and every push to ``main`` or ``lota-next``.
+
+The pull request quality check
+==============================
+
+.. code-block:: console
+
+   $ scripts/check-pr-quality.sh [--pr-diff] <base> <head>
+
+``$BASE_SHA`` and ``$HEAD_SHA`` stand in for missing arguments. For each
+commit in ``base..head``:
+
+* The body carries ``Signed-off-by: Name <email>`` on a line of its own.
+* The subject is at most 75 columns.
+* Each body line is at most 75 columns, unless it is a single word, a
+  trailer (``*-by:``, ``Fixes:``, ``Link:``, ``Closes:``,
+  ``Docs-Not-Needed:``), a line containing a URL, a ``Merge branch`` line,
+  a diffstat line, or a line led by a path followed by a colon.
+* A merge commit, or a subject starting with ``Merge``, is exempt from
+  both column limits.
+* A trailer such as ``Co-authored-by:`` or ``Assisted-by:``, or an author
+  or committer, that names an AI assistant sets ``ai_assisted=true`` in
+  ``$GITHUB_OUTPUT``. It does not fail.
+
+The branch name, ``$PR_BRANCH`` or the checked-out branch, is at most 75
+columns, and ``$PR_TITLE``, when set, follows the subject rules. On the
+``lota-next`` branch the column limits are not checked, since its commits
+were checked when they landed.
+
+A subject of the form ``a/b:`` or ``a: b:`` prints a note asking whether
+the form is the intended one (:doc:`contributing`).
+
+A commit that changes a file listed in ``.github/pr-quality-hotpaths.txt``
+without a file of the documentation named for it prints a note naming that
+documentation and the reason. Test files (``*_test.go``, ``tests/``,
+``test/``, ``testdata/``, ``src/*/fuzz/``) do not trigger a note, and
+neither do ``docs``, ``license`` or ``gitignore`` commits. A note never
+fails.
+
+With ``--pr-diff`` only non-merge commits whose parent already carries
+``.github/pr-quality-hotpaths.txt`` are checked; every other commit is
+skipped whole, sign-off, column limits and AI marker alike. No
+documentation note is printed.
+
+The script exits 0 when every checked commit passes, 1 on a failure, and 2
+on a missing argument or commit, or when
+``.github/pr-quality-hotpaths.txt`` is missing.
+
+The ``PR quality`` workflow runs it with ``--pr-diff`` when a pull request
+is opened, updated, reopened or edited, with the pull request's title and
+branch. When it reports ``ai_assisted=true``, the workflow labels the pull
+request ``AI-Assisted``.
+
+Rewriting commit messages
 =========================
 
-The ``PR quality`` workflow checks commit metadata before the build matrix runs:
+.. code-block:: console
 
-* every non-merge commit created on top of a tree that already carries the
-  quality gate must carry a DCO ``Signed-off-by`` trailer,
-* commits with AI assistant co-author or generator trailers are labeled
-  ``AI-Assisted``.
+   $ scripts/format-patch [<base> [<head>]]
 
-Documentation notes are local to ``check-patch``. The workflow does not print
-them.
+The range defaults as for ``check-patch``. ``head`` is the tip of the
+checked-out branch. The script changes messages only; every commit keeps
+its tree, author, committer and dates. In each message it:
 
-Scripts are split by audience: developer-workflow tooling (``check-*``,
-``format-patch``, the CI gate scripts) maps to the contributor docs above,
-while operator provisioning and host bring-up scripts (``lota-*``,
-``setup-fsverity.sh``) are deployment steps and map to the operator-facing
-:doc:`production bring-up <../admin-guide/bringup/index>` and the
-relevant example READMEs instead.
+* removes trailing spaces and tabs and the final blank lines,
+* splits ``Problem: text`` and ``Solution: text`` into a heading and the
+  text on the next line,
+* puts one blank line before the first ``Signed-off-by:``,
+* wraps the body paragraphs to 75 columns, leaving the exempt lines of
+  `The pull request quality check`_ as written.
+
+A subject over 75 columns is shortened by hand.
+
+The script refuses a detached ``HEAD``, a ``head`` that is not the branch
+tip, staged or unstaged changes, an empty range, and a range with a merge
+commit. Before it moves the branch it saves the old tip as
+``backup-<branch>-before-format-patch-<UTC time>``, removed again when no
+message changed. It signs the rewritten commits only when
+``commit.gpgsign`` is ``true``; otherwise they lose their signatures and
+fail the signature check. Review every rewritten message before pushing.

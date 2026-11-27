@@ -5,39 +5,35 @@
 Contributing
 ============
 
-LOTA development happens on the ``lota-next`` integration branch. ``main``
-carries only stable released code. Open pull requests against ``lota-next``;
-the branch model is documented in :doc:`branching`.
+Changes land on the ``lota-next`` integration branch, through a pull request.
+``main`` carries released code only; :doc:`branching` describes both
+branches. This page sets out what a commit and a pull request carry. The
+checks that enforce it are described in :doc:`patch-checks`.
 
-Security first
-==============
+Security contract
+=================
 
-Changes must preserve the production security contract. Do not add
-development shortcuts that weaken TPM enrollment, verifier policy, BPF LSM
-enforcement, SELinux confinement, release signing, or reproducible builds.
+A change must not weaken TPM enrollment, verifier policy, BPF LSM
+enforcement, SELinux confinement, release signing or reproducible builds,
+including through a development shortcut.
 
-A change to an external contract should update the matching documentation in
-the same commit. ``check-patch`` recommends pages to look at and enforces
-nothing. Examples of such contracts include CLI flags, policy syntax, IPC wire
-formats, systemd units, SELinux labels, SDK APIs, and verifier configuration.
+A change to an external contract updates its documentation in the same
+commit. External contracts include command-line flags, policy syntax, IPC
+wire formats, systemd units, SELinux labels, SDK APIs and verifier
+configuration. ``.github/pr-quality-hotpaths.txt`` maps source files to the
+pages that describe them, and ``scripts/check-patch`` prints a note when a
+commit changes one without the other.
 
-Developer Certificate of Origin
-===============================
+Commits
+=======
 
-Every commit must carry a DCO sign-off::
+One logical change per commit. Each commit builds and passes the tests on
+its own, and an unrelated refactor goes in a commit of its own.
 
-    Signed-off-by: Name <email@example.com>
+Subject
+-------
 
-Use ``git commit -s`` or add the line manually. The sign-off certifies that
-the contribution can be submitted under the project's licenses.
-
-Commit style
-============
-
-Use one logical change per commit. A commit should build and test on its own.
-Keep unrelated refactors separate from behavior changes.
-
-Commit subjects use a bare prefix::
+The subject starts with a bare prefix naming the area it changes::
 
     agent: reject stale AIK metadata
     verify: bind quote nonce to token epoch
@@ -45,87 +41,107 @@ Commit subjects use a bare prefix::
     sdk/server: agree on the token claim set
     ci: shard Go fuzz targets
 
-Do not use Conventional Commit parentheses such as ``fix(agent):``.
-A second prefix after a colon names a submodule, as in ``docs: operator:``. A
-slash joins two surfaces a commit changes together, as in ``sdk/server:``.
-``scripts/check-pr-quality.sh`` prints a note for both forms, to confirm the
-intended one.
+A second prefix after ``": "`` names a submodule (``docs: verifier:``). A
+slash joins two areas a commit changes together (``sdk/server:``).
+``scripts/check-patch`` prints a note for either form so the author
+can confirm it is the one meant. A Conventional Commits scope such as
+``fix(agent):`` fails ``scripts/check-patch``.
 
-Subjects, pull request titles, and branch names are at most 75 columns, and
-body text is wrapped to 75 columns. ``scripts/format-patch`` rewraps a body;
-see :doc:`patch-checks` for the lines that keep their length.
+Subjects, pull request titles and branch names are at most 75 columns.
 
-Commit bodies for ALL changes should state::
+Body
+----
 
-    Problem: ...
+The body explains the change under two headings, each on a line of its own
+with the text starting on the next line, and ends with the sign-off after
+one blank line::
 
-    Solution: ...
+    Problem:
+    What is wrong or missing, and why it matters.
+
+    Solution:
+    What the commit changes to fix it.
 
     Signed-off-by: Name <email@example.com>
+
+Body lines are at most 75 columns. ``scripts/format-patch`` rewraps a body
+and splits ``Problem: text`` onto two lines; :doc:`patch-checks` lists the
+lines that keep their length.
+
+Sign-off and signature
+----------------------
+
+Every commit carries a Developer Certificate of Origin trailer,
+``Signed-off-by: Name <email>``, added by ``git commit -s``. The sign-off
+certifies that the contribution may be submitted under the project's
+licenses.
+
+Every commit is also signed with GPG or SSH (``git commit -S``, or
+``commit.gpgsign`` set to ``true``), so that GitHub marks it verified.
 
 Code style
 ==========
 
-C and BPF code follow the repository ``.clang-format``.
+C and BPF sources follow the repository ``.clang-format``: run
+``clang-format -i`` on changed C and header files. Go sources are formatted
+with ``gofmt``; ``golangci-lint``, configured by ``.golangci.yml``,
+additionally checks ``gofumpt`` and ``goimports`` formatting.
 
-Run ``clang-format -i`` on modified C and header files before committing.
-
-Go code must be formatted with ``gofmt``.
-
-Comments should be terse and factual. State the contract, failure mode, or
-relevant specification. Avoid narrative comments.
+Comments are terse and factual. They state the contract, the failure mode or
+the specification a line follows.
 
 Local validation
 ================
 
-For normal changes, run:
+Every change builds and passes the unit tests, with the build directory and
+the Go cache outside the tree:
 
-.. code-block:: sh
+.. code-block:: console
 
-    env GOCACHE=/tmp/lota-gocache make BUILD_DIR=/tmp/lota-build all
-    env GOCACHE=/tmp/lota-gocache make BUILD_DIR=/tmp/lota-build test-unit
+   $ env GOCACHE=/tmp/lota-gocache make BUILD_DIR=/tmp/lota-build all
+   $ env GOCACHE=/tmp/lota-gocache make BUILD_DIR=/tmp/lota-build test-unit
 
-Broaden validation when the change touches a wider surface:
+``scripts/check-patch`` runs both, among its other checks. A change to a
+wider surface needs more:
 
-* BPF LSM or kernel hooks: validate in a guest with the production BPF object
+* BPF LSM or kernel hooks: a run in a guest with the production BPF object
   attached.
-* TPM paths: validate with ``swtpm`` - hardware TPM validation is required
-  before release claims that depend on hardware behavior.
-* Untrusted parsers: add or update fuzz seeds and run the matching fuzz target.
-* Release artifacts: run ``make reproducible-build``.
-* SELinux policy: rebuild the module and inspect the resulting AVC behavior on
-  an enforcing system.
+* TPM paths: a run against ``swtpm``. A claim that depends on hardware
+  behaviour needs a run on a hardware TPM.
+* Untrusted parsers: new or updated fuzz seeds, and a run of the matching
+  fuzz target.
+* Release artifacts: ``make reproducible-build``.
+* SELinux policy: a rebuilt module and its AVC behaviour on an enforcing
+  system.
 
-The full testing policy is in :doc:`../dev-tools/index`.
+:doc:`../dev-tools/index` describes the test layers and how each one runs.
 
 Reporting issues
 ================
 
-Open new issue and pick a template.
+New issues start from a template; blank issues are disabled. **Bug** is for
+a defect that is not a security problem, **Enhancement** for a proposed
+change or capability. Both live in ``.github/ISSUE_TEMPLATE``.
 
-**Bug** is for non-security defects; **Enhancement** is for a proposed change
-or capability. Both live in ``.github/ISSUE_TEMPLATE`` and keep the report terse
-and reproducible.
+A suspected vulnerability never goes into a public issue. The new-issue
+chooser links **Private Security Reporting**, which opens a private GitHub
+security advisory; :doc:`security-bugs` lists the email fallback.
 
-Suspected vulnerability never goes in a public issue. Use the **Private Security
-Reporting** link in the new-issue chooser, which opens a private GitHub advisory;
-the encrypted-email fallback and GPG fingerprint are in the :doc:`security policy <security-bugs>`.
+Pull requests
+=============
 
-Pull request expectations
-=========================
+A pull request opens against ``lota-next``. Its description starts from
+``.github/PULL_REQUEST_TEMPLATE.md``, whose sections follow the commit body:
+Problem, Solution with one section per changed area, Docs, Tests and
+Security boundary. A section that does not apply is deleted.
 
-Opening a pull request pre-populates ``.github/PULL_REQUEST_TEMPLATE.md``.
-Keep its sections (Problem, Solution, per-area detail, Docs, Tests, Security
-boundary); they mirror the required commit-body structure.
+A pull request carries:
 
-A pull request should include:
-
-* focused change set,
-* tests or a clear reason why runtime validation needs operator hardware (if
-  it does),
-* documentation updates for changed behavior,
+* one focused change set,
+* tests, or the reason runtime validation needs operator hardware,
+* documentation updates for changed behaviour,
 * no generated build artifacts,
-* no private operator files, local logs, TPM state, or credentials.
+* no private operator files, local logs, TPM state or credentials.
 
-Tagging releases and promoting ``lota-next`` to ``main`` are maintainer
+Tagging a release and merging ``lota-next`` into ``main`` are maintainer
 actions.
