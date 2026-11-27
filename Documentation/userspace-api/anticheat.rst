@@ -81,8 +81,8 @@ state is then:
   A token, or a status with any flag set, arrived without those bits.
 
 ``LOTA_AC_STATE_ERROR``
-  Nothing to judge: no agent, no snapshot, a refused request, or neither a
-  token nor any flag.
+  Nothing to judge: no agent, no snapshot or one whose token has expired,
+  a refused request, or neither a token nor any flag.
 
 ``LOTA_AC_STATE_IDLE`` is a ``NULL`` session, and ``LOTA_AC_STATE_RUNNING``
 does not outlast ``lota_ac_init()``. ``lota_ac_get_state()`` and
@@ -247,7 +247,8 @@ followed by the token:
    * - 12
      - 4
      - ``token_size``
-     - 1 to ``LOTA_AC_MAX_TOKEN`` bytes of token follow.
+     - ``LOTA_TOKEN_HEADER_SIZE`` to ``LOTA_AC_MAX_TOKEN`` bytes of token
+       follow.
 
 The file sits in a directory the player owns, so its ``flags`` are what the
 session shows locally and nothing more.
@@ -372,7 +373,8 @@ return a negative ``errno`` and leave the ``LOTA_AC_ERR_*`` reason in
      - The session id or the game binding hash failed.
    * - -1013
      - ``LOTA_AC_ERR_NO_AGENT``
-     - No agent answers, or file mode found no snapshot.
+     - No agent answers, or file mode found no snapshot or one whose token
+       has expired.
    * - -1014
      - ``LOTA_AC_ERR_CONSENT_REQUIRED``
      - Nobody on the host agreed to that publisher.

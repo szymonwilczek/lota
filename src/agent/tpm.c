@@ -1136,6 +1136,21 @@ bool tpm_aik_key_is_shared(const struct tpm_context *ctx)
 	       TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
 }
 
+void tpm_aik_no_record_advice(const struct tpm_context *ctx, char *buf,
+			      size_t len)
+{
+	const char *meta = ctx->aik_meta_path[0] ? ctx->aik_meta_path :
+						   TPM_AIK_META_PATH;
+
+	snprintf(buf, len,
+		 "The attestation key at 0x%08X has no record: restore %s and "
+		 "%s beside it from a backup, or write a new record with "
+		 "lota-agent --reprovision-aik.",
+		 ctx->aik_handle, meta,
+		 ctx->seal_aik_auth_strict ? LOTA_PROFILE_AIK_AUTH_SEALED_FILE :
+					     LOTA_PROFILE_AIK_AUTH_FILE);
+}
+
 int tpm_aik_key_present(struct tpm_context *ctx)
 {
 	int ret;

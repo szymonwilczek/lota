@@ -131,8 +131,8 @@ the second one in a row it freezes the play field under an
 ``session terminated after two UNTRUSTED heartbeats``, and prints
 ``trust_pong: session terminated after 2 consecutive UNTRUSTED
 heartbeats`` to the terminal. When the script exits it removes the
-marker, and the producer stops altering its packets. The freeze stays
-until ``trust_pong`` exits.
+marker, the producer stops altering its packets, and the next heartbeat
+is ``TRUSTED`` again. The freeze stays until ``trust_pong`` exits.
 
 The sandbox
 ===========

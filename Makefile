@@ -604,6 +604,12 @@ selinux-pp: $(SELINUX_PP)
 
 # An unsigned enforcement object is one the agent refuses to load, so packages
 # refuses to build without $(BPF_OBJ).sig and SIGNING_PUBKEY.
+# The nfpm configs take every file from ./build.
+ifneq ($(filter packages,$(MAKECMDGOALS)),)
+ifneq ($(abspath $(BUILD_DIR)),$(abspath build))
+$(error packages builds from ./build; BUILD_DIR=$(BUILD_DIR) is not supported)
+endif
+endif
 .PHONY: packages
 packages: all selinux-pp
 	$(Q)test -r $(BPF_OBJ).sig || { \

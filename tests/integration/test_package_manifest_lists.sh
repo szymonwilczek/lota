@@ -12,6 +12,9 @@
 # Each case edits a copy of what the gate reads, never the checkout.
 # The last case is the control: a dependency really removed must still fail.
 #
+# The same manifests take every file from ./build, so `make packages` with
+# another BUILD_DIR must stop before it builds anything.
+#
 # Requires:
 #   - the in-tree packaging manifests and the gate script
 #
@@ -116,6 +119,32 @@ if gate_passes; then
 else
     echo "PASS: a dependency genuinely taken out is still caught"
 fi
+
+echo "=== make packages with another BUILD_DIR ==="
+
+if make -C "$REPO_DIR" -n BUILD_DIR="$WORK_DIR/out" packages \
+	>"$WORK_DIR/gate.out" 2>&1; then
+    echo "FAIL: packages refuses another BUILD_DIR"
+    failures=$((failures + 1))
+# A refusal from the recipe would follow the recipes of all it needs
+elif ! grep -q 'packages builds from ' "$WORK_DIR/gate.out" ||
+	grep -v -e 'packages builds from ' -e 'ing directory' \
+	    "$WORK_DIR/gate.out" | grep -q .; then
+    echo "FAIL: packages refuses another BUILD_DIR before a build"
+    failures=$((failures + 1))
+else
+    echo "PASS: packages refuses another BUILD_DIR"
+fi
+
+DEFAULT_DIR=$(sed -n 's/^BUILD_DIR[[:space:]]*:=[[:space:]]*//p' \
+    "$REPO_DIR/Makefile")
+packages_dry_run() {
+    make -C "$REPO_DIR" -s -n BUILD_DIR="$1" packages \
+	>"$WORK_DIR/gate.out" 2>&1 || true
+    ! grep -q 'packages builds from ' "$WORK_DIR/gate.out"
+}
+check "packages takes the default BUILD_DIR however it is spelled" \
+      packages_dry_run "$REPO_DIR/$DEFAULT_DIR/."
 
 echo ""
 if [[ $failures -eq 0 ]]; then

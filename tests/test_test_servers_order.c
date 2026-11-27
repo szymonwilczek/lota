@@ -9,9 +9,10 @@
  * persistent objects -- the ceiling on how many publishers the host can answer to
  * -- and rewrites the AIK metadata on its way out.
  *
- * These tests drive the real server functions with the layers below them stubbed,
- * so the order they touch things in is the whole of what is asserted.
- * The stubs record it; nothing here needs a TPM or a socket.
+ * These tests drive the real server functions with the layers below them
+ * stubbed. The stubs record the order the servers touch things in and the
+ * verdict they serve on a clock the serving loop moves; nothing here needs
+ * a TPM or a socket.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -21,9 +22,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "test.h"
+#include "../include/lota_ipc.h"
 #include "../src/agent/agent.h"
 #include "../src/agent/dbus.h"
 #include "../src/agent/ipc.h"
@@ -124,12 +127,25 @@ void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
 	note("ipc_set_tpm");
 }
 
+/* the server's clock, moved by the serving loop below */
+static time_t fake_now = 1000000;
+
+time_t time(time_t *t)
+{
+	if (t)
+		*t = fake_now;
+	return fake_now;
+}
+
+static uint64_t status_valid_until;
+static uint32_t status_flags;
+
 void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
 		       uint64_t valid_until)
 {
 	(void)ctx;
-	(void)flags;
-	(void)valid_until;
+	status_flags = flags;
+	status_valid_until = valid_until;
 }
 
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode)
@@ -144,10 +160,29 @@ void ipc_record_attestation(struct ipc_context *ctx, bool success)
 	(void)success;
 }
 
+static struct attest_target *bound;
+
+/*
+ * Turns of the serving loop left, the clock step per turn,
+ * and the first turn that served a lapsed verdict
+ */
+static int serve_turns;
+static int turn_step_sec;
+static int turns_served;
+static int lapsed_turn;
+
 int ipc_process(struct ipc_context *ctx, int timeout_ms)
 {
 	(void)ctx;
 	(void)timeout_ms;
+	turns_served++;
+	if (!lapsed_turn && (status_valid_until <= (uint64_t)fake_now ||
+			     !(status_flags & LOTA_STATUS_ATTESTED) || !bound ||
+			     bound[0].valid_until != status_valid_until))
+		lapsed_turn = turns_served;
+	fake_now += turn_step_sec;
+	if (--serve_turns <= 0)
+		g_agent.running = 0;
 	return 0;
 }
 
@@ -182,8 +217,8 @@ void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,
 		      size_t count)
 {
 	(void)ctx;
-	(void)profiles;
 	note("ipc_set_profiles");
+	bound = profiles;
 	profiles_bound = (int)count;
 }
 
@@ -233,7 +268,7 @@ static void run_signed(int ipc_result)
 	trace_len = 0;
 	profiles_bound = -1;
 	ipc_init_result = ipc_result;
-	g_agent.running = 0; /* the serving loop exits at once */
+	g_agent.running = serve_turns > 0; /* else the loop exits at once */
 
 	fflush(stdout);
 	fflush(stderr);
@@ -274,7 +309,7 @@ static void run_plain(void)
 	trace_len = 0;
 	profiles_bound = -1;
 	ipc_init_result = 0;
-	g_agent.running = 0;
+	g_agent.running = serve_turns > 0;
 
 	fflush(stdout);
 	fflush(stderr);
@@ -385,6 +420,37 @@ static void test_refused_socket_provisions_nothing(void)
 	PASS();
 }
 
+/*
+ * A token outlives no verdict window, and the window is set once at start:
+ * five minutes in, every heartbeat of a demo reads "token expired".
+ */
+static void test_server_renews_the_fixture(bool sign)
+{
+	TEST(sign ? "--test-signed keeps its verdict valid while it serves" :
+		    "--test-ipc keeps its verdict valid while it serves");
+
+	serve_turns = 10;
+	turn_step_sec = 100;
+	turns_served = 0;
+	lapsed_turn = 0;
+	if (sign)
+		run_signed(0);
+	else
+		run_plain();
+	serve_turns = 0;
+
+	if (turns_served != 10) {
+		FAIL("the serving loop did not run its turns");
+		return;
+	}
+	if (lapsed_turn) {
+		FAIL("a lapsed verdict was served");
+		printf("    first at turn %d of 10, 100 s each\n", lapsed_turn);
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== diagnostic server startup order ===\n\n");
@@ -393,6 +459,8 @@ int main(void)
 	test_refused_socket_provisions_nothing();
 	test_plain_server_binds_the_configured_profiles();
 	test_signed_server_binds_the_configured_profiles();
+	test_server_renews_the_fixture(false);
+	test_server_renews_the_fixture(true);
 
 	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

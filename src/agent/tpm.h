@@ -511,13 +511,24 @@ int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
  */
 bool tpm_aik_key_is_shared(const struct tpm_context *ctx);
 
-/* Shared-key refusal; the attest loop appends the publisher. */
+/* Shared-key refusal; each caller names the publisher beside it. */
 #define TPM_AIK_SHARED_KEY_ADVICE                                             \
 	"This publisher's attestation key was created before each publisher " \
 	"got a key of its own, so it is byte for byte the key every other "   \
 	"publisher enrolled here holds. Run lota-agent --reenroll "           \
 	"--publisher <their ID> to replace it; the CA certifies the new key " \
 	"under the device ID this host already has."
+
+/**
+ * tpm_aik_no_record_advice() - What recovers a key whose record is missing.
+ * @ctx: TPM context the key was looked up with.
+ * @buf: Receives the advice, truncated to @len.
+ * @len: Size of @buf.
+ *
+ * For tpm_aik_load_metadata() returning -EKEYREVOKED.
+ */
+void tpm_aik_no_record_advice(const struct tpm_context *ctx, char *buf,
+			      size_t len);
 
 /**
  * tpm_aik_key_present() - Does the TPM hold a key at this profile's handle?

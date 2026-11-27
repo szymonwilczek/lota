@@ -397,6 +397,14 @@ static int run_daemon(const struct run_daemon_params *params)
 		 * a missing record reads as -EKEYREVOKED.
 		 */
 		ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
+		if (ret == -EKEYREVOKED) {
+			char advice[1024];
+
+			tpm_aik_no_record_advice(&g_agent.tpm_ctx, advice,
+						 sizeof(advice));
+			lota_err("%s", advice);
+			goto cleanup_tpm;
+		}
 		if (ret < 0) {
 			lota_err("Failed to load AIK metadata: %s",
 				 tpm_strerror(ret));
@@ -404,7 +412,9 @@ static int run_daemon(const struct run_daemon_params *params)
 		}
 
 		if (tpm_aik_key_is_shared(&g_agent.tpm_ctx)) {
-			lota_err("%s", TPM_AIK_SHARED_KEY_ADVICE);
+			/* only the bound profile reads shared: targets[0] */
+			lota_err("%s The agent exits until then. Publisher: %s",
+				 TPM_AIK_SHARED_KEY_ADVICE, targets[0].label);
 			ret = -ENOTSUP;
 			goto cleanup_tpm;
 		}
