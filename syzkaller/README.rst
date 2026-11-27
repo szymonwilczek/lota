@@ -1,43 +1,63 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
+==================
 Syzkaller for LOTA
 ==================
 
-Coverage-guided kernel fuzzing of the LOTA BPF LSM layer with
-`google/syzkaller <https://github.com/google/syzkaller>`__.
+Coverage-guided kernel fuzzing of the LOTA BPF LSM with
+`syzkaller <https://github.com/google/syzkaller>`__.
 
-What this fuzzes, and what it does not
---------------------------------------
+What this fuzzes
+================
 
-syzkaller drives the **kernel** through syscalls and measures **kernel**
-coverage (KCOV), catching kernel panics and KASAN reports. The part of LOTA
-that runs in the kernel is the set of BPF LSM programs in ``lota_lsm.bpf.o``.
-So syzkaller's job here is to hammer those hooks with adversarial syscall
-sequences and prove they never corrupt kernel memory or wedge the kernel.
+syzkaller drives the kernel through system calls, follows kernel coverage
+with KCOV and reports panics and KASAN findings. The part of LOTA in the
+kernel is the set of BPF LSM programs in ``lota_lsm.bpf.o``, so the
+campaign runs system call sequences through those hooks.
 
-It does **not** test the agent's userspace parsers (IPC, config, TLS, wire
-formats). Those are C in a normal process; a crash there is a SIGSEGV syzkaller
-never sees. They are covered by the libFuzzer + AddressSanitizer harnesses
-(``make fuzz-all``) and the ASan/valgrind CI jobs instead. Do not expect
-syzkaller to find agent userspace bugs.
+It does not test the agent's user-space parsers: a crash there is a
+SIGSEGV in a normal process, which syzkaller does not see. The libFuzzer
+harnesses cover them (``Documentation/dev-tools/fuzzing.rst``).
 
-Why the BPF LSM must be made live first
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The bring-up harness
+====================
 
-A LOTA hook only runs when the BPF program is **loaded, attached, and the
-config map says enforce**. If nothing attaches the programs, the guest is a
-bare kernel and syzkaller re-tests upstream Linux while touching zero LOTA code
--- it burns power and finds nothing. This was the gap in the previous
-configuration: it pointed syscalls at an agent IPC socket that did not exist in
-the image and never attached a single hook.
+The hooks run only while the programs are loaded, attached and configured.
+``lota_bpf_fuzz`` (``lota_bpf_fuzz.c``, built by ``make
+syzkaller-fuzz-loader``) does that inside the guest at boot:
 
-The fix is ``lota_bpf_fuzz`` (built from ``lota_bpf_fuzz.c``): a small bring-up
-harness that loads the **production** ``lota_lsm.bpf.o``, populates the config
-map into enforce with every strict flag on, registers protected PIDs, attaches
-every LSM hook, and idles. It runs inside the guest at boot. It is not a second
-agent and bypasses no agent security path -- it just makes the same kernel
-programs the agent ships live so the fuzzer can reach them.
+1. forks four idle victim processes;
+2. loads the object named by its first argument, by default
+   ``/usr/lib/lota/lota_lsm.bpf.o``;
+3. sets the mode to enforce and turns on ``block_ptrace`` and
+   ``lock_bpf``;
+4. adds itself, the victims and any further PIDs given on the command line
+   to ``protected_pids``;
+5. attaches every program in the object, the LSM programs and the
+   ``tp_btf``, ``fentry`` and ``fexit`` programs alike, prints
+   ``lota-bpf-fuzz: N hooks attached, M victims protected; victim pids: ...``
+   and ``ready for syz-executor``, and waits for a signal. N counts every
+   attached program.
+
+The map writes come before the attach: once the ``bpf`` and ``bpf_map``
+hooks are live they refuse writes to LOTA's maps from any task but the
+agent. A program that fails to attach is reported and skipped. When none
+attaches, the harness exits with
+``no LSM programs attached (need lsm=...,bpf)``. It also exits when the
+object does not open or load, when ``lota_config`` or ``protected_pids``
+is missing from it, and on a PID argument that is not a decimal number
+from 1 to 4294967295.
+
+``strict_mmap``, ``strict_exec``, ``strict_modules`` and
+``block_anon_exec`` stay off. With no trusted libraries and no fs-verity
+allowlist each of them refuses every exec or executable mapping on the
+system, ``sshd`` and ``syz-executor`` included, and the manager loses the
+guest. ``block_ptrace`` applies only to protected targets and ``lock_bpf``
+only to LOTA's maps. Every hook still runs its mode and map lookups on
+each matching call.
+
+The harness does not touch the agent, the TPM or the IPC socket.
 
 Hook coverage matrix
 --------------------
@@ -108,171 +128,163 @@ Every LSM program the harness attaches has a row naming the
 | ``task_free``                | process exit (exercised as executors die)            |
 +------------------------------+------------------------------------------------------+
 
-The harness keeps four idle **protected** victim processes alive so the
-PID-scoped gates (``ptrace_access_check``, ``task_kill``, ``file_mprotect``,
-``mmap_file``) can take their enforcement branch, not only their lookup path.
-The global gates (``bpf``, module load, mount, setuid) fire on the executor
-directly.
+Four victims are protected so that ``ptrace_access_check`` and
+``task_kill``, which judge their target, take their refusal branch.
 
-In the harness's enforce mode ``file_open`` refuses ``/dev/mem``,
-``/dev/kmem`` (where the kernel still has it) and ``/dev/port``; the
-``openat$lota_*`` calls in ``lota_hooks.txt`` open them, which the generic
-``openat`` rarely does. The harness leaves ``strict_mmap`` off, so
-``file_open``, ``sb_mount`` and ``move_mount`` run only their lookup path, not
-their trusted-file branches.
+``file_open`` refuses ``/dev/mem``, ``/dev/kmem`` (where the kernel still
+has it) and ``/dev/port`` in every mode. The ``openat$lota_*`` calls in
+``lota_hooks.txt`` open them, which the generic ``openat`` rarely does.
+With ``strict_mmap`` off, ``file_open``, ``sb_mount`` and ``move_mount``
+do not reach their trusted-file branches, and ``file_mprotect`` and
+``mmap_file`` do not reach the branch that judges a protected caller.
 
 Prerequisites
--------------
+=============
 
-1. **Go toolchain** 1.18+
-2. **C compiler**: gcc and clang
-3. **QEMU**: ``qemu-system-x86_64``
-4. **Linux kernel source** built with KASAN, KCOV, and BPF LSM.
+* a Go toolchain new enough for syzkaller's ``go.mod``,
+* gcc and clang,
+* ``qemu-system-x86_64``,
+* a Linux source tree to build with KASAN, KCOV and the BPF LSM,
+* libbpf 1.0 or later for the harness.
 
 Setup
------
+=====
 
-.. _1-build-syzkaller:
+Build syzkaller
+---------------
 
-1. Build syzkaller
-~~~~~~~~~~~~~~~~~~
+syzkaller compiles the system call descriptions under ``sys/linux`` into
+its binaries, so copy LOTA's in before ``make``:
 
-.. code:: bash
+.. code-block:: console
 
-   git clone https://github.com/google/syzkaller syzkaller/repo
-   cp syzkaller/lota_hooks.txt syzkaller/repo/sys/linux/lota_hooks.txt
-   cp syzkaller/lota.txt syzkaller/repo/sys/linux/lota.txt   # MODE B, see below
-   cd syzkaller/repo
-   make
+   $ git clone https://github.com/google/syzkaller syzkaller/repo
+   $ cp syzkaller/lota_hooks.txt syzkaller/lota.txt syzkaller/repo/sys/linux/
+   $ make -C syzkaller/repo
 
-.. _2-compile-the-kernel:
+Build the kernel
+----------------
 
-2. Compile the kernel
-~~~~~~~~~~~~~~~~~~~~~
+``BPF_LSM`` is required, since without it nothing attaches.
+``FUNCTION_TRACER`` and ``DYNAMIC_FTRACE`` are required on x86, where BPF
+trampolines patch the function entry. KASAN and KCOV provide the bug
+detection and the coverage feedback:
 
-``BPF_LSM`` is mandatory -- without it the harness cannot attach and the whole
-exercise is pointless. ``FUNCTION_TRACER``/``DYNAMIC_FTRACE`` are also
-mandatory on x86 because BPF trampolines patch the function-entry NOPs; without
-them LSM attach can fail with ``-EBUSY``. KASAN + KCOV give the bug detection
-and coverage feedback.
+.. code-block:: console
 
-.. code:: bash
+   $ cd <linux source tree>
+   $ make defconfig
+   $ ./scripts/config \
+   >     -e KASAN -e KASAN_GENERIC -e KASAN_INLINE \
+   >     -e KCOV -e KCOV_INSTRUMENT_ALL -e KCOV_ENABLE_COMPARISONS \
+   >     -e DEBUG_FS -e DEBUG_INFO_DWARF4 -e DEBUG_INFO_BTF \
+   >     -e KALLSYMS -e KALLSYMS_ALL \
+   >     -e NAMESPACES -e UTS_NS -e IPC_NS -e PID_NS -e NET_NS -e USER_NS \
+   >     -e CGROUPS \
+   >     -e BPF_SYSCALL -e BPF_JIT -e BPF_LSM \
+   >     -e FUNCTION_TRACER -e DYNAMIC_FTRACE \
+   >     -e MODULES -e MODULE_UNLOAD \
+   >     -e VIRTIO_NET -e VIRTIO_BLK -e VIRTIO_PCI -e VIRTIO_CONSOLE
+   $ make olddefconfig
+   $ make -j"$(nproc)"
 
-   wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.10.tar.xz
-   tar xJf linux-6.18.10.tar.xz
-   cd linux-6.18.10
-   make defconfig
-   ./scripts/config \
-       -e KASAN -e KASAN_GENERIC -e KASAN_INLINE \
-       -e KCOV -e KCOV_INSTRUMENT_ALL -e KCOV_ENABLE_COMPARISONS \
-       -e DEBUG_FS -e DEBUG_INFO_DWARF4 -e DEBUG_INFO_BTF \
-       -e KALLSYMS -e KALLSYMS_ALL \
-       -e NAMESPACES -e UTS_NS -e IPC_NS -e PID_NS -e NET_NS -e USER_NS \
-       -e CGROUPS \
-       -e BPF_SYSCALL -e BPF_JIT -e BPF_LSM -e DEBUG_INFO_BTF \
-       -e FUNCTION_TRACER -e DYNAMIC_FTRACE \
-       -e MODULES -e MODULE_UNLOAD \
-       -e VIRTIO_NET -e VIRTIO_BLK -e VIRTIO_PCI -e VIRTIO_CONSOLE
-   make olddefconfig
-   make -j"$(nproc)"
+Build the LOTA artifacts
+------------------------
 
-.. _3-build-the-lota-artefacts-the-guest-needs:
+From the repository root:
 
-3. Build the LOTA artefacts the guest needs
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. code-block:: console
 
-From the repo root, on a host with libbpf >= 1.0:
+   $ make bpf                     # build/lota_lsm.bpf.o
+   $ make syzkaller-fuzz-loader   # build/lota_bpf_fuzz
 
-.. code:: bash
+Create the image
+----------------
 
-   make bpf                     # build/lota_lsm.bpf.o
-   make syzkaller-fuzz-loader   # build/lota_bpf_fuzz
+``lota.cfg.example`` names a Debian trixie image made with syzkaller's
+``tools/create-image.sh``:
 
-.. _4-create-the-image-and-bake-lota-in:
+.. code-block:: console
 
-4. Create the image and bake LOTA in
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   $ syzkaller/repo/tools/create-image.sh --distribution trixie
 
-.. code:: bash
+Install the harness into the image so that it starts at boot:
 
-   wget https://raw.githubusercontent.com/google/syzkaller/master/tools/create-image.sh -O create-image.sh
-   chmod +x create-image.sh
-   ./create-image.sh --distribution bookworm
+.. code-block:: console
 
-Mount ``bookworm.img`` and install the harness so it starts at boot:
+   # mount -o loop trixie.img /mnt
+   # install -D build/lota_bpf_fuzz /mnt/usr/local/bin/lota_bpf_fuzz
+   # install -D build/lota_lsm.bpf.o /mnt/usr/lib/lota/lota_lsm.bpf.o
+   # install -D syzkaller/lota-bpf-fuzz.service.example \
+   >     /mnt/etc/systemd/system/lota-bpf-fuzz.service
+   # mkdir -p /mnt/etc/systemd/system/sysinit.target.wants
+   # ln -sf /etc/systemd/system/lota-bpf-fuzz.service \
+   >     /mnt/etc/systemd/system/sysinit.target.wants/lota-bpf-fuzz.service
+   # umount /mnt
 
-.. code:: bash
+The unit runs the harness before ``sysinit.target`` and restarts it when
+it exits. Boot the image once by hand: ``journalctl -u lota-bpf-fuzz``
+must show ``N hooks attached``.
 
-   sudo mount -o loop bookworm.img /mnt
-   sudo install -D build/lota_bpf_fuzz        /mnt/usr/local/bin/lota_bpf_fuzz
-   sudo install -D build/lota_lsm.bpf.o       /mnt/usr/lib/lota/lota_lsm.bpf.o
-   sudo install -D syzkaller/lota-bpf-fuzz.service.example \
-       /mnt/etc/systemd/system/lota-bpf-fuzz.service
-   sudo ln -sf /etc/systemd/system/lota-bpf-fuzz.service \
-       /mnt/etc/systemd/system/sysinit.target.wants/lota-bpf-fuzz.service
-   sudo umount /mnt
+Configure
+---------
 
-Every booted VM now attaches the LOTA LSM before fuzzing starts. Verify once by
-hand: boot the image, ``journalctl -u lota-bpf-fuzz`` must show
-``N hooks attached``.
+Copy ``lota.cfg.example`` to ``lota.cfg`` and set ``kernel_obj``,
+``image``, ``sshkey``, ``syzkaller`` and the ``vm.kernel`` path, and
+``email_addrs`` to your own address or an empty list. Keep
+``"sandbox": "none"``, since the harness and the hooks act in the initial
+namespaces, and keep ``bpf`` in the ``lsm=`` list of ``vm.cmdline``.
 
-.. _5-configure:
-
-5. Configure
-~~~~~~~~~~~~
-
-Edit ``lota.cfg`` (start from ``lota.cfg.example``) and set ``kernel_obj``,
-``image``, ``sshkey``, ``syzkaller``, and the ``kernel`` bzImage path. Keep
-``sandbox: "none"`` (the harness and gates assume the initial namespaces) and
-the ``lsm=...,bpf`` cmdline. ``enable_syscalls`` names calls from both
-description files, so both must be in ``sys/linux`` before ``make``. No call
-the matrix names may appear in ``syz-manager``'s start-up list of transitively
-disabled calls.
+``enable_syscalls`` names calls from both description files. A call that
+``syz-manager`` lists as disabled at start-up does not run; none of the
+calls in the matrix above may be among them.
 
 Running
--------
+=======
 
-.. code:: bash
+.. code-block:: console
 
-   cd syzkaller/repo
-   bin/syz-manager -config ../lota.cfg
+   $ cd syzkaller/repo
+   $ bin/syz-manager -config ../lota.cfg
 
-Dashboard at ``http://<host-lan-ip>:56741``; ``lota.cfg.example`` binds
-``0.0.0.0:56741`` so the UI is reachable from another machine on the same LAN.
-Coverage should climb into the LOTA hook functions
-(``lota_bprm_check_security``, ``lota_task_kill``, ...); if it does not, the
-harness is not attaching -- check the guest journal.
+The example binds the dashboard to ``0.0.0.0:56741``, so it is reachable
+from other machines on the network. Coverage should reach the LOTA hook
+functions (``lota_bprm_check_security``, ``lota_task_kill``, ...); when it
+does not, the harness did not attach, and the guest journal says why.
 
-``syz-manager`` sends crash mail through a ``mailx`` binary when
-``email_addrs`` is set. On hosts that use ``msmtp`` directly, install the
-wrapper and start the manager with that directory in ``PATH``:
+``syz-manager`` keeps each crash, with a reproducer when it can derive
+one, under ``crashes/`` in its work directory.
 
-.. code:: bash
+``syz-manager`` mails crashes through ``mailx`` when ``email_addrs`` is
+set. On a host that has ``msmtp`` instead, put the wrapper first in
+``PATH``:
 
-   install -D -m 0755 syzkaller/mailx-msmtp-wrapper.sh /var/tmp/lota-syz/bin/mailx
-   PATH=/var/tmp/lota-syz/bin:$PATH bin/syz-manager -config ../lota.cfg
+.. code-block:: console
 
-Leaving it running (host systemd)
----------------------------------
+   $ install -D -m 0755 syzkaller/mailx-msmtp-wrapper.sh <dir>/mailx
+   $ PATH=<dir>:$PATH bin/syz-manager -config ../lota.cfg
 
-``lota-fuzz.service.example`` runs syz-manager continuously on the **host**
-(distinct from the guest ``lota-bpf-fuzz.service``). Adjust paths/user:
+Running as a host service
+-------------------------
 
-.. code:: bash
+``lota-fuzz.service.example`` runs ``syz-manager`` on the host as user
+``syz`` from ``/srv/lota/syzkaller`` and restarts it when it exits. Adjust
+the user and paths, then:
 
-   sudo cp syzkaller/lota-fuzz.service.example /etc/systemd/system/lota-fuzz.service
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now lota-fuzz
-   journalctl -u lota-fuzz -f
+.. code-block:: console
 
-MODE B: fuzzing the agent IPC parser (optional)
------------------------------------------------
+   # cp syzkaller/lota-fuzz.service.example \
+   >     /etc/systemd/system/lota-fuzz.service
+   # systemctl daemon-reload
+   # systemctl enable --now lota-fuzz
+   # journalctl -u lota-fuzz -f
 
-``lota.txt`` describes the LOTA IPC wire protocol for fuzzing ``ipc.c``. This
-only does something if the **real agent** is running in the guest and listening
-on ``/run/lota/lota.sock``; the bring-up harness does not open that socket, and
-without the agent every ``$lota`` call fails to connect and does nothing.
-Because an agent crash is a userspace SIGSEGV that syzkaller cannot observe,
-this mode mainly drives the agent to surface kernel-side effects, and is
-secondary to the libFuzzer IPC harness (``make fuzz-agent``). The calls stay
-enabled either way and take effect once the image runs a provisioned agent.
+The agent's IPC protocol
+========================
+
+``lota.txt`` describes the agent's IPC protocol on
+``/run/lota/lota.sock``. The harness does not open that socket, so the
+``$lota`` calls fail to connect unless a provisioned agent runs in the
+guest. A crash of the agent is a user-space fault syzkaller does not see;
+these calls exercise what the agent does in the kernel on their behalf.
+The libFuzzer harness ``make fuzz-agent`` covers the parser itself.
