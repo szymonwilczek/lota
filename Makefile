@@ -1621,6 +1621,7 @@ test-unit: all $(TEST_BINS)
 	@tests/integration/test_dev_bringup_idempotent.sh
 	@tests/integration/test_installer_status_stages.sh
 	@tests/integration/test_package_manifest_lists.sh
+	@tests/integration/test_pr_quality_skipped_range.sh
 	@if command -v python3 >/dev/null 2>&1; then \
 		tests/integration/test_license_boundary_scripts.sh; \
 	else \
@@ -2182,7 +2183,7 @@ help:
 	@$(HELP_ROW) sanitizer-build "Build CI-safe userspace under ASan/UBSan"
 	@$(HELP_ROW) valgrind-unit "Run unit tests under valgrind memcheck"
 	@$(HELP_ROW) valgrind-smoke "Run CLI smoke paths under valgrind memcheck"
-	@$(HELP_ROW) check-includes "Fail on transitive (unused-direct) #includes"
+	@$(HELP_ROW) check-includes "Fail on unused #includes"
 	@$(HELP_ROW) check-el9-decls "Syntax-check the C tree against el9 headers"
 	@$(HELP_ROW) check-player-build "Run the player build+install in clean Fedora"
 	@$(HELP_ROW) check-abi "Fail on public SDK symbol/header/layout drift"

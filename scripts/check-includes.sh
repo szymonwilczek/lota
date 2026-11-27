@@ -4,10 +4,9 @@
 #
 # Include-hygiene gate.
 #
-# Fails when a translation unit pulls in a header it does not use
-# directly -- a transitive dependency. clang-include-cleaner is the same
-# engine clangd's editor diagnostic runs, a clean tree here means a clean
-# editor.
+# Fails when a translation unit includes a header it does not use
+# directly. clang-include-cleaner is the same engine clangd's editor
+# diagnostic runs, a clean tree here means a clean editor.
 #
 # Compile database is built with bear so every TU is analyzed with its
 # real flags. SDL ships a single public <SDL.h>; its SDL_*.h headers are
@@ -104,7 +103,7 @@ for f in "${files[@]}"; do
 done
 
 if [ "$fail" -ne 0 ]; then
-	echo "check-includes: transitive (unused-direct) includes found -- remove them" >&2
+	echo "check-includes: unused includes found -- remove them" >&2
 	echo "  fix with: scripts/fix-includes.sh" >&2
 	exit 1
 fi

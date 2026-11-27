@@ -712,7 +712,7 @@ check_unit_tests() {
 }
 
 # Include hygiene:
-# Every header used directly, no transitive deps.
+# No unused includes in a C translation unit.
 # Heavy (a full bear-built compile database), so it only runs when the patch
 # touches C, and skips when the tooling is absent
 #
@@ -769,7 +769,7 @@ check_includes() {
         pass "include-hygiene"
     else
         fail "include-hygiene" \
-             "remove transitive includes; auto-fix with scripts/fix-includes.sh."
+             "drop the unused includes above, or run scripts/fix-includes.sh."
     fi
 }
 
