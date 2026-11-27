@@ -166,11 +166,11 @@ init_dgram_send(lota_agent_t)
 init_use_notify(lota_agent_t)
 init_read_pid_files(lota_agent_t)
 
-corenet_tcp_connect_http_port(lota_agent_t)
 sysnet_dns_name_resolve(lota_agent_t)
 
 tunable_policy(`lota_network_attest',`
         allow lota_agent_t lota_port_t:tcp_socket name_connect;
+        corenet_tcp_connect_http_port(lota_agent_t)
         allow lota_agent_t self:tcp_socket create_stream_socket_perms;
         allow lota_agent_t self:udp_socket create_socket_perms;
         allow lota_agent_t self:netlink_route_socket { create bind getattr nlmsg_read };
