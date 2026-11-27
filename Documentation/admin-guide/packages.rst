@@ -48,7 +48,8 @@ The packages
      - MIT
    * - ``lota-sdk-devel``
      - The headers in ``/usr/include/lota``, the unversioned ``.so`` links
-       and the pkg-config files. Requires ``lota-sdk`` of the same version.
+       of the gaming, server and anti-cheat SDKs and the pkg-config files.
+       Requires ``lota-sdk`` of the same version.
      - MIT
 
 The verifier and the CA also run as container images

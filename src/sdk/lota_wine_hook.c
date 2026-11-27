@@ -1253,8 +1253,9 @@ static void hook_report_refusal(uint64_t since_ns)
 /*
  * Report a gate refusal on stderr and in the status file;
  * the handle, the pending dlerror() and errno are the real dlopen()'s.
+ * The one symbol the hook exports.
  */
-LOTA_HOOK_EXPORT void *dlopen(const char *file, int mode)
+__attribute__((visibility("default"))) void *dlopen(const char *file, int mode)
 {
 	static void *(*real_dlopen)(const char *, int);
 	uint64_t since_ns;
@@ -1586,22 +1587,3 @@ __attribute__((destructor)) static void lota_wine_hook_fini(void)
 }
 
 #endif /* !LOTA_HOOK_TESTING */
-
-LOTA_HOOK_EXPORT int lota_hook_active(void)
-{
-	return g_hook.thread_started && g_hook.running;
-}
-
-LOTA_HOOK_EXPORT const char *lota_hook_status_path(void)
-{
-	if (!g_hook.status_path[0])
-		return NULL;
-	return g_hook.status_path;
-}
-
-LOTA_HOOK_EXPORT const char *lota_hook_token_path(void)
-{
-	if (!g_hook.token_path[0])
-		return NULL;
-	return g_hook.token_path;
-}

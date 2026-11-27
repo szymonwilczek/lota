@@ -193,6 +193,8 @@ SERVER_SDK_SRCS := $(SDK_DIR)/lota_server.c
 SERVER_SDK_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SERVER_SDK_SRCS))
 
 WINE_HOOK_LIB := $(BUILD_DIR)/liblota_wine_hook.so
+# get a libX.so linker name when installed; the hook is preloaded by soname
+SDK_LINKED_LIBS := liblotagaming liblotaserver liblota_anticheat
 WINE_HOOK_SRCS := $(SDK_DIR)/lota_wine_hook.c
 # the hook links its own SDK objects, built hidden
 WINE_HOOK_OBJS := $(patsubst $(SDK_DIR)/%.c,$(BUILD_DIR)/hook/%.o,\
@@ -351,6 +353,8 @@ sdk-stage: $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB) \
 			$(STAGE_DIR)/lib64/; \
 		ln -sf $$l.so.$(LOTA_ABI_VERSION) \
 			$(STAGE_DIR)/lib64/$$l.so.$(LOTA_ABI_MAJOR); \
+	done
+	$(Q)for l in $(SDK_LINKED_LIBS); do \
 		ln -sf $$l.so.$(LOTA_ABI_VERSION) $(STAGE_DIR)/lib64/$$l.so; \
 	done
 	$(Q)install -m 644 $(PKGCONFIG_FILES) $(STAGE_DIR)/lib64/pkgconfig/
@@ -1183,10 +1187,11 @@ install: check-version-tag check-hook32 all selinux-pp
 			$(DESTDIR)/usr/lib64/; \
 		ln -sf $$l.so.$(LOTA_ABI_VERSION) \
 			$(DESTDIR)/usr/lib64/$$l.so.$(LOTA_ABI_MAJOR); \
+	done
+	for l in $(SDK_LINKED_LIBS); do \
 		ln -sf $$l.so.$(LOTA_ABI_VERSION) $(DESTDIR)/usr/lib64/$$l.so; \
 	done
 ifeq ($(LOTA_HOOK32),1)
-	@# no linker symlink: the loader opens it by soname, nothing links it
 	install -d $(DESTDIR)/usr/lib
 	install -m 755 $(BUILD_DIR)/lib32/liblota_wine_hook.so.$(LOTA_ABI_VERSION) \
 		$(DESTDIR)/usr/lib/

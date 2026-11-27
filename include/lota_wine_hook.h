@@ -13,10 +13,6 @@
 
 #include "lota_snapshot.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /* "1" or "true" disables the hook. */
 #define LOTA_HOOK_ENV_DISABLE "LOTA_HOOK_DISABLE"
 
@@ -109,33 +105,5 @@ extern "C" {
 
 /* A status answer may wait on a measurement; on timeout, ask again. */
 #define LOTA_HOOK_REQUEST_TIMEOUT_MS (10 * LOTA_HOOK_CONNECT_TIMEOUT_MS)
-
-/* The hook is built hidden so its SDK copy cannot shadow the game's. */
-#define LOTA_HOOK_EXPORT __attribute__((visibility("default")))
-
-/**
- * lota_hook_active() - Check whether the hook is running.
- *
- * Return: 1 if the refresh thread is alive, 0 if disabled or init failed.
- */
-LOTA_HOOK_EXPORT int lota_hook_active(void);
-
-/**
- * lota_hook_status_path() - Return the absolute path of the status file.
- *
- * Return: a static buffer, or NULL before the hook has initialised.
- */
-LOTA_HOOK_EXPORT const char *lota_hook_status_path(void);
-
-/**
- * lota_hook_token_path() - Return the absolute path of the token file.
- *
- * Return: a static buffer, or NULL before the hook has initialised.
- */
-LOTA_HOOK_EXPORT const char *lota_hook_token_path(void);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* LOTA_WINE_HOOK_H */

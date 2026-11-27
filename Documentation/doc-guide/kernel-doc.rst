@@ -81,7 +81,7 @@ warning:
 * an ``:identifiers:`` name or a ``:doc:`` title with no comment,
 * a path that does not exist.
 
-Macros a header puts before a prototype, such as ``LOTA_HOOK_EXPORT``, are
+Macros a header puts before a prototype, such as ``LOTA_EB_INLINE``, are
 listed in ``c_id_attributes`` in ``Documentation/conf.py``; a new one goes
 there too, or the C domain cannot parse the prototype.
 

@@ -381,7 +381,9 @@ for lib in "${LIBRARIES[@]}"; do
     [[ -f "$BUILD_DIR/$lib.so.$ABI_VERSION" ]] || continue
     cp "$BUILD_DIR/$lib.so.$ABI_VERSION" "$PREFIX/lib64/"
     ln -sf "$lib.so.$ABI_VERSION" "$PREFIX/lib64/$lib.so.$ABI_MAJOR"
-    ln -sf "$lib.so.$ABI_VERSION" "$PREFIX/lib64/$lib.so"
+    # as installed: nothing links the hook, so it has no linker name
+    [[ $lib == liblota_wine_hook ]] ||
+	ln -sf "$lib.so.$ABI_VERSION" "$PREFIX/lib64/$lib.so"
 done
 
 for header in "${PUBLIC_HEADERS[@]}"; do
@@ -406,12 +408,13 @@ declare -A PC_NAME=(
 )
 
 # One trivially callable function per library,
-# so the link is real and not dropped by --as-needed
+# so the link is real and not dropped by --as-needed;
+# the hook declares none, so its header alone is compiled
 declare -A PC_PROBE=(
     [liblotagaming]='lota_gaming.h|(void)lota_sdk_version();'
     [liblotaserver]='lota_server.h|(void)lota_server_sdk_version();'
     [liblota_anticheat]='lota_anticheat.h|(void)lota_ac_state_str(0);'
-    [liblota_wine_hook]='lota_wine_hook.h|(void)lota_hook_active();'
+    [liblota_wine_hook]='lota_wine_hook.h|(void)LOTA_HOOK_STATUS_FILE;'
 )
 
 packaged_pkgconfig() {

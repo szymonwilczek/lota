@@ -20,6 +20,8 @@ LOTA_GROUP="lota"
 SOCKET_NAME="lota.sock"
 PRIMARY_SOCKET="${LOTA_AGENT_SOCKET:-/run/lota/${SOCKET_NAME}}"
 HOOK_LIB="liblota_wine_hook.so"
+# the soname check_hook_library() found; the package ships no bare .so
+HOOK_PRELOAD=""
 # Mirrors LOTA_HOOK_TOKEN_DIR_NAME in include/lota_wine_hook.h
 HOOK_TOKEN_DIR_NAME="lota-hook"
 LOTA_CONF="${LOTA_CONF:-/etc/lota/lota.conf}"
@@ -152,7 +154,7 @@ check_hook_library() {
     local found="" found32=""
 
     for dir in /usr/lib64 /usr/local/lib64; do
-        for candidate in "$dir/${HOOK_LIB}" "$dir"/${HOOK_LIB}.[0-9]*; do
+        for candidate in "$dir"/${HOOK_LIB}.[0-9]*; do
             if [[ -f "$candidate" ]]; then
                 found="$candidate"
                 break 2
@@ -161,7 +163,7 @@ check_hook_library() {
     done
 
     for dir in /usr/lib /usr/local/lib; do
-        for candidate in "$dir/${HOOK_LIB}" "$dir"/${HOOK_LIB}.[0-9]*; do
+        for candidate in "$dir"/${HOOK_LIB}.[0-9]*; do
             if [[ -f "$candidate" ]]; then
                 found32="$candidate"
                 break 2
@@ -170,10 +172,11 @@ check_hook_library() {
     done
 
     if [[ -z "$found" && -z "$found32" ]]; then
-        warn "Hook library ($HOOK_LIB) not found in standard paths"
+        warn "Hook library ($HOOK_LIB.*) not found in standard paths"
         echo "  It ships in lota-sdk, which lota-agent pulls in."
         return
     fi
+    HOOK_PRELOAD=$(basename "${found:-$found32}")
 
     if [[ -n "$found" && -n "$found32" ]]; then
         ok "Hook library found, both kinds: $found and $found32"
@@ -569,7 +572,11 @@ echo ""
 echo "  For a host-side launch outside the pressure-vessel"
 echo "  container (a native binary you run directly):"
 echo ""
-echo "    LOTA_HOOK_LOG_LEVEL=info LD_PRELOAD=${HOOK_LIB} %command%"
+if [[ -n "$HOOK_PRELOAD" ]]; then
+    echo "    LOTA_HOOK_LOG_LEVEL=info LD_PRELOAD=${HOOK_PRELOAD} %command%"
+else
+    echo "    (none: install lota-sdk, which holds the hook library)"
+fi
 echo ""
 echo "  Either way the hook writes lota-status, lota-token.bin and"
 echo "  lota-attestation.bin into ${runtime_dir}/${HOOK_TOKEN_DIR_NAME}/,"

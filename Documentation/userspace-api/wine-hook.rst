@@ -198,8 +198,8 @@ Builds
 
 The hook links its own copy of the gaming SDK and is compiled with
 ``-fvisibility=hidden``, so its copy cannot bind in place of a
-``liblotagaming.so`` the title loads; only the functions marked
-``LOTA_HOOK_EXPORT`` and ``dlopen()`` are visible (:doc:`stability`).
+``liblotagaming.so`` the title loads; only ``dlopen()`` is visible
+(:doc:`stability`).
 
 On x86_64 a 32-bit hook is built when the compiler can link ``-m32``
 programs (``LOTA_HOOK32=auto``) and installed into ``/usr/lib`` beside the
@@ -247,8 +247,3 @@ program's.
 the ``lota`` group, the hook library, the container socket and the token
 directory, creates ``$XDG_RUNTIME_DIR/lota/`` and prints the launch option.
 Its options are in :doc:`../admin-guide/lota-install`.
-
-Functions
-=========
-
-.. kernel-doc:: include/lota_wine_hook.h

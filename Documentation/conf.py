@@ -57,7 +57,7 @@ ref = os.environ.get("LOTA_DOCS_REF", "").strip() or "main"
 extensions: list[str] = ["sphinx.ext.extlinks", "kerneldoc"]
 
 # linkage and inline macros the headers put before a prototype
-c_id_attributes = ["LOTA_EB_INLINE", "LOTA_HOOK_EXPORT"]
+c_id_attributes = ["LOTA_EB_INLINE"]
 
 # :ghsrc:`path/to/file` links a repository-relative path to its source on
 # GitHub, pinned to the branch this build documents (see ref above)
