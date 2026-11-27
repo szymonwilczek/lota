@@ -1075,10 +1075,26 @@ static void test_agent_paused_reader(void)
 		FAIL("cannot write the snapshot");
 		return;
 	}
-	if (probe_agent_paused_at(path, spent) != 1)
+	if (probe_agent_paused_at(path, spent) != PROBE_AGENT_PAUSED)
 		FAIL("the agent's own pause record is not recognised");
 	else
 		PASS();
+
+	TEST("a commitment spent by a failed run is not read as a pause");
+	if (write_snapshot(path, spent,
+			   LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK |
+				   LOTA_CLOCK_STATE_FLAG_ERROR_POISON) != 0 ||
+	    probe_agent_paused_at(path, spent) != PROBE_AGENT_SPENT_BY_ERROR)
+		FAIL("a failed run's poison reads as a pause");
+	else
+		PASS();
+	if (write_snapshot(path, spent,
+			   LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK |
+				   LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON) !=
+	    0) {
+		FAIL("cannot write the snapshot");
+		return;
+	}
 
 	TEST("a register moved on since the pause is not a pause");
 	if (probe_agent_paused_at(path, other) != 0)
@@ -1144,6 +1160,11 @@ static void test_barrier_after_a_pause(void)
 
 	TEST("a refusal without a pause still names the log");
 	if (barrier_says(0, 1, 0, STAGE_BLOCKED, "journalctl", NULL))
+		PASS();
+
+	TEST("a commitment spent by an error points to the log, not --resume");
+	if (barrier_says(0, 1, PROBE_AGENT_SPENT_BY_ERROR, STAGE_BLOCKED,
+			 "journalctl", "paused"))
 		PASS();
 
 	TEST("a running agent outweighs an old pause record");

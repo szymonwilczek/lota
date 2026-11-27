@@ -1347,6 +1347,7 @@ int probe_pcr14_lock_ran(void)
 #define CLOCK_STATE_PCR14_OFF 16
 #define CLOCK_STATE_FLAGS_OFF 88
 #define CLOCK_STATE_FLAG_SHUTDOWN_POISON 0x02U
+#define CLOCK_STATE_FLAG_ERROR_POISON 0x04U
 
 static uint32_t le32_at(const uint8_t *p)
 {
@@ -1372,9 +1373,13 @@ int probe_agent_paused_at(const char *snapshot_path,
 	if (n != (ssize_t)sizeof(snap) || le32_at(snap) != CLOCK_STATE_MAGIC ||
 	    le32_at(snap + 4) != CLOCK_STATE_VERSION)
 		return 0;
-	if (!(snap[CLOCK_STATE_FLAGS_OFF] & CLOCK_STATE_FLAG_SHUTDOWN_POISON))
+	if (memcmp(snap + CLOCK_STATE_PCR14_OFF, live, PROBE_HASH_SIZE) != 0)
 		return 0;
-	return memcmp(snap + CLOCK_STATE_PCR14_OFF, live, PROBE_HASH_SIZE) == 0;
+	if (snap[CLOCK_STATE_FLAGS_OFF] & CLOCK_STATE_FLAG_SHUTDOWN_POISON)
+		return PROBE_AGENT_PAUSED;
+	if (snap[CLOCK_STATE_FLAGS_OFF] & CLOCK_STATE_FLAG_ERROR_POISON)
+		return PROBE_AGENT_SPENT_BY_ERROR;
+	return 0;
 }
 
 int probe_agent_paused(void)
@@ -1391,7 +1396,18 @@ enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
 					   int agent_paused, char *note,
 					   size_t cap)
 {
-	if (agent_paused && !agent_active) {
+	if (agent_paused == PROBE_AGENT_SPENT_BY_ERROR && !agent_active) {
+		snprintf(note, cap,
+			 "lota-agent failed this boot after loading its BPF "
+			 "program, which spends its PCR14 commitment until the "
+			 "next boot, so it refuses to start again until then. "
+			 "What failed is in its own log "
+			 "('journalctl -u lota-agent -b'); fix that and "
+			 "reboot.");
+		return STAGE_BLOCKED;
+	}
+
+	if (agent_paused == PROBE_AGENT_PAUSED && !agent_active) {
 		snprintf(note, cap,
 			 "lota-agent was paused this boot (lota-install "
 			 "--pause or lota-agent --shutdown), which spends its "

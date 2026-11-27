@@ -65,6 +65,10 @@ These refusals read PCR 14, which nothing resets while the host is up
   A shutdown requested here, ``lota-agent --shutdown``, ``lota-install
   --pause`` or ``systemctl stop lota-agent``, spent the commitment. Reboot.
 
+``An earlier run of the agent in this boot failed after loading BPF``
+  That run spent the commitment on its way out, and its own log names the
+  error. Fix it and reboot.
+
 ``This is not the lota-agent build PCR 14 committed to when the host booted``
   The binary changed since the boot, as after an upgrade, or a second build
   runs by hand. Reboot into the installed build

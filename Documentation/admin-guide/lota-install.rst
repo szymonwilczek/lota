@@ -381,9 +381,11 @@ stage it reads PCR 14 from sysfs:
 * zero, the lock has not run: needs a reboot.
 
 An agent paused this boot (`Pause and resume`_) needs a reboot whatever
-PCR 14 holds. An agent that already refused to start this boot, with nothing
-changed in this run, is blocked: its reason is in ``journalctl -u lota-agent
--b``, and a reboot does not change it.
+PCR 14 holds. An agent that failed this boot after loading its BPF program
+spent PCR 14 the same way and is blocked: fix the error in ``journalctl -u
+lota-agent -b``, then reboot. An agent that already refused to start this
+boot, with nothing changed in this run, is blocked: its reason is in
+``journalctl -u lota-agent -b``, and a reboot does not change it.
 
 Stopping here prints ``Reboot is required before the install can continue:``
 with the reason, and exits 10.

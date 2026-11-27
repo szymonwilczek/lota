@@ -57,6 +57,7 @@ static volatile int extend_called;
 static volatile int notice_seen;
 static uint32_t extend_pcr;
 static uint8_t extend_digest[LOTA_HASH_SIZE];
+static uint8_t saved_flags;
 
 int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
 		   const uint8_t *digest)
@@ -73,8 +74,8 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
 /*
  * The poison path records that this host spent its own commitment,
  * so the next start can name a pause instead of accusing a writer.
- * The note is best effort and this test is about the extend,
- * so the three calls it makes are stubbed to the "no state on disk" answer.
+ * The note is best effort: the three calls it makes are stubbed to the
+ * "no state on disk" answer, and the save keeps only the flags it was given.
  */
 int tpm_clock_state_load(const struct tpm_context *ctx,
 			 struct lota_clock_state *out)
@@ -88,7 +89,7 @@ int tpm_clock_state_save(const struct tpm_context *ctx,
 			 const struct lota_clock_state *in)
 {
 	(void)ctx;
-	(void)in;
+	saved_flags = in->flags;
 	return 0;
 }
 
@@ -177,6 +178,7 @@ static void reset_poison_observation(void)
 	notice_seen = 0;
 	extend_pcr = 0;
 	memset(extend_digest, 0, sizeof(extend_digest));
+	saved_flags = 0;
 }
 
 static void test_sigterm_mid_round_reaches_poison_cleanup(void)
@@ -255,6 +257,10 @@ static void test_sigterm_mid_round_reaches_poison_cleanup(void)
 		FAIL("success journal notice was not emitted");
 		goto cleanup_pipes;
 	}
+	if (saved_flags != LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON) {
+		FAIL("a requested stop recorded flags 0x%x", saved_flags);
+		goto cleanup_pipes;
+	}
 
 	PASS();
 	goto cleanup_pipes;
@@ -301,12 +307,45 @@ static void test_poison_cleanup_is_gated_on_loaded_bpf(void)
 	PASS();
 }
 
+static void test_poison_after_an_error_is_not_a_requested_stop(void)
+{
+	struct tpm_context tpm;
+	struct bpf_loader_ctx bpf;
+	int ret;
+
+	TEST("a run that fails after BPF load records an error poison");
+
+	memset(&tpm, 0, sizeof(tpm));
+	memset(&bpf, 0, sizeof(bpf));
+	reset_poison_observation();
+
+	tpm.initialized = true;
+	bpf.loaded = true;
+
+	ret = agent_poison_runtime_pcr_before_bpf_unload(&tpm, &bpf, -EIO);
+	if (ret != -EIO) {
+		FAIL("existing error was changed to %d", ret);
+		return;
+	}
+	if (extend_called != 1) {
+		FAIL("expected one PCR extend, got %d", extend_called);
+		return;
+	}
+	if (saved_flags != LOTA_CLOCK_STATE_FLAG_ERROR_POISON) {
+		FAIL("a failed run recorded flags 0x%x", saved_flags);
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA signal shutdown tests ===\n\n");
 
 	test_sigterm_mid_round_reaches_poison_cleanup();
 	test_poison_cleanup_is_gated_on_loaded_bpf();
+	test_poison_after_an_error_is_not_a_requested_stop();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;

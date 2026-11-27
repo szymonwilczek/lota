@@ -2525,12 +2525,15 @@ enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs)
 		return TPM_PCR14_UNATTRIBUTABLE;
 
 	/*
-	 * The agent poisons PCR14 on its way out of an operator-requested
-	 * shutdown and records that it did.
+	 * The agent poisons PCR14 on its way out once BPF is loaded and records
+	 * whether a stop was requested or the run failed.
 	 */
-	if ((obs->prev->flags & LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON) &&
-	    memcmp(obs->current, obs->prev->pcr14, LOTA_HASH_SIZE) == 0)
-		return TPM_PCR14_SPENT_BY_SHUTDOWN;
+	if (memcmp(obs->current, obs->prev->pcr14, LOTA_HASH_SIZE) == 0) {
+		if (obs->prev->flags & LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON)
+			return TPM_PCR14_SPENT_BY_SHUTDOWN;
+		if (obs->prev->flags & LOTA_CLOCK_STATE_FLAG_ERROR_POISON)
+			return TPM_PCR14_SPENT_BY_ERROR;
+	}
 
 	if (obs->prev->reset_count > obs->reset_count)
 		return TPM_PCR14_STATE_ROLLBACK;
@@ -2667,6 +2670,15 @@ static int boot_commitment_run(struct tpm_context *ctx,
 			"boot commitment cannot be re-extended once it is "
 			"poisoned, which is what makes a pause visible to every "
 			"relying party. Reboot to attest again\n");
+		return -EBADMSG;
+
+	case TPM_PCR14_SPENT_BY_ERROR:
+		fprintf(stderr,
+			"PCR14 was spent by an earlier lota-agent of this boot "
+			"that failed after loading its BPF program; that run's "
+			"log names the error. The boot commitment cannot be "
+			"re-extended once it is poisoned. Fix the cause and "
+			"reboot to attest again\n");
 		return -EBADMSG;
 
 	case TPM_PCR14_LOCK_MISSING:

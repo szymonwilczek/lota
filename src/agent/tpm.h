@@ -160,10 +160,17 @@ const char *tpm_strerror(int err);
 
 /*
  * Set on the snapshot written when the agent poisons PCR14 before unloading
- * BPF, so the next start reports TPM_PCR14_SPENT_BY_SHUTDOWN.
+ * BPF on a requested stop, so the next start reports
+ * TPM_PCR14_SPENT_BY_SHUTDOWN.
  * Selects a refusal only: the accepting verdicts are decided before it is read.
  */
 #define LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON (1U << 1)
+
+/*
+ * As LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON, for a run that ended on an error
+ * after loading BPF. The next start reports TPM_PCR14_SPENT_BY_ERROR.
+ */
+#define LOTA_CLOCK_STATE_FLAG_ERROR_POISON (1U << 2)
 
 /*
  * PCR14 boot-commitment snapshot, fixed layout.
@@ -220,6 +227,11 @@ enum tpm_pcr14_state {
 	 * the register matches it. Refused; the message asks for a reboot.
 	 */
 	TPM_PCR14_SPENT_BY_SHUTDOWN,
+	/*
+	 * As TPM_PCR14_SPENT_BY_SHUTDOWN, the snapshot carries
+	 * LOTA_CLOCK_STATE_FLAG_ERROR_POISON instead
+	 */
+	TPM_PCR14_SPENT_BY_ERROR,
 	/*
 	 * Register matches the snapshot, another binary is running.
 	 * Put the committed binary back, or install this build and reboot.

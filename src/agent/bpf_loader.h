@@ -400,13 +400,12 @@ int bpf_loader_kernel_appraises_exec(void);
 
 /**
  * bpf_loader_verify_kernel_runtime_hardening() - Check the kernel floor.
- * @allow_mutable_rootfs: Let a TPM device without its label pass with a
- *	warning.
+ * @allow_mutable_rootfs: Let a refused TPM device label pass with a warning.
  *
  * Refuses unless lockdown is restrictive and module signatures are enforced.
  * Warns when bpf_loader_kernel_appraises_exec() fails. Unless
- * @allow_mutable_rootfs is set, refuses a TPM device without the
- * lota_tpm_device_t label.
+ * @allow_mutable_rootfs is set, refuses when a loaded SELinux policy labels
+ * a TPM device other than lota_tpm_device_t or the label cannot be read.
  *
  * Return: 0 or a negative errno.
  */

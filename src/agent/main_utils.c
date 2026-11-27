@@ -722,6 +722,13 @@ static int boot_commitment(struct tpm_context *ctx, bool write)
 					"shutdown requested here. Reboot to "
 					"attest again.");
 				break;
+			case TPM_PCR14_SPENT_BY_ERROR:
+				lota_err("An earlier run of the agent in this "
+					 "boot failed after loading BPF and "
+					 "spent the boot commitment. Fix the "
+					 "error in its log and reboot to "
+					 "attest again.");
+				break;
 			case TPM_PCR14_LOCK_MISSING:
 				lota_err(
 					"PCR 14 never received the initramfs lock "
