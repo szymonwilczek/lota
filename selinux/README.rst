@@ -1,578 +1,363 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-LOTA SELinux Policy
-===================
+==========================
+LOTA SELinux policy module
+==========================
 
-SELinux policy for confining the LOTA agent.
+The ``lota`` policy module confines the agent in the ``lota_agent_t`` domain,
+labels its files, and declares the types of the TPM device and of the ports
+the agent attests to. ``lota.te`` holds the rules, ``lota.fc`` the file
+contexts and ``lota.if`` the interfaces other modules call. The sources are
+GPL-2.0-only.
 
-Types
------
+The packages ship the compiled ``lota.pp`` and ``lota.if`` in
+``/usr/share/lota/selinux``, and ``lota-install`` loads the module in its
+SELinux stage (`lota-install.rst
+<../Documentation/admin-guide/lota-install.rst>`_). This directory builds
+and loads the module by hand.
 
-+-----------------------+-----------------------------------------------------+
-| Type                  | Description                                         |
-+=======================+=====================================================+
-| ``lota_agent_t``      | LOTA agent process domain                           |
-+-----------------------+-----------------------------------------------------+
-| ``lota_agent_exec_t`` | Agent binary executable                             |
-+-----------------------+-----------------------------------------------------+
-| ``lota_var_t``        | Runtime data (AIK store, state)                     |
-+-----------------------+-----------------------------------------------------+
-| ``lota_etc_t``        | Configuration files                                 |
-+-----------------------+-----------------------------------------------------+
-| ``lota_bpf_t``        | eBPF object files                                   |
-+-----------------------+-----------------------------------------------------+
-| ``lota_port_t``       | Network port for attestation                        |
-+-----------------------+-----------------------------------------------------+
-| ``lota_tpm_device_t`` | ``/dev/tpm[0-9]*`` and ``/dev/tpmrm[0-9]*``         |
-|                       | (relabelled by ``configs/udev/99-lota-tpm.rules``)  |
-+-----------------------+-----------------------------------------------------+
+Building and loading
+====================
 
-``lota_tpm_device_t`` - pre-agent PCR14 defence
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The build needs ``selinux-policy-devel``, and the targets below also need
+``semodule`` and ``restorecon`` from ``policycoreutils``:
 
-TPM 2.0 PC Client Platform TPM Profile p3.3 keeps PCR14 in the
-OS-Loader-writable range (PCR8–15, Locality 0, auth-free ``TPM2_PCR_Extend``).
-The TPM exposes **no on-chip mechanism** that could gate the extend, so a
-local-root attacker with ``/dev/tpmrm0`` access can extend PCR14 between cold
-boot and the agent's first ``tpm_extend_boot_commitment()`` call. The defence
-has to live outside the TPM. LOTA stacks four layers -- three that narrow who
-can reach the device and one that attributes an extend after the fact -- and
-none of the three fences binds against local root:
+.. code-block:: console
 
-1. **udev** (``configs/udev/99-lota-tpm.rules``) sets ``0600 root:root`` on
-   ``/dev/tpm*`` at device-add time and assigns the ``lota_tpm_device_t``
-   SELinux label. The mode stops every uid but 0.
-2. **SELinux** (this module) narrows which *confined* domains may reach the
-   device. Stock refpolicy interfaces (``dev_rw_tpm()``, ...) bind to the
-   generic ``tpm_device_t`` label and no longer apply once the udev rule has
-   run, which takes the set of sources holding ``rw_chr_file_perms`` from the
-   fifteen that stock label carries down to eight. It does **not** take it
-   down to ``lota_agent_t``: the base policy's ``devices_unconfined_type``
-   attribute is one of the eight and ``unconfined_t`` -- the domain a root
-   login runs in -- is one of its members, and the same attribute holds
-   ``relabelfrom``/``relabelto``, so root can also move the node back to
-   ``tpm_device_t``. A loadable module cannot revoke either: the grant is in
-   the policy this one is loaded beside.
-3. **systemd ordering** (``systemd/lota-agent.service``
-   ``Before=multi-user.target getty.target``) narrows the window in which any
-   login-capable target could spawn a tool that races the agent's first extend.
-4. **Persistent clock-state attribution** (``src/agent/tpm.c``,
-   ``/var/lib/lota/clock_state.dat``) detects every PCR14 mismatch post-hoc and
-   attributes it to one of cold-boot tamper, mid-session tamper, or live binary
-   upgrade so the operator receives an actionable journal entry.
+   # dnf install selinux-policy-devel policycoreutils \
+       policycoreutils-python-utils
+   $ make
+   # make install
+   # make verify
 
-**Operators MUST run SELinux in enforcing mode for the MAC layer to bind**, and
-enforcing mode is necessary: it holds the confined domains off the device and
-leaves the unconfined ones, root among them, where they were. A local-root
-attacker with ``/dev/tpmrm0`` open is outside what any of these layers can
-prevent, which is why the fourth exists -- the clock-state attribution records
-the tamper the first three did not stop, and an operator reading the journal
-learns it happened.
+Build ``lota.pp`` against the ``selinux-policy-devel`` of the host that loads
+it. ``pidfs_t`` is referenced in an ``optional_policy`` block, which is
+dropped where the base policy does not define the type; the rest of the
+module loads.
 
-Capabilities Granted
-~~~~~~~~~~~~~~~~~~~~
+Targets
+-------
 
-The agent requires elevated privileges for hardware attestation:
+``all``
+  The default. Builds ``lota.pp`` with the devel Makefile.
 
-- **TPM Access**: Read PCRs, generate quotes, manage AIK
-- **BPF Operations**: Load LSM programs for execution monitoring
-- **System State**: Read kernel, firmware, and security status
-- **Network**: Connect to verifier servers for attestation
-- **chown**: hand the per-user container socket and
-  its directory to the ``lota`` group, which is what lets a title open
-  them. SELinux checks this as a capability of its own, so a host with
-  ``CAP_CHOWN`` in the unit's bounding set but without the rule still
-  fails the change with ``EPERM``
+``install``
+  Needs root. Builds, loads ``lota.pp`` with ``semodule -i``, and copies it to
+  ``/usr/share/selinux/packages``. Copies ``lota.if`` to
+  ``/usr/share/selinux/devel/include/contrib`` when
+  ``/usr/share/selinux/devel/include`` exists, and otherwise prints that it
+  did not. Labels ``LOTA_PORT`` (below). Creates ``/etc/lota/policies``,
+  ``/etc/lota/ca``, ``/var/lib/lota/aik``, ``/var/lib/lota/baseline``,
+  ``/run/lota`` and ``/usr/lib/lota``, runs ``restorecon -Rv`` on each path of
+  ``LOTA_PATHS`` that exists, and prints the value of each boolean.
+  ``LOTA_PATHS`` lists ``/usr/bin/lota-agent``, ``/usr/sbin/lota-agent``,
+  ``/usr/lib/lota``, ``/usr/lib64/lota``, ``/etc/lota``, ``/var/lib/lota`` and
+  ``/run/lota``; ``/usr/local/bin/lota-agent`` and ``/var/run/lota`` from
+  ``lota.fc`` are not relabelled.
 
-The domain has no access to ``/run/systemd/userdb``. ``lota-agent.service`` sets
-``SYSTEMD_BYPASS_USERDB=1`` so that a group lookup stops at ``/etc/group``, which
-is where the packages create ``lota``. A group defined only in userdb does not
+``uninstall``
+  Needs root. Deletes every local port record of type ``lota_port_t``,
+  removes the module and the two files ``install`` copied. The port records
+  go first: a record that names a type the policy no longer has comes back
+  into force when the module is loaded again.
+
+``reload``
+  ``uninstall``, then ``install``. Only ``LOTA_PORT`` is labelled again; the
+  other port records are gone.
+
+``check``
+  Builds ``lota.pp`` and prints the last 20 lines of the build output when
+  it fails.
+
+``verify``
+  Reports whether ``semodule -l`` lists the ``lota`` module, whether
+  ``semanage port -l`` lists ``lota_port_t``, and the value of each
+  boolean.
+
+``audit``
+  AVC records of ``ausearch -ts recent`` that mention ``lota``, ``steam``,
+  ``wine`` or ``games``.
+
+``suggest``
+  The same filter over ``ausearch -ts today``, passed to ``audit2allow -m
+  lota_local``. It prints the module text and loads nothing.
+
+``clean``
+  Removes ``*.pp`` and ``tmp/``.
+
+``LOTA_PORT``
+  A port for ``install`` to label ``lota_port_t``; none by default.
+  ``LOTA_PORT_PROTO`` is its protocol, ``tcp`` by default. A port that
+  another type names on its own is reported and left alone, because a local
+  record would take it from every domain on the host. A port inside a range
+  of another type is labelled.
+
+A package upgrade loads the new ``lota.pp`` when ``semodule -l`` lists
+``lota``: the store holds a copy, and a replaced file does not change it.
+
+Types and file contexts
+=======================
+
+.. list-table::
+   :header-rows: 1
+
+   * - Type
+     - Labels
+   * - ``lota_agent_t``
+     - The agent process.
+   * - ``lota_agent_exec_t``
+     - ``/usr/bin/lota-agent``, ``/usr/sbin/lota-agent``,
+       ``/usr/local/bin/lota-agent``.
+   * - ``lota_bpf_t``
+     - ``/usr/lib/lota`` and ``/usr/lib64/lota``, with their contents.
+   * - ``lota_etc_t``
+     - ``/etc/lota`` and its contents.
+   * - ``lota_var_t``
+     - ``/var/lib/lota``, ``/run/lota`` and ``/var/run/lota``, with their
+       contents, the IPC socket ``/run/lota/lota.sock`` among them.
+   * - ``lota_tpm_device_t``
+     - ``/dev/tpm[0-9]*`` and ``/dev/tpmrm[0-9]*``, set by the udev rule
+       (`TPM device label`_).
+   * - ``lota_port_t``
+     - Nothing until a port record names it (`Ports`_).
+
+``restorecon`` applies the contexts; ``restorecon -R /etc/lota`` labels the
+directory and every file below it. A file created later takes the type of the
+directory it is created in, except ``lota-agent.pid``, which the agent creates
+in the pid directory as ``lota_var_t``. ``lota-agent --add-publisher`` writes
+``lota.conf`` to a new file and renames it over the old one; it copies the old
+file's label onto the new one first, and prints a warning naming
+``restorecon`` when it cannot.
+
+Booleans
+========
+
+.. list-table::
+   :header-rows: 1
+
+   * - Boolean
+     - Default
+     - While on
+   * - ``lota_network_attest``
+     - on
+     - ``lota_agent_t`` may connect to ``lota_port_t`` and ``http_port_t``
+       ports.
+   * - ``lota_bpf_load``
+     - on
+     - ``lota_agent_t`` may create, read and write BPF maps and load and
+       run BPF programs.
+
+``setsebool`` changes a boolean at once, and ``-P`` keeps the value across
+reboots:
+
+.. code-block:: console
+
+   # setsebool -P lota_network_attest off
+   # getsebool -a | grep lota
+
+With the boolean off the domain still creates sockets and resolves names,
+and connects to no ``lota_port_t`` or ``http_port_t`` port. That covers the
+default verifier port 8443, which the base policy labels ``http_port_t``.
+
+The agent domain
+================
+
+``lota_agent_t`` is entered from ``init_t`` when systemd starts
+``lota-agent.service``. The unit sets ``NoNewPrivileges=yes``, which needs
+the ``nnp_transition`` rule, and ``nosuid_transition`` covers a binary on a
+``nosuid`` mount. ``lota-agent`` started from a login shell keeps the
+shell's domain.
+
+The domain holds:
+
+* the capabilities ``dac_override``, ``dac_read_search``, ``sys_admin``,
+  ``sys_ptrace``, ``chown``, ``kill``, ``bpf`` and ``perfmon``, with
+  ``audit_write`` from ``logging_send_audit_msgs``, and ``kill`` and
+  ``sys_ptrace`` in a user namespace, where a title under Proton is checked;
+* read and write on ``lota_tpm_device_t`` and on the stock
+  ``tpm_device_t``, which a node carries until udev relabels it;
+* read on every file type except ``security_file_type`` and
+  ``system_map_t``, for runtime image measurement. A mapping of such a file
+  stays unmeasured (`runtime-measurement.rst
+  <../Documentation/agent/runtime-measurement.rst>`_);
+* ``signal`` and ``sigkill`` on every domain, for ending a protected
+  process (`protection.rst <../Documentation/agent/protection.rst>`_);
+* manage on ``lota_var_t``, read on ``lota_etc_t``, read, execute and map
+  on ``lota_bpf_t``;
+* create, bind and watch under ``user_tmp_t``, for the container socket
+  ``/run/user/<uid>/lota/lota.sock`` (`ipc.rst
+  <../Documentation/agent/ipc.rst>`_). Without these the socket does not
+  appear;
+* ``acquire_svc`` on the system bus, for ``org.lota.Agent1``.
+
+The domain has no access to ``/run/systemd/userdb``. The unit sets
+``SYSTEMD_BYPASS_USERDB=1``, so a group lookup reads ``/etc/group``, where
+the packages create ``lota``; a group defined only in userdb does not
 resolve in the service.
 
-Installation
-------------
-
-Prerequisites
-~~~~~~~~~~~~~
-
-.. code:: bash
-
-   # Fedora
-   sudo dnf install selinux-policy-devel policycoreutils-python-utils
-
-   # Verify SELinux is enforcing
-   getenforce  # should return "Enforcing"
-
-Build and Install
-~~~~~~~~~~~~~~~~~
-
-.. code:: bash
-
-   cd selinux/
-
-   # Build policy modules
-   make
-
-   # Install (requires root)
-   sudo make install
-
-   # Install and label one endpoint's port while at it
-   sudo make install LOTA_PORT=8573
-
-   # Verify installation
-   sudo make verify
-
-``make install`` labels no port of its own. A port worth labelling is one this
-fleet's CA or verifier answers on, and the Makefile cannot know which that is:
-``lota-install`` labels the endpoints it is given, and ``LOTA_PORT`` is there
-for labelling one by hand at install time. A port the base policy already
-defines is reported and left alone -- relabelling one takes it from every
-domain on the host, not only from LOTA.
-
-Removing the Policy
-~~~~~~~~~~~~~~~~~~~
-
-.. code:: bash
-
-   sudo make uninstall
-
-``uninstall`` deletes every local port record naming ``lota_port_t`` before it
-removes the module that defines the type -- ``lota-install`` writes one per
-endpoint and an operator adds the rest, and a record naming a type that no
-longer exists comes back into force if the module is ever reinstalled. The
-compiled modules and the interface file that ``install`` placed are removed
-too.
-
-Post-Installation
-~~~~~~~~~~~~~~~~~
-
-After installing the agent binary and BPF object:
-
-.. code:: bash
-
-   # Apply correct labels
-   sudo restorecon -Rv /usr/bin/lota-agent
-   sudo restorecon -Rv /usr/lib/lota
-   sudo restorecon -Rv /etc/lota
-   sudo restorecon -Rv /var/lib/lota
-
-``restorecon -R /etc/lota`` labels the directory as well as the files in it,
-which matters for anything written there afterwards: a new file takes the type
-its parent directory implies. ``lota-agent --add-publisher`` replaces
-``lota.conf`` by rename and carries the replaced file's label onto the
-replacement, so a correctly labelled config stays correct even under a
-directory that is not; it prints a warning naming ``restorecon`` if it cannot.
-
-Base policy portability
-~~~~~~~~~~~~~~~~~~~~~~~
-
-Types that only newer base policies define are guarded so a policy that
-lacks them still links the module: ``pidfs_t`` (pidfs, kernel 6.9+) is
-referenced inside an ``optional_policy`` block, which is dropped when the
-base policy has no ``pidfs_t``, and the rest of the module loads. Build the
-module against the target's ``selinux-policy-devel`` so the compiled
-``lota.pp`` matches its policy.
-
-Configuration Tunables
-----------------------
-
-Control policy behavior with SELinux booleans:
-
-=========================== ======= ======================================
-Boolean                     Default Description
-=========================== ======= ======================================
-``lota_network_attest``     on      Allow network attestation to verifiers
-``lota_bpf_load``           on      Allow loading eBPF LSM programs
-=========================== ======= ======================================
-
-``sudo make verify`` prints the live value of every one of them, and the list
-it walks is read out of the policy sources, so a boolean added to the policy
-is reported without this table and that target drifting apart.
-
-Modify Tunables
-~~~~~~~~~~~~~~~
-
-.. code:: bash
-
-   # Disable network attestation
-   sudo setsebool -P lota_network_attest off
-
-   # Show current values
-   getsebool -a | grep lota
-
-Gaming Integration
-------------------
-
-The per-user container socket
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-A title inside a Proton container reaches the agent through
-``/run/user/<uid>/lota/lota.sock``. The agent creates that directory and
-binds the socket itself, and it watches ``/run/user`` so it can do so when
-the user logs in, which on any host that boots normally is after the agent
-started. Everything on that path is ``user_tmp_t``, so ``lota_agent_t`` holds three
-accesses for it: manage user temporary directories, manage user temporary
-sockets, and watch user temporary directories. Without them the agent is
-refused at the ``mkdir``, at the ``bind`` and at the ``inotify`` watch in turn,
-and the only visible symptom is a socket that never appears:
-
-.. code:: bash
-
-   # what the agent is allowed under the player's runtime directory
-   sudo sesearch -A -s lota_agent_t -t user_tmp_t -ds -dt
-
-The client side of that socket is granted separately, because the two ends
-are refused for different reasons: ``lota_query_status`` covers the socket
-under ``/var/lib/lota`` and says nothing about ``user_tmp_t``, so a confined
-title granted only that reaches the system socket and is denied at the
-container one. ``lota_query_status_container`` grants the caller the runtime
-path -- search on ``/run``, search on the user temporary directories and
-write on the socket -- and ``lota_gaming_client`` calls both, so a title
-following the Interface Reference below reaches the agent from either side.
-
-Steam and Proton
-~~~~~~~~~~~~~~~~
-
-A title runs in the domain of the user who starts it, ``unconfined_t`` on a
-default desktop, which needs no rule to reach either socket. A confined domain
-gets access through ``lota_gaming_client``.
-
-Anti-Cheat Systems
-~~~~~~~~~~~~~~~~~~
-
-EAC, BattlEye, and other anti-cheat systems running in Wine can:
-
-1. Query current attestation status
-2. Request fresh attestation
-3. Verify system integrity
-
-File Contexts
--------------
-
-Standard Paths
-~~~~~~~~~~~~~~
-
-======================= =====================
-Path                    Context
-======================= =====================
-``/usr/bin/lota-agent`` ``lota_agent_exec_t``
-``/usr/lib/lota/``      ``lota_bpf_t``
-``/etc/lota/``          ``lota_etc_t``
-``/var/lib/lota/``      ``lota_var_t``
-``/run/lota/``          ``lota_var_t``
-``/dev/tpm[0-9]*``      ``lota_tpm_device_t``
-``/dev/tpmrm[0-9]*``    ``lota_tpm_device_t``
-======================= =====================
-
-Custom Locations
-~~~~~~~~~~~~~~~~
-
-To add custom file contexts:
-
-.. code:: bash
-
-   # example: Agent in non-standard location
-   sudo semanage fcontext -a -t lota_agent_exec_t "/opt/lota/bin/lota-agent"
-   sudo restorecon -v /opt/lota/bin/lota-agent
-
-Troubleshooting
----------------
-
-View AVC Denials
-~~~~~~~~~~~~~~~~
-
-.. code:: bash
-
-   # Recent denials
-   sudo ausearch -m avc -ts recent | grep lota
-
-   # Use make target
-   sudo make audit
-
-Generate Policy Suggestions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code:: bash
-
-   # From audit log
-   sudo make suggest
-
-   # Or manually
-   sudo ausearch -m avc | audit2allow -m lota_local
-
-Common Issues
-~~~~~~~~~~~~~
-
-"Permission denied" accessing TPM
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. code:: bash
-
-   # Check device labels
-   ls -Z /dev/tpm*
-
-   # Expected after install: lota_tpm_device_t. If the label is still
-   # tpm_device_t the LOTA udev rule never ran:
-   sudo install -m 644 ../configs/udev/99-lota-tpm.rules \
-       /usr/lib/udev/rules.d/99-lota-tpm.rules
-   sudo udevadm control --reload-rules
-   sudo udevadm trigger --action=add --subsystem-match=tpm \
-       --subsystem-match=tpmrm
-   ls -Z /dev/tpm*
-
-The resource manager is in subsystem ``tpmrm``, not ``tpm``, and it is the
-node the agent's hardening gate reads first, so a trigger naming ``tpm``
-alone brings ``/dev/tpm0`` back, exits 0 and leaves ``/dev/tpmrm0`` where it
-was. ``--action=add`` is what re-applies the label at all: udev evaluates
-``SECLABEL{selinux}`` when it adds a device, and the default ``change`` event
-re-runs the rules without moving it. Naming the two device paths
-(``udevadm trigger --action=add /dev/tpm0 /dev/tpmrm0``) does the same job,
-and a reboot does it unprompted, because udev creates both nodes then.
-
-.. _tpm-device-carries-selinux-label--expected-lota_tpm_device_t:
-
-"TPM device carries SELinux label ... expected lota_tpm_device_t"
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The agent reads ``security.selinux`` on ``/dev/tpmrm0`` and ``/dev/tpm0`` at
-the hardening gate. If the udev relabel did not run (broken symlink in
-``/etc/udev/rules.d``, missing ``/usr/lib/udev/rules.d/99-lota-tpm.rules``, or
-a host kernel that labelled the device before the rule was installed), any
-other root SELinux domain (``tpm2-abrmd_t``, generic ``init_t``, ...) still has
-rw access to the TPM resource manager. That domain can flood the chip and
-exhaust TPM sessions, the NV rate budget, or the DA counter; LOTA stays
-fail-closed (``LOTA_ERR_TPM_LOCKED`` -> ``LOTA_STATUS_TPM_LOCKOUT``), but
-attestation availability drops. Re-run the udev install steps above; the agent
-will start once the label is ``lota_tpm_device_t``.
-
-.. _tpm-dos--da-lockout-runbook:
-
-TPM DoS / DA lockout runbook
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-When ``LOTA_STATUS_TPM_LOCKOUT`` shows up on ``lota-agent status`` or on the
-D-Bus ``StatusChanged`` signal, confirm the chip is in dictionary-attack
-lockout:
-
-.. code:: bash
-
-   sudo tpm2_getcap properties-variable \
-       | grep -E "inLockout|lockoutAuthSet|TPM2_PT_LOCKOUT_COUNTER"
-
-The pattern uses ``tpm2_getcap``'s own names; any other spelling matches
-nothing and reads as a healthy TPM. A chip not in lockout answers::
-
-     lockoutAuthSet:            0
-     inLockout:                 0
-   TPM2_PT_LOCKOUT_COUNTER: 0x0
-
-``inLockout`` says the lockout is engaged; the counter, how close a chip still
-answering is to it. With ``lockoutAuthSet`` and the authorization lost, the
-reset below is unavailable and the lockout can only be waited out. Then find
-what is spending the attempts, and reset:
-
-.. code:: bash
-
-   # Identify other processes holding the TPM resource manager fd.
-   sudo lsof /dev/tpmrm0 /dev/tpm0
-
-   # Inspect recent denials from non-LOTA domains.
-   sudo ausearch -ts recent -m AVC -c tpm2-abrmd
-
-   # Reset the lockout (requires lockoutAuth, typically empty on
-   # stock distributions; otherwise consult the platform admin):
-   sudo tpm2_dictionarylockout --setup-parameters \
-       --max-tries=32 --recovery-time=120 --lockout-recovery=120
-   sudo tpm2_dictionarylockout --clear-lockout
-
-The agent re-publishes the status flag on the next attestation cycle. If the
-lockout returns on a host where ``ls -Z /dev/tpm*`` shows
-``lota_tpm_device_t``, the offender is inside the ``lota_agent_t`` policy
-boundary; check ``journalctl -u lota-agent`` for repeated
-``LOTA_ERR_TPM_LOCKED`` retries before escalating to hardware.
-
-BPF program loading fails
-^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. code:: bash
-
-   # Verify tunable is enabled
-   getsebool lota_bpf_load
-
-   # Check BPF capabilities
-   sudo sesearch -A -s lota_agent_t -c bpf -ds -dt
-
-A title cannot connect to LOTA
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. code:: bash
-
-   # Verify socket label
-   ls -Z /run/lota/lota.sock
-
-   # what the title actually runs as -- the rules apply to that domain
-   ps -eZ | grep -i <title>
-
-The policy refuses an unconfined title nothing; look elsewhere for the
-failure. A confined domain needs ``lota_gaming_client``.
-
-Network attestation blocked
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. code:: bash
-
-   # Check tunable
-   getsebool lota_network_attest
-
-   # Verify port definition
-   sudo semanage port -l | grep lota
-
-The policy declares ``lota_port_t`` and labels nothing with it: a loadable
-module cannot carry port contexts, because ``portcon`` is base policy. It
-allows ``lota_agent_t`` to reach the type, and every assignment happens at
-bring-up:
-``lota-install`` labels the CA and verifier ports it was given. An endpoint
-added later has to be labelled too, or the agent is refused at connect and the
-operator sees a connection error against a server that is running:
-
-.. code:: bash
-
-   sudo semanage port -a -t lota_port_t -p tcp 8473
-
-Port 8443 is an exception that hides the rule: the base policy already labels
-it ``http_port_t``, which ``lota_agent_t`` may also reach, so a deployment on
-the default port works without any of this.
-
-The audit log records the denial as a ``name_connect`` AVC on the port's type.
-The agent says it too: a connect refused with ``EACCES`` on an enforcing host is
-reported with the port and the command that labels it, next to the plain errno::
-
-   Cannot reach 192.000.0.000:8573. SELinux is enforcing and TCP port 8573
+TPM device label
+================
+
+``configs/udev/99-lota-tpm.rules`` sets ``/dev/tpm[0-9]*`` and
+``/dev/tpmrm[0-9]*`` to ``root:root``, mode 0600, and labels them
+``lota_tpm_device_t``. The packages install it in
+``/usr/lib/udev/rules.d``.
+
+The label takes the TPM from confined domains that the base policy grants
+``tpm_device_t``. It does not take it from unconfined domains: the base
+policy gives the attribute ``devices_unconfined_type`` every device node,
+with ``relabelfrom`` and ``relabelto``, and ``unconfined_t``, the domain of a
+root login, has the attribute. A loaded module cannot revoke a base policy
+grant. The label binds only with SELinux enforcing; otherwise the 0600 mode
+alone applies. PCR 14 extends that reach the TPM anyway are what the boot
+commitment records (`lifecycle.rst
+<../Documentation/agent/lifecycle.rst>`_).
+
+At startup the agent reads ``security.selinux`` on ``/dev/tpmrm0`` and
+``/dev/tpm0`` and refuses to start when a node present lacks
+``lota_tpm_device_t``::
+
+   TPM device /dev/tpmrm0 carries SELinux label
+   system_u:object_r:tpm_device_t:s0; expected lota_tpm_device_t (udev rule
+   configs/udev/99-lota-tpm.rules did not relabel the device, so any other
+   root domain can rw the TPM and DoS LOTA attestation availability)
+
+The unit does not restart on this refusal. A file system that does not support
+extended attributes (``ENOTSUP``) passes the check. So does ``ENODATA``, which
+the read returns when no SELinux policy is loaded; the agent logs a warning
+that the label was not checked. Any other error reading the attribute refuses
+the start the same way. With neither node present the agent logs a warning and
+goes on.
+``--insecure-allow-mutable-rootfs`` turns the refusal into a warning.
+
+udev applies ``SECLABEL`` when it adds a device, and ``/dev/tpmrm0`` is in
+subsystem ``tpmrm``. After a manual install of the rule:
+
+.. code-block:: console
+
+   # udevadm control --reload-rules
+   # udevadm trigger --action=add --subsystem-match=tpm --subsystem-match=tpmrm
+   # ls -Z /dev/tpm0 /dev/tpmrm0
+   # systemctl start lota-agent
+
+A ``trigger`` without ``--action=add`` sends ``change``, leaves the label as
+it was and exits 0. A reboot adds both nodes again.
+
+``lsof /dev/tpmrm0 /dev/tpm0`` lists the processes that hold the TPM open.
+A TPM in dictionary-attack lockout is in `tpm.rst
+<../Documentation/agent/tpm.rst>`_.
+
+Ports
+=====
+
+The module labels no port: a loadable module cannot carry ``portcon``.
+``lota-install`` labels the CA and verifier ports it is given that carry
+neither ``lota_port_t`` nor ``http_port_t`` and that no other type names on
+its own. Any other port the agent attests to needs a record:
+
+.. code-block:: console
+
+   # semanage port -a -t lota_port_t -p tcp 8573
+
+On an enforcing host a connect refused with ``EACCES`` is logged with the
+cause the agent reads from ``/sys/fs/selinux``. With ``lota_network_attest``
+on, an example::
+
+   Cannot reach 192.0.2.10:8573. SELinux is enforcing and TCP port 8573
    carries no LOTA label, which is what refuses this connect. Label the port
    and the next round goes through:
      sudo semanage port -a -t lota_port_t -p tcp 8573
 
-The state is read from ``/sys/fs/selinux/enforce``, so a permissive or SELinux-less
-host is not told to label a port for an ``EACCES`` that came from somewhere else.
+With the boolean off, the line says ``the lota_network_attest boolean is
+off`` and gives ``sudo setsebool -P lota_network_attest on``; a port record
+changes nothing then. Without the module there is no boolean to read, and
+the line gives both commands. On a permissive host, or one without SELinux,
+it adds nothing to the error.
 
-Two rules refuse that connect, and the message names the one it read. Turning
-``lota_network_attest`` off refuses every attestation endpoint whatever its
-label, and the AVC then names ``lota_port_t``, so the agent reads the boolean
-before blaming the port -- relabelling would change nothing there, and
-``semanage`` answers ``already defined, modifying instead`` and exits 0, which
-reads as success::
+The AVC of such a refusal is a ``name_connect`` on the port's type.
 
-   Cannot reach 192.168.0.165:8444. SELinux is enforcing and the
-   lota_network_attest boolean is off, which is what refuses this connect.
-   Labelling the port changes nothing while the boolean is off -- semanage would
-   answer 'already defined' and exit 0. Turn it back on:
-     sudo setsebool -P lota_network_attest on
+Interfaces
+==========
 
-On a host where the module is not loaded there is no boolean node to read, so
-neither cause is established and both commands are printed.
+Another module calls these from ``lota.if``. The policy development
+Makefile reads the ``.if`` files of every directory under
+``/usr/share/selinux/devel/include``; ``make install`` puts it in
+``contrib``. The packages put it in ``/usr/share/lota/selinux``, so a host
+that builds policy from them copies it once:
 
-**Ports are labelled one at a time, and a range is deliberately not offered.**
-Each publisher runs its own CA and verifier, so a fleet of them spans arbitrary
-ports and a range wide enough to cover them would be wide enough to cover
-whatever else listens in it -- the fence exists to say which endpoints this
-domain may reach, and a range that answers "most of them" is not that fence.
-The cost is one ``semanage port`` per endpoint, which ``lota-install`` performs
-for the ones it is given and the message above names for the ones added later.
+.. code-block:: console
 
-Interface Reference
--------------------
-
-Other SELinux policies can use LOTA interfaces. The interfaces live in
-``lota.if``, and a caller's ``checkmodule`` run resolves them only from
-``/usr/share/selinux/devel/include/contrib/``. Installing from this tree with
-``sudo make install`` puts the file there. A host that installed the packages
-has the source at ``/usr/share/lota/selinux/lota.if`` instead -- the include
-directory belongs to ``selinux-policy-devel``, which a fleet host has no reason
-to carry -- so a machine that builds policy copies it once::
-
-   sudo install -m 0644 /usr/share/lota/selinux/lota.if \
+   # install -m 0644 /usr/share/lota/selinux/lota.if \
        /usr/share/selinux/devel/include/contrib/lota.if
 
-Without that copy, a module calling any of them fails at ``checkmodule``
-with the interface name as an unknown token.
+Without it ``checkmodule`` stops at the interface name as an unknown token.
 
-For Gaming Applications
-~~~~~~~~~~~~~~~~~~~~~~~
+.. list-table::
+   :header-rows: 1
 
-.. code:: sh
+   * - Interface
+     - Grants the domain
+   * - ``lota_query_status(domain)``
+     - Search on ``lota_var_t`` directories, write on its sockets,
+       ``connectto`` on ``lota_agent_t``, read on its files: the socket
+       ``/run/lota/lota.sock``.
+   * - ``lota_query_status_container(domain)``
+     - Search on ``/run`` and on ``user_tmp_t`` directories, write on
+       ``user_tmp_t`` sockets, ``connectto`` on ``lota_agent_t``: the socket
+       ``/run/user/<uid>/lota/lota.sock``.
+   * - ``lota_verify_integrity(domain)``
+     - Search on ``/var/lib`` and on ``lota_var_t`` directories, read on its
+       files.
+   * - ``lota_gaming_client(domain)``
+     - The three above.
+   * - ``lota_request_attest(domain)``
+     - ``lota_query_status`` and ``signal`` on ``lota_agent_t``. No signal
+       makes the agent attest.
+   * - ``lota_read_config(domain)``
+     - Read on ``lota_etc_t``.
+   * - ``lota_anticheat_client(domain)``
+     - ``lota_gaming_client``, ``lota_request_attest`` and
+       ``lota_read_config``.
+   * - ``lota_domtrans(domain)``
+     - Execute ``lota_agent_exec_t`` with a transition to ``lota_agent_t``.
+   * - ``lota_exec(domain)``
+     - Execute ``lota_agent_exec_t`` with no transition.
+   * - ``lota_role_types(role)``
+     - ``lota_agent_t`` for the role.
+   * - ``lota_admin(domain, role)``
+     - ``ptrace`` and every signal on ``lota_agent_t``, its process state,
+       ``lota_domtrans``, ``lota_agent_t`` for the role, and manage and
+       relabel on ``lota_etc_t``, ``lota_var_t`` and ``lota_bpf_t``.
+   * - ``corenet_tcp_connect_lota_port(domain)``
+     - ``name_connect`` on ``lota_port_t``.
+   * - ``corenet_tcp_bind_lota_port(domain)``
+     - ``name_bind`` on ``lota_port_t``.
 
-   # Allow querying attestation status over /var/lib/lota/lota.sock
-   lota_query_status(myapp_t)
+A title runs in the domain of the user who starts it, ``unconfined_t`` on a
+default desktop, which needs none of these. A confined title calls
+``lota_gaming_client``:
 
-   # Allow querying it over /run/user/<uid>/lota/lota.sock instead,
-   # which is the socket a title inside a Proton container reaches
-   lota_query_status_container(myapp_t)
+.. code-block:: none
 
-   # Full gaming client access, both sockets included
-   lota_gaming_client(myapp_t)
+   lota_gaming_client(mygame_t)
 
-For Anti-Cheat
-~~~~~~~~~~~~~~
+Denials
+=======
 
-.. code:: sh
+.. code-block:: console
 
-   # Extended anti-cheat access
-   lota_anticheat_client(myanticheat_t)
+   # ausearch -m avc -ts recent | grep lota
+   # sesearch -A -s lota_agent_t -t user_tmp_t -ds -dt
+   # ps -eZ | grep lota-agent
 
-For System Services
-~~~~~~~~~~~~~~~~~~~
+To log denials of the agent without enforcing them, make its domain
+permissive and start the service again; ``-d`` ends it:
 
-.. code:: sh
+.. code-block:: console
 
-   # Administrative access
-   lota_admin(myadmin_t, myadmin_r)
+   # semanage permissive -a lota_agent_t
+   # semanage permissive -d lota_agent_t
 
-Development
------------
-
-Testing Changes
-~~~~~~~~~~~~~~~
-
-.. code:: bash
-
-   # Build without installing
-   make
-
-   # Check syntax
-   make check
-
-   # Reload after changes
-   sudo make reload
-
-Debugging in Permissive Mode
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code:: bash
-
-   # Set LOTA domain to permissive (logs but allows)
-   sudo semanage permissive -a lota_agent_t
-
-   # Test functionality
-   lota-agent --test-tpm
-
-   # Review denials
-   sudo ausearch -m avc -ts recent | grep lota
-
-   # Return to enforcing
-   sudo semanage permissive -d lota_agent_t
-
-Contributing
-------------
-
-When modifying the policy:
-
-1. Test in permissive mode first
-2. Use ``audit2allow`` to identify required permissions
-3. Add minimal permissions with comments explaining why
-4. Test with SELinux enforcing before submitting
-
-License
--------
-
-GPL-2.0-only
+A restart of the agent within one boot is visible in its status (`lifecycle.rst
+<../Documentation/agent/lifecycle.rst>`_).

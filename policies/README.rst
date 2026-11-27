@@ -1,496 +1,296 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-LOTA PCR Policies
+============
+PCR policies
+============
+
+A PCR policy is the YAML file that says what the verifier accepts from a
+host: which PCR values, kernel images and agent builds, and which kernel
+security features the host must run with. The verifier reads it with
+``--policy`` at start (`command-line.rst
+<../Documentation/verifier/command-line.rst>`__) and checks every report
+against it (`index.rst <../Documentation/verifier/index.rst>`__). The parser
+is ``src/verifier/verify/pcr.go``.
+
+Templates
+=========
+
+``testing.yaml``
+  Pins nothing and requires nothing. The verifier loads it only with
+  ``--allow-permissive-policy``.
+
+``production.yaml``
+  Requires IOMMU, enforce mode, Secure Boot and the command line denylist,
+  with ``profile: enterprise``. The PCR pins and the agent hash ship commented
+  out, so the file as shipped loads only with ``--allow-permissive-policy``
+  and ``--allow-unpinned-agent``; fill in one of them first (`Choosing the
+  pins`_).
+
+``strict.yaml``
+  Sets every ``require_*`` key and pins PCR 0, 1 and 7. The pins ship as
+  ``REPLACE_WITH_...`` placeholders, which stop the verifier at start until
+  they hold digests.
+
+Loading
+=======
+
+Each ``--policy`` file is read once, at start; a changed file takes effect
+when the verifier restarts. The file is read in this order, and the first
+failure stops the verifier:
+
+#. The file is at most 64 KiB.
+#. With ``--policy-pubkey``, ``PATH.sig`` holds a 64-byte raw Ed25519
+   signature over the bytes read (`Signing`_).
+#. The YAML parses, holds no second document with content, and every key
+   is one of `Keys`_. A misspelt key stops the verifier with its name and
+   line.
+#. Each ``pcrs`` index is between 0 and 23, and each ``pcrs`` value and
+   ``kernel_hashes`` and ``agent_hashes`` entry is 64 hex digits, kept in
+   lower case. ``profile`` is empty, ``enterprise`` or ``consumer``.
+#. Without ``--allow-permissive-policy``, the policy pins a PCR, a kernel
+   hash or an agent hash.
+#. Without ``--allow-unpinned-agent``, a policy that sets
+   ``require_secureboot`` and pins no PCR lists an agent hash. With neither,
+   the first agent hash a host reports would be pinned unchecked.
+#. ``tenant`` is empty or a valid tenant name (`multi-tenancy.rst
+   <../Documentation/admin-guide/multi-tenancy.rst>`__).
+#. No other file binds the same ``tenant``, and no file loaded before it has
+   the same ``name``.
+
+A policy that leaves a check open is logged as a warning and loads:
+
+* ``no PCR values defined -> any PCR set will pass``;
+* ``no kernel/agent hash allowlists -> any binary accepted``;
+* ``no security requirements enabled -> effectively permissive``, when it
+  pins no PCR and sets no ``require_*`` key.
+
+The first file is the active policy. It verifies every client whose tenant
+binds no policy of its own. A later file reaches clients only through its
+``tenant`` key, and the verifier warns about one that has none. With no
+``--policy`` at all the verifier refuses to start, unless
+``--allow-permissive-policy`` loads the built-in ``default`` policy, which
+sets ``require_iommu``, ``require_enforce`` and ``require_module_sig`` and
+pins nothing. ``--report-only`` reads no policy, and ignores a ``--policy``
+given to it.
+
+Keys
+====
+
+``name``
+  The policy's name, used in logs and in the decision log. Unique among the
+  loaded files.
+
+``description``
+  Free text. The verifier does not read it.
+
+``tenant``
+  Binds the policy to clients whose AIK certificate names this tenant. Empty
+  binds none.
+
+``profile``
+  ``enterprise``, the default, or ``consumer``. ``consumer`` turns on
+  self-service re-anchor of a drifted PCR 0, 1 and 7 baseline for the
+  policy's tenant ("Re-anchor" in `index.rst
+  <../Documentation/verifier/index.rst>`__). It moves a baseline only under
+  ``require_secureboot`` and only when the event log proves Secure Boot on.
+  ``--enable-self-service-reanchor``, when given, overrides the profile of
+  every policy.
+
+``pcrs``
+  A map of PCR index to the expected SHA-256 value, 64 hex digits. Each
+  pinned PCR joins the challenge mask, and a report whose value differs is
+  refused with ``pcr_fail``. The verifier logs ``policy verification
+  failed`` with every mismatch, in index order, digests in full::
+
+    PCR 0 mismatch: got 3d45..., expected 9a1f...; PCR 7 mismatch: got ...
+
+  The verifier holds PCR 0, 1 and 7 as a per-client baseline, and PCR 14
+  against its boot commitment. A client's first round sets the baseline
+  when the policy pins PCR 0, 1 and 7, when the baseline store already holds
+  the client, when ``require_secureboot`` holds on the event log, or under
+  ``--allow-tofu-boot-baseline``. Otherwise the round is refused with
+  ``boot baseline not enrolled``.
+
+``kernel_hashes``
+  SHA-256 digests of the kernel images a host may boot, 64 hex digits each.
+  The digest compared is the one the boot loader measured into PCR 9, taken
+  from the event log; the report's own kernel hash is not used. A host
+  whose log measures no kernel image, two different ones, or whose PCR 9 is
+  not quoted or does not replay is refused with ``kernel_image_required``,
+  as is one whose image is not listed. Every kernel update needs a new
+  entry. Empty skips the check.
+
+``agent_hashes``
+  SHA-256 digests of the agent builds a host may run, 64 hex digits each. A
+  host reporting a hash off the list is refused with ``integrity_mismatch``
+  and the log line ``agent hash not in allowed list``. A listed hash other
+  than the client's pinned one moves the pin (`agent-update.rst
+  <../Documentation/admin-guide/agent-update.rst>`__). Empty skips the list;
+  the agent hash is then pinned on first use.
+
+``require_iommu``
+  The agent reports DMA remapping on, or the round is ``iommu_fail``.
+
+``require_enforce``
+  The agent runs in enforce mode, or the round is ``enforce_required``.
+
+``require_module_sig``
+  The kernel enforces module signatures, or the round is
+  ``module_sig_required``.
+
+``require_secureboot``
+  The event log carries the ``SecureBoot`` variable the firmware measured
+  into PCR 7, with value 1, and PCR 7 is quoted and replays. Otherwise the
+  round is ``secureboot_required``. The Secure Boot flag the agent reports
+  is not read. The key also gives a first round its boot baseline without
+  a PCR pin ("Baselines" in `index.rst
+  <../Documentation/verifier/index.rst>`__).
+
+``require_cmdline_policy``
+  Each kernel command line measured into PCR 8 is free of the denylist
+  (`Command line denylist`_), or the round is ``cmdline_required``. PCR 8
+  joins the challenge mask.
+
+``cmdline_deny``
+  Rules added to the built-in denylist, in its rule forms. Read only with
+  ``require_cmdline_policy``.
+
+``require_lockdown``
+  Kernel lockdown is in integrity or confidentiality mode, or the round is
+  ``lockdown_required``.
+
+``require_ima_appraisal``
+  IMA appraises executables in a blocking mode, or the round is
+  ``ima_appraisal_required``. The agent counts an ``appraise`` rule on
+  ``BPRM_CHECK`` or with no ``func=``, with Secure Boot on, or with no
+  ``ima_appraise=off``, ``log`` or ``fix`` on the command line. A stock host has
+  no such rule and no signed files, so the key refuses it.
+
+``require_iommu``, ``require_enforce``, ``require_module_sig``,
+``require_lockdown`` and ``require_ima_appraisal`` read flags of the agent's
+own report (`report-format.rst
+<../Documentation/verifier/report-format.rst>`__), so they hold what the
+agent saw. ``require_secureboot`` and ``require_cmdline_policy`` read the
+event log the quote binds.
+
+The checks run in the order of the list above, from ``pcrs`` on, and the
+first that fails gives the verdict.
+
+Command line denylist
+=====================
+
+The built-in rules (``src/verifier/verify/kernel_trust.go``):
+
+======================== ==============================================
+Rule                     Matches
+======================== ==============================================
+``init=``, ``rdinit=``   Another first process, with any value.
+``rd.break``             The initramfs shell before the root switch.
+``lockdown=none``        Lockdown off.
+``module.sig_enforce=0`` Unsigned modules allowed.
+``selinux=0``            SELinux off.
+``enforcing=0``          SELinux permissive.
+``apparmor=0``           AppArmor off.
+``security=none``        No major security module.
+``systemd.debug_shell``  A root shell on a virtual console.
+``kgdboc=``              The kernel debugger on a console.
+======================== ==============================================
+
+A rule takes one of two forms:
+
+``param`` or ``param=``
+  The parameter alone or with any value.
+
+``param=value``
+  That exact pair.
+
+A ``-`` in a parameter name matches ``_``, as in the kernel. The command line
+is split on whitespace alone, so a denied parameter inside a quoted value
+matches too.
+
+The verifier reads the command lines from the PCR 8 ``EV_IPL`` events whose
+digest covers their text: GRUB's ``kernel_cmdline:`` and ``grub_cmd: linux``
+events. It checks every line it finds, since the log does not say which one
+booted. The round is refused when PCR 8 is not quoted or does not replay,
+when an event's digest does not cover its text, or when PCR 8 is non-zero and
+the log holds no command line. A quoted PCR 8 of zero that no event extends,
+as on systemd-boot or a UKI, skips the check.
+
+Exporting a policy
+==================
+
+``lota-agent --export-policy`` writes a policy of the host it runs on to
+standard output (``src/agent/policy.c``):
+
+.. code-block:: sh
+
+   sudo lota-agent --export-policy > fleet.yaml
+
+The file holds:
+
+* ``name: <hostname>-baseline`` and a description naming the host;
+* ``pcrs`` with PCR 0, 1, 4, 7 and 11 as the TPM reads them now;
+* ``kernel_hashes`` with the image digest from the PCR 9 event log, or an
+  empty list and a comment saying why there is none;
+* ``agent_hashes`` with the SHA-256 of the running agent binary;
+* each ``require_*`` key except ``require_cmdline_policy``, set to what the
+  host has now. ``require_enforce`` is the mode the configuration or
+  ``--mode`` sets.
+
+It writes no ``tenant``, ``profile``, ``require_cmdline_policy`` or
+``cmdline_deny``. The pins describe this host's boot chain: a host that
+differs, or this one after a firmware or boot loader update, is refused.
+Review the file before loading it.
+
+Choosing the pins
 =================
 
-This directory contains PCR (Platform Configuration Register) policy templates
-for the LOTA verifier.
-
-Policy Files
-------------
-
-=================== ===================================================
-File                Purpose
-=================== ===================================================
-``testing.yaml``    Minimal policy for development/testing environments
-``production.yaml`` Template for production deployments
-``strict.yaml``     High-security policy for competitive gaming
-=================== ===================================================
-
-Creating Custom Policies
-------------------------
-
-.. _1-export-baseline-from-target-system:
-
-1. Export Baseline from Target System
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Run the LOTA agent on the target system to generate a complete policy:
-
-.. code:: bash
-
-   # Export full policy YAML to file
-   sudo lota-agent --export-policy > my-policy.yaml
-
-   # Or redirect diagnostic output
-   sudo lota-agent --export-policy 2>/dev/null > my-policy.yaml
-
-.. _2-customize-policy:
-
-2. Customize Policy
-~~~~~~~~~~~~~~~~~~~
-
-The exported policy is ready to use as-is. Optionally edit to:
-
-- Remove PCR values you don't want to enforce
-- Adjust security requirements
-- Change the policy name
-
-.. code:: yaml
-
-   name: my-production
-   description: "My production environment policy"
-
-   pcrs:
-     0: "abc123..." # From baseline export
-     1: "..." # From baseline export
-     7: "def456..." # Secure Boot anchor, from baseline export
-     8: "..." # Kernel cmdline (GRUB); PCR 12 on systemd-boot/UKI
-
-   # kernel_hashes is advisory only (self-reported, spoofable) - leave empty
-   # and trust the kernel via PCR 7 + PCR 8. See "Kernel trust" below.
-   kernel_hashes: []
-
-   agent_hashes:
-     - "sha256_hash_of_lota_agent"
-
-   require_iommu: true
-   require_enforce: true
-
-.. _3-deploy-policy:
-
-3. Deploy Policy
-~~~~~~~~~~~~~~~~
-
-.. code:: bash
-
-   # Start verifier with custom policy
-   lota-verifier --policy /path/to/my-policy.yaml
-
-``--policy`` may be repeated. The first document given is the active policy,
-the one every client whose tenant binds no policy of its own is verified
-against; each further document must bind a tenant with a ``tenant:`` key, and
-the verifier warns at startup about a policy that is neither active nor bound,
-because no client can reach it. Two documents may not share a ``name:``: the
-second would replace the first, silently changing what the fleet verifies
-against when the name is the active one.
-
-PCR Meanings (SHA-256 Bank)
----------------------------
-
-===== =========== =========================================
-PCR   Measured By Description
-===== =========== =========================================
-0     UEFI        SRTM - firmware code measurements
-1     UEFI        UEFI configuration data
-2     UEFI        Option ROM code
-3     UEFI        Option ROM configuration
-4     UEFI        Boot loader code (GRUB/systemd-boot)
-5     UEFI        GPT/MBR partition table
-6     UEFI        Resume from S4/S5 state transitions
-7     UEFI        Secure Boot state (policies/certificates)
-8     OS          Kernel command line (grub2 measured boot)
-9     OS          Bootloader-loaded files (kernel/initrd)
-10    OS          Linux IMA measurements (if enabled)
-11-13 OS          Application-defined
-14    LOTA        Agent self-measurement
-15    OS          Reserved
-16-23 Apps        Application use
-===== =========== =========================================
-
-What a pinned register reports when it goes stale
--------------------------------------------------
-
-The verifier compares every register in the ``pcrs:`` map and reports all of
-the mismatches in one failure, ordered by index and separated by ``; `` (one
-line; the digests are full 64-character hex, abbreviated here)::
-
-    PCR 8 mismatch: got 91bfde0f..., expected cf26d0a2...;
-    PCR 9 mismatch: got 4bb322db..., expected 7e010772...
-
-The text is the same on every round for the same host state, so a fleet
-dedupes one stale policy as one incident and an operator sees the whole delta
-without re-attesting. A register that matches is not named. How many moved is
-the first clue about what happened: several at once is a reboot into a
-different boot chain, one alone is a narrower change such as a cmdline edit.
-
-Three failures in the same comparison are faults in the policy file rather
-than in the host, keep their own wording, and stop the comparison because no
-report can answer them: an index outside 0-23, a register the client's quote
-did not carry (``PCR 8 not included in quote``), and an expected value that is
-not hex.
-
-What verdict a refusal carries
-------------------------------
-
-The host receives a verdict code and no detail: the verifier's log is on the
-publisher's server, and a player has no route to it at all. So a refusal says
-which kind of thing failed, because the kinds take different investigations.
-
-``pcr_fail``
-    a register in ``pcrs:`` holds another value, the quote did not carry it,
-    or the policy file is wrong about it.
-``integrity_mismatch``
-    a pinned measurement moved: the agent binary (outside ``agent_hashes`` or
-    off its baseline), the PCR 14 boot commitment, or the firmware/Secure Boot
-    baseline. The code does not say which, so the agent's message names all
-    three.
-``iommu_fail``
-    ``require_iommu`` on a host with no DMA remapping, read from the domain
-    type of each IOMMU group: ``DMA`` or ``DMA-FQ`` is translated,
-    ``identity`` is passthrough, and no groups means no IOMMU driver. A host
-    with every device in an identity domain (``iommu=pt``, or firmware that
-    hands out passthrough) is refused: nothing on it is remapped.
-``secureboot_required``, ``lockdown_required``, ``module_sig_required``,
-``enforce_required``, ``ima_appraisal_required``, ``kernel_image_required``,
-``cmdline_required``
-    one verdict per host requirement: ``require_secureboot``,
-    ``require_lockdown``, ``require_module_sig``, ``require_enforce``,
-    ``require_ima_appraisal``, ``kernel_hashes`` and the cmdline denylist, in
-    that order. Each has its own remedy, which the host is shown.
-``policy_requirement``
-    a requirement none of those covers, such as a host whose firmware
-    baseline nobody enrolled.
-
-``pcr_fail`` sends an operator to the boot chain and the event log, which is
-where the fix is for exactly one of these. A refusal nobody classified stays
-``pcr_fail``, because it is the verdict that claims least about a cause.
-
-Two refusals that are not the host's doing
-------------------------------------------
-
-A baseline store that cannot pin firmware PCRs is a verifier fault and
-carries ``internal_error``. A first-use host whose boot baseline nobody
-enrolled carries ``policy_requirement``. Neither is ``integrity_mismatch``,
-because the host did nothing wrong.
-
-Security Requirements
----------------------
-
-+----------------------------+--------------------------+----------------------+
-| Requirement                | Description              | Typical Default      |
-+============================+==========================+======================+
-| ``require_iommu``          | DMA protection via       | ``true``             |
-|                            | VT-d/AMD-Vi              |                      |
-+----------------------------+--------------------------+----------------------+
-| ``require_enforce``        | LOTA enforcement daemon  | ``true``             |
-|                            | running in enforce mode  |                      |
-|                            | with its LSM loaded      |                      |
-+----------------------------+--------------------------+----------------------+
-| ``require_module_sig``     | Kernel module signature  | Distro-dependent     |
-|                            | enforcement              |                      |
-+----------------------------+--------------------------+----------------------+
-| ``require_secureboot``     | Secure Boot enabled      | ``true``             |
-|                            | (event-log enforced)     |                      |
-+----------------------------+--------------------------+----------------------+
-| ``require_lockdown``       | Kernel lockdown mode     | ``false`` (optional) |
-|                            | active                   |                      |
-+----------------------------+--------------------------+----------------------+
-| ``require_cmdline_policy`` | Kernel cmdline denylist  | ``true``             |
-|                            | (event-log enforced)     |                      |
-+----------------------------+--------------------------+----------------------+
-| ``require_ima_appraisal``  | Kernel appraises the     | ``false`` (needs     |
-|                            | host's executables       | signed images)       |
-+----------------------------+--------------------------+----------------------+
-| ``cmdline_deny``           | Operator extensions to   | ``[]``               |
-|                            | the cmdline denylist     |                      |
-+----------------------------+--------------------------+----------------------+
-
-``require_ima_appraisal`` is off in every template but ``strict.yaml``.
-IMA appraisal needs signatures on the files and a certificate on the ``.ima``
-keyring, supplied by the distribution or by an image pipeline; a stock host has
-neither, and an IMA rule cannot name a path, so a rule loaded over such a host
-refuses its own executables at the next boot. The agent therefore starts on
-a host without the exec appraisal it counts (an ``appraise`` rule on
-``BPRM_CHECK`` or one without ``func=``), says so in its log, and reports the
-state -- ``LOTA_FLAG_KERNEL_APPRAISAL`` in the token and ``FlagIMAAppraisal``
-in the attestation report -- which is what this knob turns into a refusal.
-Turn it on for a fleet whose images are signed; leave it off for one that runs
-stock distribution hosts, where it would refuse every client.
-
-Before a strict deployment
---------------------------
-
-``strict.yaml`` demands IOMMU, a MAC in enforcing mode, module signatures,
-Secure Boot and kernel lockdown of every client. Check a host before enrolling
-it::
-
-   sudo lota-agent --export-policy | grep '^require_'
-
-``require_iommu``, ``require_module_sig``, ``require_secureboot`` and
-``require_lockdown`` must read ``true``. ``require_enforce`` is the
-enforcement daemon's mode, not the MAC's. The report carries it only while
-``lota-agent.service`` answers on its socket with the LSM loaded, so a host
-whose daemon is stopped fails it. Check the MAC with ``getenforce``
-(SELinux) or ``aa-status`` (AppArmor).
-
-.. _kernel-trust-event-log-secure-boot--cmdline-policy:
-
-Kernel trust: event-log Secure Boot + cmdline policy
-----------------------------------------------------
-
-Raw PCR pins (the ``pcrs:`` map) authenticate one firmware/bootloader
-configuration and suit a homogeneous enterprise fleet. They cannot serve a
-diverse single-machine population: PCR 7 differs per OEM key set and drifts on
-dbx updates, and PCR 8 hashes the per-machine ``root=UUID``. The two knobs
-below are the machine-independent alternative. Both read the TPM event log the
-agent already ships and trust an extracted value only after the log replay
-reproduces the TPM-quoted value of the PCR it came from, so a client cannot
-fabricate or strip the underlying events. ``require_secureboot`` also unlocks
-the diverse-fleet enrollment path: see "Boot enrollment ceremony" below for how
-it lifts the per-machine PCR 0/1/7 pinning requirement.
-
-``require_secureboot`` requires the firmware-measured ``SecureBoot`` EFI
-variable (PCR 7, before the firmware's separator) to be present and enabled.
-The agent-reported Secure Boot header flag is telemetry only; a compromised
-kernel sets it freely. This check is bootloader-independent. Players must have
-Secure Boot enabled in firmware setup; any kernel signed for Secure Boot
-(including self-signed via MOK) passes, so custom performance kernels stay
-usable.
-
-``require_cmdline_policy`` requires the GRUB-measured kernel command line (PCR
-8, ``EV_IPL``) to be free of denylisted parameters. The builtin denylist
-rejects parameters that defeat the signed kernel's integrity guarantees and
-never appear on a stock distribution command line:
-
-+--------------------------------------+--------------------------------------+
-| Entry                                | Why                                  |
-+======================================+======================================+
-| ``init=`` / ``rdinit=``              | arbitrary userspace entry point      |
-+--------------------------------------+--------------------------------------+
-| ``rd.break``                         | dracut pre-pivot root shell          |
-+--------------------------------------+--------------------------------------+
-| ``lockdown=none``                    | disables kernel lockdown             |
-+--------------------------------------+--------------------------------------+
-| ``module.sig_enforce=0``             | unsigned kernel modules              |
-+--------------------------------------+--------------------------------------+
-| ``selinux=0`` / ``enforcing=0`` /    | LSM off                              |
-| ``apparmor=0`` / ``security=none``   |                                      |
-+--------------------------------------+--------------------------------------+
-| ``systemd.debug_shell``              | root shell on tty9                   |
-+--------------------------------------+--------------------------------------+
-| ``kgdboc=``                          | kernel debugger console (live memory |
-|                                      | patch)                               |
-+--------------------------------------+--------------------------------------+
-
-Per-machine parameters (``root=UUID``, ``rootflags``, cosmetics) are ignored,
-so one policy covers every machine. ``cmdline_deny`` extends the list per
-fleet. Matching normalizes the kernel's ``-``/``_`` parameter-name equivalence.
-
-Bootloader coverage: GRUB measures the command line into PCR 8 and is fully
-checked. systemd-boot/UKI hosts measure the command line into PCR 12 via
-sd-stub and skip the cmdline check (the quoted PCR 8 must be zero - a non-zero
-PCR 8 with no measured cmdline events is treated as a truncated log and
-rejected); ``require_secureboot`` applies everywhere regardless of bootloader.
-
-Boot enrollment ceremony
-------------------------
-
-The production verifier defaults to
-``VerifierConfig.RequireBootEnrollment = true``. Under that default the
-verifier rejects any client whose PCR 0, PCR 1, or PCR 7 cannot be matched
-against a known-good baseline. Three paths satisfy that contract:
-
-1. **Pinned policy (homogeneous fleet).** The operator commits real PCR 0/1/7
-   values into the YAML policy (production.yaml or strict.yaml) before the
-   first attestation. New clients are accepted only when their live PCR 0/1/7
-   match those pins. production.yaml ships its ``pcrs:`` block commented out;
-   uncomment and fill it to pick this path.
-
-2. **Out-of-band boot enrollment.** The operator runs
-   ``lota-agent --export-policy`` on a single known-good host, signs the
-   resulting policy, and ships it to the fleet; subsequent clients inherit the
-   PCR 0/1/7 baseline from the signed policy without contacting the verifier
-   first.
-
-3. **Event-log-anchored enrollment (diverse fleet).** Raw PCR 0/1/7 differ per
-   machine, so a diverse single-machine population (the gamer deployment) can
-   satisfy neither path above. When the active policy sets
-   ``require_secureboot: true`` and the report's quote-authenticated event log
-   proves Secure Boot enabled, the verifier accepts the first attestation and
-   TOFU-establishes the per-device PCR 0/1/7 row without any extra switch. This
-   is a production-supported mode, not a weakened test path: the
-   boot-with-Secure-Boot-off cheat is already rejected machine-independently by
-   the event-log gate, so the TOFU row serves as a per-device
-   rollback/consistency anchor (later drift in PCR 0/1/7 still rejects), not as
-   the firmware trust control. The verifier logs a security-level line on every
-   such first-use accept. Residual trust: firmware tampering that keeps Secure
-   Boot enabled and reaches the device before its first attestation is not
-   caught at first use; pair with ``require_cmdline_policy`` (production
-   default) for the kernel command line, and see Documentation/security/threat-model.rst for the
-   full residual-risk statement.
-
-   Because the per-device PCR 0/1/7 row is a rollback anchor, a later
-   *legitimate* firmware update (BIOS) also shifts PCR 0/1 and would reject the
-   device until an operator clears its row. Declare ``profile: consumer`` in
-   the policy to let the verifier re-pin the baseline itself when
-   the drift preserves the Secure Boot root of trust (PK/KEK/db unchanged,
-   ``dbx`` append-only, Secure Boot still on, firmware version not rolled
-   back); a host with no ESRT firmware version takes a Low-Firmware-Assurance
-   path. The LFA re-anchor also applies automatically -- the player is never
-   blocked -- but flags the device for post-fact operator review
-   (``GET /api/v1/reanchor/review``, cleared with
-   ``POST /api/v1/clients/{id}/reanchor-review-ack``). See
-   `Production Bringup <../Documentation/admin-guide/bringup/index.rst>`_.
-   This is a diverse-fleet convenience only; do not enable it where raw PCR 0/1/7 are pinned in policy.
-
-Fleet profile
--------------
-
-``profile`` names the kind of fleet a policy governs, and it is what decides
-whether a firmware drift stops the device or re-anchors itself.
-
-===================== ==========================================================
-Value                 Firmware/Secure Boot drift
-===================== ==========================================================
-``enterprise``        Refused until an operator clears the row. The default,
-                      and what an unset ``profile`` means, so a policy written
-                      before profiles existed keeps the stricter handling.
-``consumer``          Re-anchored by the verifier itself when the drift
-                      preserves the Secure Boot root of trust.
-===================== ==========================================================
-
-The distinction is who owns the machine. On a fleet you own, an unexplained
-PCR 0/1/7 change is a finding and stopping is right. On machines you do not
-own, the same change is a player installing a BIOS update, and stopping means
-a game that refuses to start for a reason nobody on either side chose. **A
-diverse consumer fleet must declare** ``profile: consumer``; left on the
-default, every firmware update turns into a support ticket the player cannot
-resolve.
-
-The setting lives in the policy rather than on the command line because it
-describes the fleet, not the deployment, and one verifier can serve several
-tenants and therefore several fleets. ``--enable-self-service-reanchor``
-remains as an override in both directions for an operator who has to
-contradict a policy they cannot immediately re-sign; left unset, each policy
-decides for itself. An unknown value is refused at load rather than read as
-"not consumer", so a typo cannot silently leave a diverse fleet on the
-enterprise handling. The refusal names the value and the two the verifier
-accepts, and it applies to a policy file and a programmatically added policy
-alike: both register through one validation set.
-
-Whatever turns it on, the discriminator still requires ``require_secureboot``
-and a quote-authenticated Secure Boot anchor before anything moves.
-
-A short-lived ``--allow-tofu-boot-baseline`` switch on the verifier exists for
-closed test fixtures. It explicitly weakens the contract above by accepting
-whatever PCR 0/1/7 the first attestation reports regardless of policy or
-event-log state, and the operator must turn it back off before the deployment
-is considered production. A diverse fleet does not need it - path 3 covers that
-case with the Secure Boot anchor intact.
-
-The switch says so twice in the log: a warning naming it once at startup, and
-a security-level line on every first-use accept it allows, carrying
-``allowed_by=--allow-tofu-boot-baseline``. Every first-use pin is recorded that
-way whatever authenticated it -- the policy pins, an out-of-band baseline row,
-the event-log anchor or this switch -- so the roads are told apart by the
-``allowed_by`` field on one record rather than by its level, and a fleet
-alerting on security lines sees the unauthenticated accepts along with the
-rest.
-
-PCR 14 (LOTA agent self-measurement) is not TOFU. It is derived
-deterministically from the boot-commitment chain
-(``tpm_boot_commitment_digest``) and the verifier rederives the same value
-during signature verification; an agent rebuild that legitimately changes the
-self-measurement is handled by updating the signed policy rather than by
-trusting whatever value the next attestation happens to report.
-
-Kernel trust
-------------
-
-Kernel is bound through the TPM-rooted boot measurements, not through a hash
-the agent reports about itself:
-
-- **PCR 7 (Secure Boot) is the anchor.** It reflects the signing chain that
-  authorized the kernel, so a kernel signed by a trusted key keeps the same PCR
-  7 across updates. Pinning it means "only a trusted-signed kernel booted" with
-  no per-kernel maintenance: the distribution re-signs each kernel with the
-  same key. This is the recommended baseline for every host.
-- **PCR 8 (kernel command line) is recommended.** On GRUB the cmdline and boot
-  config are measured into PCR 8; pinning it rejects a correctly signed kernel
-  booted with a sabotaged command line (``init=``, ``lockdown=none``,
-  ``module.sig_enforce=0``). The cmdline rarely changes, so this stays
-  low-maintenance. On systemd-boot/UKI the cmdline is measured into PCR 12 -
-  pin 12 there instead of 8.
-- **kernel_hashes is advisory only, not a trust control.** The value an
-  ``--export-policy`` run writes there is the bootloader's own measurement of
-  the kernel image, taken from the event log the host booted with (the PCR 9
-  ``EV_IPL`` record naming ``vmlinuz``), and the exported document names the
-  image and the kernel release beside it. It identifies the kernel rather than
-  the boot -- but it has to be replaced at every kernel update, which is the
-  treadmill PCR 7 exists to avoid. Leave
-  the list empty and rely on PCR 7 + PCR 8; a match is a cross-check, never the
-  boundary.
-
-  A register is never written there. PCR 9 aggregates every file the
-  bootloader read, ``grubenv`` among them, so it answers for a whole boot
-  -- and the gate does not compare it, so a policy pinning it is refused
-  by the host it was exported from, as a kernel mismatch. Where the log
-  offers no kernel image, or cannot be parsed, the export writes
-  ``kernel_hashes: []`` and a comment saying which of the two happened.
-
-  The gate reads the same one value. A host that records no kernel image, or
-  whose PCR 9 the quote does not cover, is refused with that as the reason --
-  the pin cannot be evaluated there, and the answer is to quote PCR 9 or to
-  stop pinning the kernel.
-
-  No configuration key selects which kernel that digest describes.
-  ``kernel_path`` tells the agent where the kernel image lives on a
-  distribution that ships no ``/boot/vmlinuz-<release>``, which is what
-  ``--test-tpm`` hashes; it has no effect on an export. A policy for a kernel
-  is exported from a host booted into it.
-- **Exact-image (PCR 4/9) and a kernel-version floor are optional and not in
-  the default templates.** Pinning the exact kernel image or initrd (PCR 4/9)
-  adds anti-rollback at the cost of a per-kernel hash treadmill; a sound
-  low-maintenance version floor needs the measured UKI ``.osrel`` and is
-  revisited when systemd-boot/UKI is in scope. A kernel version read from
-  userspace is spoofable and must never gate attestation.
-
-Secure Boot must be on for PCR 7 to mean anything; that is the one firmware
-setting a host needs for kernel trust to hold.
-
-Updating Policies
------------------
-
-When software is updated:
-
-1. PCR 7 stays stable across kernel updates (same signing key), so a signed
-   kernel upgrade needs no policy change. Do not maintain per-kernel
-   ``kernel_hashes`` - leave them empty (see "Kernel trust").
-2. Update ``agent_hashes`` when the LOTA agent binary is upgraded, and add the
-   incoming hash **before** the fleet updates. The list is what authorises a
-   client to move its pinned baseline: a client reporting a hash the list
-   names re-pins itself and keeps attesting, while a client reporting a hash
-   it does not name is refused. Keep the outgoing hash listed until the fleet
-   has moved, so hosts on either side of the rollout verify.
-3. PCR 0/1/7 typically only change with firmware or Secure Boot key updates;
-   PCR 8 only when the kernel command line changes.
-4. Clear the TOFU baseline only when the agent hash changes to a build the
-   policy does not list - a listed build needs no operator action. A client
-   re-pins at most once per 24 hours, so a host that has just re-pinned and
-   then changes again within that window is refused until the window elapses.
-   That refusal names itself, and is not the same event as an unlisted build::
-
-       agent_hash re-pin refused by the per-client interval, not by the allow-list
-         reported_agent_hash=... last_repin_at=... interval_elapses_at=...
-
-   Wait for the stated time, or re-anchor that client to accept the build now.
-   A refusal reading ``agent hash not in allowed list`` is the other case: the
-   build is not in the policy, and re-anchoring would accept a binary nobody
-   listed.
-
-.. code:: bash
-
-   # Re-export policy after updates
-   sudo lota-agent --export-policy > updated-policy.yaml
+Identical machines
+  Pin PCR 0, 1 and 7 from a reference host. A machine whose firmware or
+  Secure Boot state differs is refused on its first round, and the pins also
+  give it its boot baseline. Keep ``profile`` at ``enterprise``: a pinned
+  PCR fails the policy check before any re-anchor is tried.
+
+Machines with their own firmware each
+  Pin no PCR. Set ``require_secureboot`` and ``require_cmdline_policy``,
+  which read the event log and fit every machine, list the agent builds in
+  ``agent_hashes``, and set ``profile: consumer`` so a firmware update moves
+  the baseline. Each machine's first round pins its own PCR 0, 1 and 7.
+
+``kernel_hashes`` binds the exact kernel image and needs an entry per kernel
+update. PCR 7 changes when the Secure Boot keys or state do, and when shim
+measures a new SBAT level or MOK list, as a shim update can. A kernel signed
+by the same key leaves it as it is.
+
+No template pins PCR 8. GRUB measures there the commands it runs, whose
+arguments carry values from ``grubenv``, so PCR 8 differs between healthy
+boots. ``require_cmdline_policy`` checks the command line from its event log
+instead.
+
+Signing
+=======
+
+With ``--policy-pubkey`` the verifier loads only a policy signed by that key
+(`verifier command line <../Documentation/verifier/command-line.rst>`__). The
+agent makes the key and the signature (`agent command line
+<../Documentation/agent/command-line.rst>`__):
+
+.. code-block:: sh
+
+   lota-agent --gen-signing-key policy
+   lota-agent --sign-policy fleet.yaml --signing-key policy.key
+   lota-verifier --policy fleet.yaml --policy-pubkey policy.pub ...
+
+``--sign-policy`` writes ``fleet.yaml.sig`` beside the file. The signature
+covers every byte, comments and ``tenant`` included, so any edit needs a new
+signature.
+
+Updating
+========
+
+Add a new agent build to ``agent_hashes`` before hosts boot it and keep the
+old one until the fleet has moved (`agent-update.rst
+<../Documentation/admin-guide/agent-update.rst>`__). Add a new kernel image to
+``kernel_hashes`` the same way, when the list is in use. Then sign the file
+again and restart each verifier instance.
