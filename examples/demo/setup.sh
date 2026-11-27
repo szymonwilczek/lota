@@ -310,7 +310,9 @@ init_tmp() {
 	TCTI="swtpm:host=127.0.0.1,port=$TPM_PORT"
 
 	mkdir -p "$LOG_DIR" "$TPM_DIR" "$RUNTIME_DIR" "$AIK_DIR"
-	trap cleanup EXIT INT TERM
+	trap cleanup EXIT
+	trap 'cleanup; exit 130' INT
+	trap 'cleanup; exit 143' TERM
 }
 
 build_all() {
@@ -366,11 +368,13 @@ start_agent() {
 	local log_file
 
 	log "Step 4/7: start lota-agent against swtpm"
+	run_or_print install -m 0600 /dev/null "$TMP_DIR/lota.conf"
 	start_bg agent env \
 		LOTA_TCTI="$TCTI" \
 		LOTA_AIK_META_PATH="$AIK_DIR/aik_meta.dat" \
 		XDG_RUNTIME_DIR="$RUNTIME_DIR" \
-		"$BUILD_DIR/lota-agent" --test-signed
+		"$BUILD_DIR/lota-agent" --config "$TMP_DIR/lota.conf" \
+		--test-signed
 
 	if [ "$DRY_RUN" -eq 1 ]; then
 		return
@@ -466,6 +470,7 @@ launch_game() {
 	local user_runtime
 	local -a game_env
 	local -a cmd
+	local v
 
 	log "Step 7/7: launch trust_pong"
 	note "close the window or press Esc/Q to tear the demo down"
@@ -476,6 +481,9 @@ launch_game() {
 		"XAUTHORITY=${XAUTHORITY:-}"
 		"DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-}"
 	)
+	for v in $(compgen -e SDL_); do
+		game_env+=("$v=${!v}")
+	done
 
 	demo_user="${SUDO_USER:-}"
 	if [ -n "$demo_user" ] && [ "$demo_user" != "root" ] &&

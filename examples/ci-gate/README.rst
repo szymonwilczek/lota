@@ -69,7 +69,8 @@ lota-ci-attest
      - CA that verifies an ``https://`` gate.
    * - ``-t``, ``--timeout SEC``
      - 15
-     - Limit of each request to the gate.
+     - Limit of each request to the gate, a whole number of seconds
+       above 0.
    * - ``-h``, ``--help``
      -
      - Print the usage to stderr and exit 0.
@@ -104,8 +105,9 @@ Exit codes
    * - 0
      - The secret is in ``--out``; ``--help``.
    * - 2
-     - An unknown option, an option without its value, or no ``--gate``
-       or ``--out``. The usage follows on stderr.
+     - An unknown option, an option without its value, a bad
+       ``--timeout``, or no ``--gate`` or ``--out``. The usage follows on
+       stderr.
    * - 3
      - ``ci-attest: no LOTA agent on this host; cannot attest``.
    * - 4
@@ -165,8 +167,8 @@ Options take one dash or two:
      - How long an issued challenge can be spent.
    * - ``-max-token-life DURATION``
      - ``15m``
-     - Refuse a token whose remaining validity exceeds this; 0 disables
-       the check.
+     - Refuse a token whose remaining validity exceeds this, or that
+       never expires; 0 disables the check.
    * - ``-tls-cert PATH``, ``-tls-key PATH``
      - none
      - PEM certificate and key; either one makes the gate serve HTTPS,
@@ -224,7 +226,8 @@ The body is ``{"nonce": "<base64>", "token": "<base64>"}`` of at most
    * - The token is base64 and not empty.
      - ``token is not base64-encoded``
    * - The gate holds the nonce: it issued it, it has not been spent,
-       and no ``POST /nonce`` came after it expired.
+       and no ``POST /nonce`` came once it had been expired for
+       ``-nonce-ttl``.
      - ``nonce was not issued by this gate``
    * - The nonce has not expired.
      - ``nonce expired before the token arrived``
@@ -236,6 +239,8 @@ The body is ``{"nonce": "<base64>", "token": "<base64>"}`` of at most
      - ``verified token carries a different nonce``
    * - The token carries every flag of ``-require``.
      - ``host is missing required state: <flags>``
+   * - The token expires, unless ``-max-token-life`` is 0.
+     - ``token never expires; -max-token-life 0 accepts it``
    * - The validity left is at most ``-max-token-life``.
      - ``token outlives the gate's window: <left> remaining, limit
        <limit>``
@@ -248,7 +253,9 @@ leaves the nonce unspent. ``VerifyToken()`` and its errors are described
 in `the Go SDK <../../Documentation/userspace-api/go-sdk.rst>`_. It refuses
 a token that expires more than 360 seconds ahead of the clock of the
 gate, so a ``-max-token-life`` of 6 minutes or more refuses no token it
-accepted. A token whose expiry is 0 passes the check at any value.
+accepted that expires. The agent issues a token whose expiry is 0, one
+that never expires, for a publisher with no verdict; the gate accepts it
+only with ``-max-token-life 0``.
 
 The gate trusts one AIK; an enrolled fleet is checked by a verifier, as
 in `enrollment/ <../enrollment/README.rst>`_.
@@ -270,10 +277,9 @@ It works in ``/tmp/lota-ci-gate.XXXXXX`` and prints one line per step:
 1. ``swtpm`` on TCP port ``TPM_PORT`` (42521), its control channel on the
    next port.
 2. ``lota-agent --test-signed`` under ``systemd-socket-activate`` on
-   ``lota.sock`` in the run directory, with the AIK metadata there too.
-   It names no configuration file, so the agent reads
-   ``/etc/lota/lota.conf`` when that exists and, when it cannot read it,
-   goes on with the defaults.
+   ``lota.sock`` in the run directory, with the AIK metadata there too,
+   and an empty ``lota.conf`` there as its configuration, so the
+   ``/etc/lota/lota.conf`` of the host does not apply.
 3. One run of the step, with no gate up, starts the agent and provisions
    the AIK, whose public key ``tpm2_readpublic`` then exports from handle
    ``0x81010002``.
@@ -291,12 +297,11 @@ The run ends with:
 
    PASS: the gate releases to an attested host and refuses everything else
 
-A missing binary, a missing command other than
-``openssl``, or a failed step prints a line starting ``missing`` or
-``FAIL:``, plus the log of the gate when step 4 is refused, and exits 1.
-A ``swtpm_setup`` that fails ends the script with its own exit status and
-no such line.
-A missing ``openssl`` ends step 5 with no line of its own.
+A missing binary, a missing command or a failed step prints a line
+starting ``missing`` or ``FAIL:``, plus the log of the gate when step 4 is
+refused, and exits 1. A ``swtpm_setup`` that fails prints its log before
+``FAIL: swtpm_setup failed``; any other command that fails prints
+``FAIL: line <n>: <command> exited <status>``.
 
 ``LOTA_BUILD_DIR`` (``build``), ``BIN`` (the build directory) and
 ``EXAMPLES_BIN`` (its ``examples/``) say where the binaries are.

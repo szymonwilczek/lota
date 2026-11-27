@@ -76,6 +76,7 @@ static struct {
 	pid_t init_pid;
 	struct lota_status last_status; /* the last one the agent gave */
 	atomic_int have_status;
+	atomic_long status_written; /* time of the last status write */
 	atomic_int offline_errno; /* the refusal already reported, negated */
 	atomic_int publisher_errno; /* the publisher refusal already reported */
 	atomic_int token_errno; /* the token refusal already reported */
@@ -674,7 +675,7 @@ static int write_status_payload(const struct lota_status *status, int offline)
 	char object[sizeof(g_refusal->object)] = "";
 	char buf[1024];
 	time_t at = 0;
-	int len;
+	int len, ret;
 
 	len = snprintf(buf, sizeof(buf),
 		       "LOTA_ATTESTED=%d\n"
@@ -712,7 +713,10 @@ static int write_status_payload(const struct lota_status *status, int offline)
 		len += add;
 	}
 
-	return atomic_write(g_hook.status_path, buf, (size_t)len);
+	ret = atomic_write(g_hook.status_path, buf, (size_t)len);
+	if (ret == 0)
+		atomic_store(&g_hook.status_written, (long)time(NULL));
+	return ret;
 }
 
 static int write_status(const struct lota_status *status)
@@ -755,6 +759,18 @@ static void hook_publish_state(void)
 	}
 	if (ret < 0)
 		LOG_DBG("write_status: %s", strerror(-ret));
+}
+
+/*
+ * Called each refresh-thread turn: a status file written refresh_sec ago
+ * or earlier is rewritten, so while the hook runs and the write succeeds
+ * LOTA_UPDATED lags by at most refresh_sec plus one turn's wait.
+ */
+static void hook_status_heartbeat(void)
+{
+	if (time(NULL) - atomic_load(&g_hook.status_written) >=
+	    g_hook.refresh_sec)
+		hook_publish_state();
 }
 
 /* the token goes, and the evidence it is checked with goes with it */
@@ -838,7 +854,9 @@ static const char *LOTA_UNUSED hook_token_reason(int err)
 	case LOTA_ERR_TPM_LOCKED:
 		return "the TPM is in lockout and signs nothing until it recovers";
 	case LOTA_ERR_RATE_LIMITED:
-		return "the agent is issuing tokens faster than it allows";
+		return "tokens are requested faster than the agent issues them"
+		       " -- for this user or this session; the next refresh"
+		       " asks again";
 	default:
 		return NULL;
 	}
@@ -1227,7 +1245,8 @@ static void hook_report_refusal(uint64_t since_ns)
 	hook_publish_state();
 	LOG_ERR("%s did not load while this process is in LOTA's protected "
 		"set -- a protected process may map only objects the agent "
-		"allows, so cover this one (fs-verity digest or trusted_libs)",
+		"allows, so cover this one with an allow_verity or trust_lib "
+		"entry in lota.conf",
 		object);
 }
 
@@ -1380,6 +1399,7 @@ static void *refresh_thread_fn(void *arg)
 	subscribed = false;
 
 	while (g_hook.running) {
+		hook_status_heartbeat();
 		if (!g_hook.client) {
 			g_hook.client = hook_connect();
 			if (!g_hook.client) {

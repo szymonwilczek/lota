@@ -58,11 +58,15 @@ fail() {
 	echo "FAIL: $*" >&2
 	exit 1
 }
+trap 'fail "line $LINENO: $BASH_COMMAND exited $?"' ERR
 
 echo "== 1/5 start a throwaway swTPM =="
 mkdir -p "$RUN_DIR/tpm"
 swtpm_setup --tpm2 --tpmstate "$RUN_DIR/tpm" --createek --decryption \
-	--overwrite >"$RUN_DIR/swtpm_setup.log" 2>&1
+	--overwrite >"$RUN_DIR/swtpm_setup.log" 2>&1 || {
+	cat "$RUN_DIR/swtpm_setup.log" >&2
+	fail "swtpm_setup failed"
+}
 swtpm socket --tpm2 --tpmstate "dir=$RUN_DIR/tpm" \
 	--server "type=tcp,port=$TPM_PORT" \
 	--ctrl "type=tcp,port=$((TPM_PORT + 1))" \
@@ -114,11 +118,10 @@ echo "== 4/5 an attested host is TRUSTED =="
 SERVER_PID=$!
 sleep 1
 
-set +e
+rc=0
 "$producer" --server "http://$SERVER_ADDR/heartbeat" \
-	--socket "$RUN_DIR/lota.sock" --once >"$RUN_DIR/trusted.log" 2>&1
-rc=$?
-set -e
+	--socket "$RUN_DIR/lota.sock" --once >"$RUN_DIR/trusted.log" 2>&1 ||
+	rc=$?
 
 # --once exits 0 on TRUSTED and 1 on UNTRUSTED
 if [ "$rc" -ne 0 ]; then
@@ -129,12 +132,11 @@ echo "   heartbeat verified against a real TPM quote"
 
 echo "== 5/5 an altered token is UNTRUSTED =="
 touch "$RUN_DIR/tamper"
-set +e
+rc=0
 "$producer" --server "http://$SERVER_ADDR/heartbeat" \
 	--socket "$RUN_DIR/lota.sock" --once \
-	--tamper-marker "$RUN_DIR/tamper" >"$RUN_DIR/tampered.log" 2>&1
-rc=$?
-set -e
+	--tamper-marker "$RUN_DIR/tamper" >"$RUN_DIR/tampered.log" 2>&1 ||
+	rc=$?
 
 [ "$rc" -eq 1 ] || fail "expected UNTRUSTED (exit 1), got $rc"
 grep -qi "untrusted" "$RUN_DIR/tampered.log" ||

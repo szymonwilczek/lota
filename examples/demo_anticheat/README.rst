@@ -74,10 +74,6 @@ Running
    * - ``-P``, ``--protect-self``
      -
      - Put the process in the protected set of the agent first.
-   * - ``-F``, ``--require-full-image``
-     -
-     - Add ``LOTA_FLAG_IMAGE_FULLY_MEASURED`` to ``required_flags`` of the
-       session.
    * - ``-T``, ``--tamper-marker PATH``
      - none
      - Corrupt each heartbeat sent while ``PATH`` exists.
@@ -94,9 +90,11 @@ Running
      -
      - Print the usage to stderr and exit 0.
 
-``LOTA_DEMO_INTERVAL_SEC`` sets the interval when it is 1 to 3599 and is
-ignored otherwise; ``LOTA_DEMO_TAMPER_MARKER`` sets the marker. Options
-take precedence over both.
+``LOTA_DEMO_INTERVAL_SEC`` sets the interval, 1 to 3599 like
+``--interval``; any other value, ``5s`` among them, ends the producer with
+``bad LOTA_DEMO_INTERVAL_SEC <value>``, even beside ``--interval``.
+``LOTA_DEMO_TAMPER_MARKER`` sets the marker. Options take precedence over
+both.
 
 At start the producer prints one line to stderr, wrapped here:
 
@@ -143,8 +141,8 @@ Exit codes
        ``--print-runtime-objects`` failed.
    * - 64
      - An unknown option or a bad value: ``--provider``, ``--interval``,
-       or one of ``--client-cert`` and ``--client-key`` without the
-       other. The usage follows on stderr.
+       ``LOTA_DEMO_INTERVAL_SEC``, or one of ``--client-cert`` and
+       ``--client-key`` without the other. The usage follows on stderr.
 
 With ``--once`` the code is that of the one heartbeat. Without it the
 producer runs until SIGINT or SIGTERM and exits with the code of the last
@@ -171,10 +169,9 @@ and exits 3 with ``demo_anticheat: --protect-self: cannot reach the agent
 connection stays open for the life of the process, which keeps it in the
 set.
 
-``--require-full-image`` changes only the state of the session, which
-the producer does not print: its lines and exit code stay the verdict of
-the server. ``demo_server -require-full-image`` makes the same demand on
-the server.
+The producer demands no token flags of its own: its lines and exit code
+are the verdict of the server, and ``demo_server -require-full-image``
+makes a server demand ``LOTA_FLAG_IMAGE_FULLY_MEASURED``.
 
 The runtime manifest
 ====================
@@ -255,8 +252,9 @@ The run ends with:
 
 A missing binary or command, or a failed step, prints a line
 starting ``missing`` or ``FAIL:``, plus the logs of a failed step 4, and
-exits 1. A ``swtpm_setup`` that fails ends the script with its own exit
-status and no such line.
+exits 1. A ``swtpm_setup`` that fails prints its log before
+``FAIL: swtpm_setup failed``; any other command that fails prints
+``FAIL: line <n>: <command> exited <status>``.
 
 ``LOTA_BUILD_DIR`` (``build``), ``BIN`` (the build directory) and
 ``EXAMPLES_BIN`` (its ``examples/``) say where the binaries are.

@@ -29,7 +29,7 @@ for b in "$agent" "$gate" "$step"; do
 	}
 done
 
-for c in swtpm swtpm_setup tpm2_readpublic systemd-socket-activate; do
+for c in swtpm swtpm_setup tpm2_readpublic systemd-socket-activate openssl; do
 	command -v "$c" >/dev/null 2>&1 || {
 		echo "missing command: $c" >&2
 		exit 1
@@ -54,11 +54,15 @@ fail() {
 	echo "FAIL: $*" >&2
 	exit 1
 }
+trap 'fail "line $LINENO: $BASH_COMMAND exited $?"' ERR
 
 echo "== 1/5 start a throwaway swTPM =="
 mkdir -p "$RUN_DIR/tpm"
 swtpm_setup --tpm2 --tpmstate "$RUN_DIR/tpm" --createek --decryption \
-	--overwrite >"$RUN_DIR/swtpm_setup.log" 2>&1
+	--overwrite >"$RUN_DIR/swtpm_setup.log" 2>&1 || {
+	cat "$RUN_DIR/swtpm_setup.log" >&2
+	fail "swtpm_setup failed"
+}
 swtpm socket --tpm2 --tpmstate "dir=$RUN_DIR/tpm" \
 	--server "type=tcp,port=$TPM_PORT" \
 	--ctrl "type=tcp,port=$((TPM_PORT + 1))" \
@@ -67,11 +71,14 @@ SWTPM_PID=$!
 sleep 1
 
 echo "== 2/5 start lota-agent on a socket-activated path =="
-# The activated listener keeps the agent off /run/lota.
+# The activated listener keeps the agent off /run/lota, the empty config off
+# the host's /etc/lota/lota.conf.
+install -m 0600 /dev/null "$RUN_DIR/lota.conf"
 systemd-socket-activate -l "$RUN_DIR/lota.sock" \
 	-E LOTA_TCTI="$TCTI" \
 	-E LOTA_AIK_META_PATH="$RUN_DIR/aik_meta.dat" \
-	"$agent" --test-signed >"$RUN_DIR/agent.log" 2>&1 &
+	"$agent" --config "$RUN_DIR/lota.conf" --test-signed \
+	>"$RUN_DIR/agent.log" 2>&1 &
 AGENT_PID=$!
 
 for _ in $(seq 1 30); do
@@ -136,11 +143,10 @@ GATE_PID=$!
 sleep 1
 
 cp "$RUN_DIR/released" "$RUN_DIR/refused"
-set +e
+rc=0
 "$step" --gate "http://$GATE_ADDR" --socket "$RUN_DIR/lota.sock" \
-	--out "$RUN_DIR/refused" >"$RUN_DIR/step-negative.log" 2>&1
-rc=$?
-set -e
+	--out "$RUN_DIR/refused" >"$RUN_DIR/step-negative.log" 2>&1 ||
+	rc=$?
 
 [ "$rc" -ne 0 ] || fail "an untrusted host was released the secret"
 [ "$rc" -eq 6 ] || fail "expected exit 6 (refused), got $rc"
@@ -150,10 +156,9 @@ grep -q "release refused" "$RUN_DIR/gate-negative.log" ||
 echo "   refused, nothing written, refusal audited"
 
 cp "$RUN_DIR/released" "$RUN_DIR/misused"
-set +e
-"$step" --out "$RUN_DIR/misused" --no-such-flag >/dev/null 2>&1
-rc=$?
-set -e
+rc=0
+"$step" --out "$RUN_DIR/misused" --no-such-flag >/dev/null 2>&1 ||
+	rc=$?
 [ "$rc" -eq 2 ] || fail "expected exit 2 (usage), got $rc"
 [ ! -e "$RUN_DIR/misused" ] || fail "a misused step left a file"
 echo "   misused, nothing written"

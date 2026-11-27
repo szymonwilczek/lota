@@ -193,14 +193,17 @@ session id, provider, sequence, timestamp, game binding hash,
 ``lota_ac_heartbeat()`` computes it. ``VerifyToken()`` and its errors are
 described in `the Go SDK <../../Documentation/userspace-api/go-sdk.rst>`_.
 
-Every answer from the game binding check onwards is recorded as the
-verdict of the session and under the game binding hash of the packet.
+Only a packet that proved something changes the state. A verdict on a
+token that verifies is recorded as the verdict of the session and under
+the game binding hash of the packet, with the sequence and timestamp of
+the session, so a replayed packet fails the freshness check; the session
+is then verified. An ``UNTRUSTED`` for a token that does not verify, and
+the ``REJECT`` without an AIK, are recorded the same way for a verified
+session only, and leave its sequence and timestamp as they were. The
+answers to a body or header that does not parse, to an unknown game
+binding hash and to a failed freshness check show in the log only.
 ``/state`` shows the last verdict recorded under the hash of the game it
-is asked for, so the answer to a hash of no configured game shows in the
-log only. A verdict from the AIK check onwards also records the sequence
-and timestamp of the session, so a replayed packet fails the freshness
-check. A ``REJECT`` for a body or header that does not parse is not
-recorded.
+is asked for.
 
 GET /state
 ----------

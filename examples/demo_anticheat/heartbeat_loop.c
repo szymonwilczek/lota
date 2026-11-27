@@ -52,7 +52,6 @@ struct demo_options {
 	unsigned int interval_sec;
 	bool once;
 	bool print_runtime_objects;
-	bool require_full_image;
 	bool protect_self;
 };
 
@@ -76,7 +75,7 @@ static void print_usage(const char *argv0)
 		"          [--publisher HEX]\n"
 		"          [--provider eac|battleye] [--interval SEC] [--once]\n"
 		"          [--tamper-marker PATH] [--print-runtime-objects]\n"
-		"          [--require-full-image] [--protect-self]\n"
+		"          [--protect-self]\n"
 		"          [--ca-cert PATH] [--client-cert PATH] [--client-key "
 		"PATH]\n"
 		"\n"
@@ -108,14 +107,6 @@ static void print_usage(const char *argv0)
 		"into every token it fetches. That is what an anti-cheat wants\n"
 		"and it is opt-in here, because it needs the objects this\n"
 		"process maps to carry fs-verity digests (see the README).\n"
-		"\n"
-		"--require-full-image demands LOTA_FLAG_IMAGE_FULLY_MEASURED,\n"
-		"so a heartbeat is TRUSTED only when the agent measured every\n"
-		"object the process maps. On a host whose libraries carry no\n"
-		"fs-verity digest that makes every heartbeat UNTRUSTED, and so\n"
-		"does a host that protects nothing: a round with no process to\n"
-		"measure is not a complete one. That is the publisher policy\n"
-		"choice this flag exists to show.\n"
 		"\n"
 		"When --tamper-marker is set (or LOTA_DEMO_TAMPER_MARKER is\n"
 		"exported) and the named path exists at heartbeat time, the\n"
@@ -166,6 +157,19 @@ static int parse_provider(const char *s, enum lota_ac_provider *out)
 	return -EINVAL;
 }
 
+static int parse_interval(const char *s, unsigned int *out)
+{
+	char *end;
+	long v;
+
+	errno = 0;
+	v = strtol(s, &end, 10);
+	if (end == s || *end != '\0' || errno || v <= 0 || v >= 3600)
+		return -EINVAL;
+	*out = (unsigned int)v;
+	return 0;
+}
+
 static int parse_args(int argc, char **argv, struct demo_options *opt)
 {
 	opt->server_url = DEMO_DEFAULT_URL;
@@ -180,14 +184,14 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	opt->interval_sec = DEMO_DEFAULT_INTERVAL_SEC;
 	opt->once = false;
 	opt->print_runtime_objects = false;
-	opt->require_full_image = false;
 	opt->protect_self = false;
 
 	const char *env_interval = getenv("LOTA_DEMO_INTERVAL_SEC");
-	if (env_interval && *env_interval) {
-		long v = strtol(env_interval, NULL, 10);
-		if (v > 0 && v < 3600)
-			opt->interval_sec = (unsigned int)v;
+	if (env_interval && *env_interval &&
+	    parse_interval(env_interval, &opt->interval_sec) != 0) {
+		fprintf(stderr, "bad LOTA_DEMO_INTERVAL_SEC %s\n",
+			env_interval);
+		return -EINVAL;
 	}
 
 	const char *env_marker = getenv("LOTA_DEMO_TAMPER_MARKER");
@@ -203,7 +207,6 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 		{ "once", no_argument, NULL, '1' },
 		{ "tamper-marker", required_argument, NULL, 'T' },
 		{ "print-runtime-objects", no_argument, NULL, 'O' },
-		{ "require-full-image", no_argument, NULL, 'F' },
 		{ "protect-self", no_argument, NULL, 'P' },
 		{ "ca-cert", required_argument, NULL, 'A' },
 		{ "client-cert", required_argument, NULL, 'E' },
@@ -214,7 +217,7 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	};
 
 	int c;
-	while ((c = getopt_long(argc, argv, "s:g:S:u:p:i:1T:OFPA:E:K:h",
+	while ((c = getopt_long(argc, argv, "s:g:S:u:p:i:1T:OPA:E:K:h",
 				long_opts, NULL)) != -1) {
 		switch (c) {
 		case 's':
@@ -235,20 +238,14 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 				return -EINVAL;
 			}
 			break;
-		case 'i': {
-			long v = strtol(optarg, NULL, 10);
-			if (v <= 0 || v >= 3600) {
+		case 'i':
+			if (parse_interval(optarg, &opt->interval_sec) != 0) {
 				fprintf(stderr, "bad --interval %s\n", optarg);
 				return -EINVAL;
 			}
-			opt->interval_sec = (unsigned int)v;
 			break;
-		}
 		case '1':
 			opt->once = true;
-			break;
-		case 'F':
-			opt->require_full_image = true;
 			break;
 		case 'P':
 			opt->protect_self = true;
@@ -503,9 +500,6 @@ int main(int argc, char **argv)
 		.direct = 1,
 		.socket_path = opt.socket_path,
 		.publisher_profile = opt.publisher_profile,
-		.required_flags = opt.require_full_image ?
-					  LOTA_FLAG_IMAGE_FULLY_MEASURED :
-					  0,
 	};
 
 	/*

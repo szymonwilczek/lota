@@ -88,8 +88,6 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 	game, known := s.gamesByHash[hdr.gameIDHash]
 	if !known {
-		s.recordVerdictWithLicense(sessionHex, gameHashHex,
-			verdictUntrust, "", "unknown game_id_hash")
 		logf("session=%s seq=%d state=UNTRUSTED reason=%q",
 			sessionHex, hdr.sequence, "unknown game_id_hash")
 		writeJSON(w, http.StatusOK, heartbeatResponse{
@@ -107,8 +105,6 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if reason, ok := s.checkFreshness(hdr); !ok {
-		s.recordVerdictWithLicense(sessionHex, gameHashHex,
-			verdictUntrust, game.licenseID, reason)
 		logf("session=%s seq=%d state=UNTRUSTED reason=%q",
 			sessionHex, hdr.sequence, reason)
 		writeJSON(w, http.StatusOK, heartbeatResponse{
@@ -118,12 +114,13 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.aik == nil {
+		const reason = "no AIK configured"
 		s.recordVerdict(sessionHex, gameHashHex,
-			verdictReject, game.licenseID, "no AIK configured", hdr)
+			verdictReject, game.licenseID, reason, nil)
 		logf("session=%s seq=%d state=REJECT reason=%q",
-			sessionHex, hdr.sequence, "server has no AIK configured")
+			sessionHex, hdr.sequence, reason)
 		writeJSON(w, http.StatusServiceUnavailable, heartbeatResponse{
-			State: verdictReject, Reason: "no AIK configured",
+			State: verdictReject, Reason: reason,
 		})
 		return
 	}
@@ -132,7 +129,7 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	claims, verr := verifysdk.VerifyToken(tokenBytes, s.aik, expected[:])
 	if verr != nil {
 		s.recordVerdict(sessionHex, gameHashHex,
-			verdictUntrust, game.licenseID, verr.Error(), hdr)
+			verdictUntrust, game.licenseID, verr.Error(), nil)
 		logf("session=%s seq=%d state=UNTRUSTED reason=%q",
 			sessionHex, hdr.sequence, verr.Error())
 		writeJSON(w, http.StatusOK, heartbeatResponse{
@@ -141,13 +138,13 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if claims.Flags != hdr.lotaFlags {
+		const reason = "header flags do not match signed token"
 		s.recordVerdict(sessionHex, gameHashHex, verdictUntrust,
-			game.licenseID,
-			"header flags do not match signed token", hdr)
+			game.licenseID, reason, hdr)
 		logf("session=%s seq=%d state=UNTRUSTED reason=%q",
-			sessionHex, hdr.sequence, "flag mismatch")
+			sessionHex, hdr.sequence, reason)
 		writeJSON(w, http.StatusOK, heartbeatResponse{
-			State: verdictUntrust, Reason: "header flags do not match signed token",
+			State: verdictUntrust, Reason: reason,
 		})
 		return
 	}
@@ -381,15 +378,11 @@ func (s *demoServer) checkFreshness(hdr *lachHeader) (string, bool) {
 	return "", true
 }
 
-func (s *demoServer) recordVerdictWithLicense(sessionHex, gameHashHex, verdict,
-	license, reason string,
-) {
-	s.recordVerdict(sessionHex, gameHashHex, verdict, license, reason, nil)
-}
-
-// recordVerdict updates per-session and per-game state. A non-nil hdr also
-// advances lastSeq and lastTimestamp, so a replay fails checkFreshness.
-// reason is what the producer was answered, empty when trusted.
+// recordVerdict updates per-session and per-game state. hdr is the header of
+// a verified token: it marks the session verified and advances lastSeq and
+// lastTimestamp, so a replay fails checkFreshness. With a nil hdr the
+// verdict is recorded only for a verified session. reason is what the
+// producer was answered, empty when trusted.
 func (s *demoServer) recordVerdict(sessionHex, gameHashHex, verdict, license,
 	reason string, hdr *lachHeader,
 ) {
@@ -397,6 +390,11 @@ func (s *demoServer) recordVerdict(sessionHex, gameHashHex, verdict, license,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if hdr == nil {
+		if st, ok := s.sessions[sessionHex]; !ok || !st.verified {
+			return
+		}
+	}
 	if sessionHex != "" {
 		st, ok := s.sessions[sessionHex]
 		if !ok {
@@ -408,6 +406,7 @@ func (s *demoServer) recordVerdict(sessionHex, gameHashHex, verdict, license,
 		st.lastReason = reason
 		st.updatedAt = now
 		if hdr != nil {
+			st.verified = true
 			st.lastSeq = hdr.sequence
 			st.lastTimestamp = hdr.timestamp
 		}

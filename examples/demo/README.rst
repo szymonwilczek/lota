@@ -62,12 +62,13 @@ and the runtime directory of the run.
 4. **Agent.** ``lota-agent --test-signed`` starts with ``LOTA_TCTI`` set
    to ``swtpm:host=127.0.0.1,port=<tpm-port>``, ``LOTA_AIK_META_PATH`` to
    ``aik/aik_meta.dat`` and ``XDG_RUNTIME_DIR`` to ``runtime/`` in the
-   sandbox. The agent takes the two ``LOTA_*`` variables on its one-shot
-   commands, ``--test-signed`` among them; the daemon and a continuous
-   ``--attest`` ignore them. The runner waits up to 20 seconds for
-   ``/run/lota/lota.sock``, then exports the public part of the AIK at
-   handle ``0x81010002`` to ``aik/aik.pem``, retrying for up to 30
-   seconds.
+   sandbox, and with ``--config lota.conf``, an empty file there, so the
+   ``/etc/lota/lota.conf`` of the host does not apply. The agent takes the
+   two ``LOTA_*`` variables on its one-shot commands, ``--test-signed``
+   among them; the daemon and a continuous ``--attest`` ignore them.
+   The runner waits up to 20 seconds for ``/run/lota/lota.sock``, then
+   exports the public part of the AIK at handle ``0x81010002`` to
+   ``aik/aik.pem``, retrying for up to 30 seconds.
 
 5. **Server.** ``demo_anticheat --print-runtime-objects`` writes
    ``runtime-manifest.txt``, and ``demo_server`` starts with the exported
@@ -83,10 +84,10 @@ and the runtime directory of the run.
 7. **Game.** ``trust_pong --server <url> --game-id <game-id>`` runs in
    the foreground. Under ``sudo`` it runs as ``SUDO_USER`` with
    ``DISPLAY``, ``WAYLAND_DISPLAY``, ``XAUTHORITY``,
-   ``DBUS_SESSION_BUS_ADDRESS`` and ``XDG_RUNTIME_DIR``, the last one
-   defaulting to ``/run/user/<uid>``; otherwise it runs as root with the
-   ``XDG_RUNTIME_DIR`` of the runner, or the sandbox ``runtime/`` when
-   that is unset.
+   ``DBUS_SESSION_BUS_ADDRESS``, every exported ``SDL_*`` variable and
+   ``XDG_RUNTIME_DIR``, the last one defaulting to ``/run/user/<uid>``;
+   otherwise it runs as root with the ``XDG_RUNTIME_DIR`` of the runner,
+   or the sandbox ``runtime/`` when that is unset.
 
 Each producer heartbeat prints one line to ``logs/demo_anticheat.log``,
 with a ``reason="..."`` field when the server gave one:
@@ -102,7 +103,8 @@ its banner, over a strip in green for ``TRUSTED``, amber for
 Esc, Q or closing the window ends ``trust_pong``, and with it the run.
 On exit, including SIGINT and SIGTERM, the runner sends
 ``lota-agent --shutdown``, stops the background processes and
-``swtpm`` and removes the sandbox. With ``--keep-tmp`` it prints
+``swtpm`` and removes the sandbox; SIGINT ends the run with status 130,
+SIGTERM with 143, before any later step. With ``--keep-tmp`` it prints
 ``kept tmp dir: <sandbox>`` and leaves the sandbox in place.
 
 Triggering the failure path
@@ -143,6 +145,8 @@ The sandbox
 
    * - Path
      - Content
+   * - ``lota.conf``
+     - Empty configuration of the agent
    * - ``swtpm/``
      - TPM state and ``swtpm.pid``
    * - ``aik/aik_meta.dat``

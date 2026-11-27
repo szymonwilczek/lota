@@ -1619,6 +1619,7 @@ test-unit: all $(TEST_BINS)
 	@tests/integration/test_hook_container_report.sh
 	@tests/integration/test_report_wire_sizes.sh
 	@tests/integration/test_dev_bringup_idempotent.sh
+	@tests/integration/test_demo_setup.sh
 	@tests/integration/test_installer_status_stages.sh
 	@tests/integration/test_package_manifest_lists.sh
 	@tests/integration/test_pr_quality_skipped_range.sh
@@ -1636,6 +1637,16 @@ test-unit: all $(TEST_BINS)
 		tests/integration/test_examples_optional_deps.sh; \
 	else \
 		echo "SKIP: test_examples_optional_deps.sh (no pkg-config)"; \
+	fi
+	@if [ -x $(EXAMPLES_BUILD_DIR)/demo_anticheat ] && \
+	    [ -x $(EXAMPLES_BUILD_DIR)/lota-ci-attest ] && \
+	    [ -x $(EXAMPLES_BUILD_DIR)/demo_server ] && \
+	    [ -x $(EXAMPLES_BUILD_DIR)/lota-release-gate ] && \
+	    [ -x $(BUILD_DIR)/lota-agent ] && \
+	    [ -x $(EXAMPLES_BUILD_DIR)/runtime_remeasure ]; then \
+		tests/integration/test_examples_cli.sh; \
+	else \
+		echo "SKIP: test_examples_cli.sh (run 'make examples')"; \
 	fi
 	@if [ -x $(EXAMPLES_BUILD_DIR)/trust_pong ] && command -v python3 >/dev/null 2>&1; then \
 		tests/integration/test_trust_pong_freeze_streak.sh; \

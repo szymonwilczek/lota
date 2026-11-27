@@ -160,6 +160,8 @@ check "a re-run says the signature is already good" \
 check "a re-run keeps the agent's state files" \
       test -f "$STATE_DIR/aik_meta" -a -f "$STATE_DIR/clock_state"
 check "a re-run evicts nothing from the TPM" test -z "$tpm_calls"
+check "a re-run leaves the seal primary alone" \
+    denies "$agent_calls" "seal-evict-primary"
 check "a re-run names the flag that would reset the state" \
       says "$second" "--reset"
 
@@ -248,9 +250,13 @@ reset=$(run_bringup --reset) || {
     failures=$((failures + 1))
 }
 tpm_calls=$(cat "$TPM_LOG")
+agent_calls=$(cat "$AGENT_LOG")
 check "--reset clears the state files" test ! -e "$STATE_DIR/aik_meta"
 check "--reset evicts the profile-less AIK" says "$tpm_calls" "$AIK_HANDLE"
-check "--reset evicts the seal primary" says "$tpm_calls" "$SEAL_HANDLE"
+check "--reset evicts the seal primary through the agent" \
+    says "$agent_calls" "^--config $ROOT/etc/lota/lota.conf --seal-evict-pri"
+check "--reset leaves the seal handle to the agent's check" \
+    denies "$tpm_calls" "$SEAL_HANDLE"
 check "--reset evicts no handle LOTA does not own" \
       denies "$tpm_calls" "0x81010004"
 check "--reset says the per-profile AIKs are left alone" \
@@ -348,6 +354,17 @@ stale_out=$(run_bringup) || true
 check "a stale group-writable copy does not stop the edit" \
       grep -q '^policy_pubkey' "$CONF"
 check "the stale copy is gone after the edit" test ! -e "$CONF.new"
+
+# --reset evicts the AIK at the handle lota.conf names
+printf 'aik_handle = 0x81010020\n' >>"$CONF"
+run_bringup --reset >/dev/null 2>&1 || {
+    echo "FAIL: --reset with aik_handle exited non-zero"
+    failures=$((failures + 1))
+}
+tpm_calls=$(cat "$TPM_LOG")
+check "--reset evicts the AIK at aik_handle" says "$tpm_calls" "0x81010020"
+check "--reset leaves the default AIK handle alone" \
+    denies "$tpm_calls" "$AIK_HANDLE"
 
 header_drops_the_rollback_claim() { ! grep -q "rolls back" "$BRINGUP"; }
 check "the header does not promise a rollback the script does not do" \

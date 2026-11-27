@@ -160,10 +160,10 @@ hook, wrapped here:
 
    lota-hook: <file> did not load while this process is in LOTA's
        protected set -- a protected process may map only objects the
-       agent allows, so cover this one (fs-verity digest or trusted_libs)
+       agent allows, so cover this one with an allow_verity or trust_lib
+       entry in lota.conf
 
-and recorded as ``LOTA_REFUSED_OBJECT`` in the status file. The names the
-configuration takes are ``allow_verity`` and ``trust_lib``. Without
+and recorded as ``LOTA_REFUSED_OBJECT`` in the status file. Without
 ``strict_mmap`` the gate refuses no file mapping of a protected process;
 ``block_anon_exec`` refuses anonymous executable memory.
 

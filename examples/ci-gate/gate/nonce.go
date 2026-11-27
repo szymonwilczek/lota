@@ -68,10 +68,12 @@ func (s *nonceStore) consume(nonce [32]byte) error {
 	return nil
 }
 
+// evictExpiredLocked drops a nonce one TTL after it expired, so a token
+// late by less than that still reads as expired, not as unknown.
 func (s *nonceStore) evictExpiredLocked() {
 	now := s.now()
 	for nonce, expires := range s.issued {
-		if !now.Before(expires) {
+		if now.Sub(expires) >= s.ttl {
 			delete(s.issued, nonce)
 		}
 	}
