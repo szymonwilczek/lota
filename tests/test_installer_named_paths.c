@@ -26,6 +26,9 @@
  * level;
  * --verity-manifest refuses to be combined with it, so that one runs alone,
  * which reaches no further than the missing file either.
+ *
+ * --help names the same default key order the trust stage resolves,
+ * the lota.conf key first, and closes every parenthesis it opens.
  */
 
 #include <stdio.h>
@@ -130,6 +133,30 @@ static void expect_not_refused(const char *what, const char *args)
 	PASS();
 }
 
+static void expect_help_text(void)
+{
+	char out[65536];
+	int depth = 0;
+	const char *p;
+
+	TEST("--help names lota.conf and closes its parentheses");
+	if (run_installer("--help", out, sizeof(out)) != 0) {
+		FAIL("--help did not exit 0");
+		return;
+	}
+	for (p = out; *p && depth >= 0; p++)
+		depth += (*p == '(') - (*p == ')');
+	if (depth != 0) {
+		FAIL("a parenthesis is left open or closed twice");
+		return;
+	}
+	if (!strstr(out, "policy_pubkey in " PATH_LOTA_CONF)) {
+		FAIL("the default key order leaves out lota.conf");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	if (access(LOTA_INSTALL_BIN, X_OK) != 0) {
@@ -157,6 +184,8 @@ int main(void)
 
 	expect_not_refused("a readable file is not a usage error",
 			   "--status --ca-cert /etc/hostname");
+
+	expect_help_text();
 
 	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

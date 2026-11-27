@@ -128,7 +128,8 @@ enum probe_pcr14 {
  * @buf:  NUL-terminated output, one trailing newline stripped.
  * @cap:  size of @buf; at least 2.
  *
- * Return: bytes in @buf, or -errno.
+ * Return: bytes in @buf, -EFBIG when the file does not fit in @buf, or
+ * -errno.
  */
 int probe_read_text(const char *path, char *buf, size_t cap);
 
@@ -160,6 +161,37 @@ int probe_fsverity_enable(const char *path);
  * a relative path, a path with a '..' component, or one @out cannot hold.
  */
 int probe_manifest_line(const char *line, char *out, size_t cap);
+
+/**
+ * struct probe_selinux_unmet - SELinux fence checks a probe found unmet.
+ * @tpm:        a TPM node carries another label.
+ * @agent:      the agent binary is not lota_agent_exec_t.
+ * @state:      the state directory is not lota_var_t.
+ * @conf:       the configuration directory is not lota_etc_t.
+ * @ca_port:    the --ca-port that needs a label, or NULL.
+ * @ver_port:   the --verifier-port that needs a label, or NULL.
+ * @port_check: why the ports given cannot be checked, or NULL.
+ */
+struct probe_selinux_unmet {
+	int tpm;
+	int agent;
+	int state;
+	int conf;
+	const char *ca_port;
+	const char *ver_port;
+	const char *port_check;
+};
+
+/**
+ * probe_selinux_unmet_note() - Name the unmet SELinux fence checks.
+ * @u:    the checks.
+ * @note: receives the note, empty when every check is met.
+ * @cap:  size of @note.
+ *
+ * Return: the number of unmet checks.
+ */
+int probe_selinux_unmet_note(const struct probe_selinux_unmet *u, char *note,
+			     size_t cap);
 
 /**
  * probe_port_needs_label() - Whether a tcp port needs an SELinux label.
@@ -368,49 +400,6 @@ int probe_selinux_tpm_label(void);
  * Return: 0, -EBADMSG for an unparseable file, or -errno.
  */
 int probe_cert_days_left(const char *der_path, int *days_left);
-
-/**
- * probe_conf_buf_has_key() - Whether a configuration sets a key.
- * @buf: configuration text.
- * @key: exact key.
- *
- * Return: 1 when a "key = value" line exists, otherwise 0.
- */
-int probe_conf_buf_has_key(const char *buf, const char *key);
-
-/**
- * probe_conf_buf_value() - Value of a configuration key.
- * @buf: configuration text.
- * @key: exact key.
- * @out: receives the value.
- * @cap: size of @out.
- *
- * Return: 1, or 0 with @out empty when the key is absent, empty or its
- * value does not fit.
- */
-int probe_conf_buf_value(const char *buf, const char *key, char *out,
-			 size_t cap);
-
-/**
- * probe_conf_value() - probe_conf_buf_value() on a file.
- * @conf_path: configuration file.
- * @key:       exact key.
- * @out:       receives the value.
- * @cap:       size of @out.
- *
- * Return: as probe_conf_buf_value(); 0 when the file cannot be read.
- */
-int probe_conf_value(const char *conf_path, const char *key, char *out,
-		     size_t cap);
-
-/**
- * probe_conf_has_key() - probe_conf_buf_has_key() on a file.
- * @conf_path: configuration file.
- * @key:       exact key.
- *
- * Return: 1, 0, or -errno.
- */
-int probe_conf_has_key(const char *conf_path, const char *key);
 
 /**
  * probe_conf_buf_profile_count() - Number of [profile "name"] sections.

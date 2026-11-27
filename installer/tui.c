@@ -416,6 +416,9 @@ static void probe_stage(struct tui *t, int i)
 {
 	t->st[i] =
 		install_stages[i].probe(t->ctx, t->note[i], sizeof(t->note[i]));
+	/* st_barrier_probe() names the stages before it */
+	if (t->st[i] == STAGE_REBOOT && !install_stages[i].barrier)
+		install_stage_waits_reboot(t->ctx, i);
 }
 
 static void probe_all(struct tui *t)
@@ -994,6 +997,7 @@ static int do_apply(struct tui *t, int i)
 		    install_stage_after_apply(&install_stages[i], t->ctx,
 					      t->st[i]) == STAGE_REBOOT) {
 			t->st[i] = STAGE_REBOOT;
+			install_stage_waits_reboot(t->ctx, i);
 			snprintf(t->note[i], sizeof(t->note[i]),
 				 "Applied. Takes effect on the next boot.");
 			return 1;

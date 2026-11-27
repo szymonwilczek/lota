@@ -232,29 +232,6 @@ static void test_cmdline_token(void)
 	PASS();
 }
 
-static void test_conf_key(void)
-{
-	TEST("conf scan finds an uncommented key = value line");
-	if (probe_conf_buf_has_key("# policy_pubkey = /x\n"
-				   "  policy_pubkey = /etc/lota/policy.pub\n",
-				   "policy_pubkey") != 1) {
-		FAIL("key not found");
-		return;
-	}
-	PASS();
-
-	TEST("conf scan ignores comments, prefixes and bare words");
-	if (probe_conf_buf_has_key("# policy_pubkey = /x\n", "policy_pubkey") !=
-		    0 ||
-	    probe_conf_buf_has_key("policy_pubkey_extra = /x\n",
-				   "policy_pubkey") != 0 ||
-	    probe_conf_buf_has_key("policy_pubkey\n", "policy_pubkey") != 0) {
-		FAIL("false positive");
-		return;
-	}
-	PASS();
-}
-
 static void write_text_file(const char *dir, const char *name, const char *val)
 {
 	char path[512];
@@ -695,6 +672,55 @@ cleanup:
  * A port only a range covers looks typed but the agent is refused there,
  * and a port another service owns cannot be taken with semanage port -a.
  */
+static void test_selinux_unmet_note(void)
+{
+	struct probe_selinux_unmet u = { 0 };
+	char note[512];
+
+	TEST("selinux: a missing port label names the port alone");
+	u.ca_port = "8444";
+	if (probe_selinux_unmet_note(&u, note, sizeof(note)) != 1 ||
+	    !strstr(note, "CA port 8444") || !strstr(note, "semanage port") ||
+	    strstr(note, "binary") || strstr(note, "TPM")) {
+		FAIL(note);
+		return;
+	}
+	PASS();
+
+	TEST("selinux: each unmet check is named");
+	memset(&u, 0, sizeof(u));
+	u.tpm = 1;
+	u.conf = 1;
+	u.ver_port = "8443";
+	if (probe_selinux_unmet_note(&u, note, sizeof(note)) != 3 ||
+	    !strstr(note, "TPM device") || !strstr(note, "config directory") ||
+	    !strstr(note, "verifier port 8443") || strstr(note, "state")) {
+		FAIL(note);
+		return;
+	}
+	PASS();
+
+	TEST("selinux: a port that cannot be checked is unmet");
+	memset(&u, 0, sizeof(u));
+	u.port_check = "semanage is not installed";
+	if (probe_selinux_unmet_note(&u, note, sizeof(note)) != 1 ||
+	    !strstr(note, "Cannot check the port labels: semanage is not "
+			  "installed.")) {
+		FAIL(note);
+		return;
+	}
+	PASS();
+
+	TEST("selinux: every check met is no note");
+	memset(&u, 0, sizeof(u));
+	if (probe_selinux_unmet_note(&u, note, sizeof(note)) != 0 ||
+	    note[0] != '\0') {
+		FAIL(note);
+		return;
+	}
+	PASS();
+}
+
 static void test_port_needs_label(void)
 {
 	static const char listing[] =
@@ -1151,6 +1177,62 @@ static void test_conf_profile_count(void)
 		return;
 	}
 	PASS();
+}
+
+static void test_read_text(void)
+{
+	char path[64];
+	char buf[16];
+	int fd;
+
+	snprintf(path, sizeof(path), "/tmp/lota-inst-read.%d", (int)getpid());
+
+	TEST("read_text: a missing file is -ENOENT");
+	unlink(path);
+	if (probe_read_text(path, buf, sizeof(buf)) != -ENOENT) {
+		FAIL("missing file not -ENOENT");
+		return;
+	}
+	PASS();
+
+	TEST("read_text: a file that fills the buffer exactly is read");
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0 || write(fd, "0123456789abcde", 15) != 15) {
+		FAIL("cannot write the file");
+		goto out;
+	}
+	close(fd);
+	if (probe_read_text(path, buf, sizeof(buf)) != 15 ||
+	    strcmp(buf, "0123456789abcde") != 0) {
+		FAIL("exact fit not read whole");
+		goto out;
+	}
+	PASS();
+
+	TEST("read_text: a file larger than the buffer is -EFBIG");
+	fd = open(path, O_WRONLY | O_APPEND);
+	if (fd < 0 || write(fd, "f", 1) != 1) {
+		FAIL("cannot extend the file");
+		goto out;
+	}
+	close(fd);
+	if (probe_read_text(path, buf, sizeof(buf)) != -EFBIG) {
+		FAIL("oversized file not -EFBIG");
+		goto out;
+	}
+	PASS();
+
+	TEST("read_text: a directory is an error");
+	unlink(path);
+	if (mkdir(path, 0700) < 0 ||
+	    probe_read_text(path, buf, sizeof(buf)) >= 0) {
+		FAIL("directory read as text");
+		goto out;
+	}
+	PASS();
+out:
+	unlink(path);
+	rmdir(path);
 }
 
 /*
@@ -1854,8 +1936,8 @@ int main(void)
 	test_hex_to_bytes();
 	test_cmdline_ima();
 	test_cmdline_token();
-	test_conf_key();
 	test_conf_profile_count();
+	test_read_text();
 	test_selfcheck_plan();
 	test_conf_profile_anchor();
 	test_conf_continuous_count();
@@ -1869,6 +1951,7 @@ int main(void)
 	test_auto_bringup_opt_in();
 	test_manifest_line();
 	test_port_needs_label();
+	test_selinux_unmet_note();
 	test_installed_kernels();
 	test_barrier_stage_verdicts();
 	test_agent_paused_reader();

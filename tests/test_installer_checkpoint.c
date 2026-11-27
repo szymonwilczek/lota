@@ -16,8 +16,16 @@
  * A stage the run applied says so in words of its own, apart from a stage that
  * found nothing to do, so an upgrade transcript shows what the upgrade redid.
  *
+ * The summary of what a report carries, shown before enrollment, lists the
+ * sections of struct lota_attestation_report and nothing it does not carry.
+ *
  * A run that stops for a reboot quotes the stage's reason in a sentence of its
- * own, and stage notes mostly end in a full stop already.
+ * own, and stage notes mostly end in a full stop already. The checkpoint names
+ * the stages that wait for the boot, and says the run changed the boot chain
+ * only when it did: a floor configured before the run is not its change.
+ *
+ * --resume says what starts the agent after its reboot from the units that
+ * are enabled, and says so when nothing does.
  */
 
 #include <stdio.h>
@@ -27,6 +35,7 @@
 
 #include "test.h"
 #include "../installer/install.h"
+#include "../installer/probe.h"
 #include "../installer/run.h"
 
 static char note[4096];
@@ -284,6 +293,47 @@ static void test_every_title_is_spaced(void)
  * A stage outside the boot chain that still probes pending after its apply
  * has not worked, whatever an earlier stage did to the boot chain.
  */
+static void test_the_report_summary_matches_the_report(void)
+{
+	static const char *const carried[] = {
+		"PCR values",
+		"quote",
+		"AIK public key",
+		"AIK certificate",
+		"Agent hash",
+		"kernel measurement digest",
+		"IOMMU",
+		"Security state flags",
+		"event log",
+		"ESRT",
+		"MOK list",
+		"TPM quote",
+		"LSM is loaded",
+		"bench mode",
+		"lost events",
+		"has none",
+		"empty when it cannot be read",
+		"ptrace rules",
+	};
+	static const char *const absent[] = { "recently executed", "PIDs",
+					      "endorsement key's public",
+					      "policy keys" };
+	size_t i;
+
+	TEST("the report summary lists the sections a report carries");
+	for (i = 0; i < sizeof(carried) / sizeof(carried[0]); i++)
+		if (!strstr(install_telemetry_summary, carried[i])) {
+			FAIL(carried[i]);
+			return;
+		}
+	for (i = 0; i < sizeof(absent) / sizeof(absent[0]); i++)
+		if (strstr(install_telemetry_summary, absent[i])) {
+			FAIL(absent[i]);
+			return;
+		}
+	PASS();
+}
+
 static void test_only_a_boot_path_stage_waits_for_the_reboot(void)
 {
 	struct install_ctx ctx;
@@ -304,6 +354,103 @@ static void test_only_a_boot_path_stage_waits_for_the_reboot(void)
 	if (install_stage_after_apply(cmdline, &ctx, STAGE_PENDING) !=
 	    STAGE_REBOOT) {
 		FAIL("the cmdline stage does not wait for the reboot");
+		return;
+	}
+	PASS();
+}
+
+static enum stage_state barrier_note(struct install_ctx *ctx)
+{
+	const struct stage *b =
+		&install_stages[stage_named("Reboot checkpoint")];
+
+	return b->probe(ctx, note, sizeof(note));
+}
+
+static void test_a_configured_floor_is_no_change(void)
+{
+	struct install_ctx ctx;
+	int floor = stage_named("Kernel integrity floor on the cmdline");
+
+	TEST("a floor set before this run is not named as a change");
+	memset(&ctx, 0, sizeof(ctx));
+	install_stage_waits_reboot(&ctx, floor);
+	if (barrier_note(&ctx) != STAGE_REBOOT) {
+		FAIL("the checkpoint does not wait for the reboot");
+		return;
+	}
+	if (says("changed") || !says(install_stages[floor].title) ||
+	    !says("is configured and takes effect on the next boot")) {
+		FAIL(note);
+		return;
+	}
+	PASS();
+}
+
+static void test_a_rebuilt_initramfs_is_a_change(void)
+{
+	struct install_ctx ctx;
+	int lock = stage_named("Boot-time PCR14 lock in the initramfs");
+	int floor = stage_named("Kernel integrity floor on the cmdline");
+	char want[256];
+
+	TEST("a run that rebuilt the initramfs names what waits");
+	memset(&ctx, 0, sizeof(ctx));
+	/* the lock probes DONE after dracut, the floor waits from before */
+	ctx.reboot_needed = 1;
+	ctx.boot_changed = 1u << lock;
+	install_stage_waits_reboot(&ctx, floor);
+	if (barrier_note(&ctx) != STAGE_REBOOT) {
+		FAIL("the checkpoint does not wait for the reboot");
+		return;
+	}
+	snprintf(want, sizeof(want), "This run changed the boot chain: '%s'.",
+		 install_stages[lock].title);
+	if (!says(want) || says("IMA")) {
+		FAIL(note);
+		return;
+	}
+	snprintf(want, sizeof(want),
+		 "'%s' is configured and takes effect on the next boot.",
+		 install_stages[floor].title);
+	if (!says(want)) {
+		FAIL(note);
+		return;
+	}
+	PASS();
+}
+
+static void test_resume_names_what_starts_the_agent(void)
+{
+	struct probe_service_state st;
+	const char *say;
+
+	TEST("resume: an enabled service starts the agent with the boot");
+	memset(&st, 0, sizeof(st));
+	st.agent_enabled = 1;
+	st.socket_enabled = 1;
+	say = install_resume_start(&st);
+	if (!strstr(say, "starts with the boot") || strstr(say, "socket")) {
+		FAIL(say);
+		return;
+	}
+	PASS();
+
+	TEST("resume: a socket alone starts it on the first connection");
+	st.agent_enabled = 0;
+	say = install_resume_start(&st);
+	if (!strstr(say, "first connection to lota-agent.socket")) {
+		FAIL(say);
+		return;
+	}
+	PASS();
+
+	TEST("resume: with neither enabled nothing starts the agent");
+	st.socket_enabled = 0;
+	say = install_resume_start(&st);
+	if (!strstr(say, "Nothing starts the agent") ||
+	    !strstr(say, "sudo lota-install")) {
+		FAIL(say);
 		return;
 	}
 	PASS();
@@ -383,7 +530,11 @@ int main(void)
 	test_applied_changes_only_a_satisfied_stage();
 	test_every_explanation_is_spaced();
 	test_every_title_is_spaced();
+	test_the_report_summary_matches_the_report();
 	test_only_a_boot_path_stage_waits_for_the_reboot();
+	test_a_configured_floor_is_no_change();
+	test_a_rebuilt_initramfs_is_a_change();
+	test_resume_names_what_starts_the_agent();
 	test_an_aborted_command_is_not_a_success();
 
 	printf("\nPassed: %d / %d\n", tests_passed, tests_run);

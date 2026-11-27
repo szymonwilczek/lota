@@ -66,6 +66,8 @@ struct install_ctx {
 	struct install_opts opts;
 	struct ui ui;
 	int reboot_needed;
+	unsigned int reboot_stages; /* bit per stage that waits for the boot */
+	unsigned int boot_changed; /* bit per stage that changed the boot */
 	int applied; /* a stage was applied during this run */
 	/* loop status before this run reloaded it; empty if it did not */
 	char loop_status_before[256];
@@ -109,10 +111,20 @@ enum trust_key_source {
  * A profile matches when its ca_cert resolves to the same profile id as
  * @anchor, whatever its path.
  *
- * Return: 1 when a profile matches, -ENOMEM when scratch space cannot be
- * allocated, otherwise 0.
+ * Return: 1 when a profile matches; 0 when none does, @conf_path does not
+ * exist or @anchor resolves to no profile id; otherwise -errno (-EFBIG for
+ * a file too large to read whole).
  */
 int installer_profile_recorded(const char *conf_path, const char *anchor);
+
+/**
+ * installer_loop_reports_expected() - Reports one attestation round sends.
+ * @conf_path: the configuration.
+ *
+ * Return: the profiles that report continuously, at least 1, or -errno for
+ * a configuration that exists and cannot be read whole.
+ */
+int installer_loop_reports_expected(const char *conf_path);
 
 #define INSTALLER_ADD_PUBLISHER_ARGC 14 /* terminator included */
 
@@ -173,6 +185,52 @@ const char *installer_trust_fallback(const char *key, enum trust_key_source src,
 				     const char *packaged_path);
 
 /**
+ * installer_conf_pubkey() - policy_pubkey line of a configuration file.
+ * @conf_path: the file, read with the agent's parser.
+ * @key:       set to the path the last line in either spelling names,
+ *             readable or not.
+ * @cap:       size of @key.
+ *
+ * Return: 1 with @key set, 0 when the file or the line is missing,
+ * or the -errno of a file the agent fails to start on; the parser names
+ * each refused line on stderr.
+ */
+int installer_conf_pubkey(const char *conf_path, char *key, size_t cap);
+
+/**
+ * installer_conf_set_pubkey() - Add a policy_pubkey line to a configuration.
+ * @conf_path: the file; a missing one is created.
+ * @key:       the path the line names.
+ *
+ * The line goes above the first section, so it stays a top-level key and
+ * follows any earlier policy_pubkey line. The file keeps its owner, mode and
+ * SELinux label, and is replaced only when the agent's parser reads @key back
+ * from it.
+ *
+ * Return: 0, -EPROTO when the read-back fails, with @conf_path untouched,
+ * or another -errno.
+ */
+int installer_conf_set_pubkey(const char *conf_path, const char *key);
+
+/**
+ * installer_trust_named() - State of the trust stage with --policy-pubkey.
+ * @named:         the --policy-pubkey path; its signature verifies.
+ * @conf_pubkey:   as for installer_trust_key().
+ * @override_path: as for installer_trust_key().
+ * @packaged_path: as for installer_trust_key().
+ * @note:          set to what the stage reports.
+ * @cap:           size of @note.
+ *
+ * Return: STAGE_DONE when @conf_pubkey is the same file as @named,
+ * otherwise STAGE_PENDING with the key the agent verifies against until then.
+ */
+enum stage_state installer_trust_named(const char *named,
+				       const char *conf_pubkey,
+				       const char *override_path,
+				       const char *packaged_path, char *note,
+				       size_t cap);
+
+/**
  * installer_trust_refusal() - Note for an object @key does not verify.
  * @buf:      output buffer.
  * @cap:      size of @buf.
@@ -207,6 +265,40 @@ int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
 void install_reboot_required(char *buf, size_t cap, const char *note);
 
 /**
+ * install_stage_waits_reboot() - Record a stage that waits for the next boot.
+ * @ctx:   the run.
+ * @stage: index into install_stages.
+ */
+void install_stage_waits_reboot(struct install_ctx *ctx, int stage);
+
+/**
+ * install_reboot_note() - Why the barrier waits for a reboot.
+ * @buf: receives the note.
+ * @cap: size of @buf.
+ * @ctx: the run; names the stages whose apply changed the boot chain in it
+ *       (boot_changed), then the others install_stage_waits_reboot()
+ *       recorded.
+ */
+void install_reboot_note(char *buf, size_t cap, const struct install_ctx *ctx);
+
+struct probe_service_state;
+
+/**
+ * install_service_state() - Read the agent, socket and attest unit states.
+ * @s: receives the states.
+ */
+void install_service_state(struct probe_service_state *s);
+
+/**
+ * install_resume_start() - What starts the agent after a --resume reboot.
+ * @s: the unit states.
+ *
+ * Return: a sentence for the enabled service, else the enabled socket,
+ * else one that says nothing starts the agent.
+ */
+const char *install_resume_start(const struct probe_service_state *s);
+
+/**
  * install_stage_result() - Outcome a stage reports.
  * @st:      the stage's latest probe verdict.
  * @applied: 1 when this run applied the stage before that probe.
@@ -228,6 +320,9 @@ enum ui_result install_stage_result(enum stage_state st, int applied);
 enum stage_state install_stage_after_apply(const struct stage *s,
 					   const struct install_ctx *ctx,
 					   enum stage_state st);
+
+/* what every attestation report carries, as the player is told */
+extern const char install_telemetry_summary[];
 
 extern const struct stage install_stages[];
 extern const int install_stage_count;

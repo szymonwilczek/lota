@@ -42,9 +42,11 @@ static void usage(FILE *out)
 		"  --verifier HOST        Verifier for the final self-check\n"
 		"  --verifier-port PORT   Verifier port\n"
 		"  --policy-pubkey FILE   Key the enforcement object is verified\n"
-		"                         against. Default: %s when a fleet\n"
-		"                         put its own key there, otherwise the\n"
-		"                         key the package shipped at %s\n"
+		"                         against. Default: the readable key\n"
+		"                         policy_pubkey in %s names,\n"
+		"                         else %s when a fleet put\n"
+		"                         its own key there, else the key the\n"
+		"                         package shipped at %s\n"
 		"  --selinux-module FILE  Compiled LOTA SELinux module\n"
 		"                         (default %s)\n"
 		"\n"
@@ -56,9 +58,10 @@ static void usage(FILE *out)
 		"  --unattended           For a package post-install hook:\n"
 		"                         implies --yes --plain, leaves the\n"
 		"                         boot path alone unless this host\n"
-		"                         opted in (%s)\n"
+		"                         opted in (%s\n"
 		"                         or LOTA_AUTO_BRINGUP=1), and stops\n"
-		"                         at the reboot checkpoint\n"
+		"                         at the reboot checkpoint when it\n"
+		"                         left a stage or needs a reboot\n"
 		"  --verity-manifest FILE Enable fs-verity on every object\n"
 		"                         listed in FILE (one absolute path\n"
 		"                         per line, '#' comments), then stop.\n"
@@ -78,7 +81,7 @@ static void usage(FILE *out)
 		"            2 usage, 10 reboot required (re-run to resume),\n"
 		"            11 boot-path stages left to a person\n"
 		"            (--unattended).\n",
-		PATH_POLICY_PUB_OVERRIDE, PATH_ENFORCEMENT_PUB,
+		PATH_LOTA_CONF, PATH_POLICY_PUB_OVERRIDE, PATH_ENFORCEMENT_PUB,
 		PATH_SELINUX_PP_DEFAULT, PATH_AUTO_BRINGUP);
 }
 
@@ -251,7 +254,7 @@ static int run_status(struct install_ctx *ctx)
 			blocked++;
 		/* st_barrier_probe() reads reboot_needed */
 		if (st == STAGE_REBOOT)
-			ctx->reboot_needed = 1;
+			install_stage_waits_reboot(ctx, i);
 	}
 
 	{
@@ -416,15 +419,14 @@ static int do_verity_manifest(struct install_ctx *ctx)
 static int do_resume(struct install_ctx *ctx)
 {
 	const char *const argv[] = { "systemctl", "reboot", NULL };
+	struct probe_service_state state;
 
 	ui_text(&ctx->ui,
 		"Resuming LOTA means rebooting. When the agent paused it "
 		"poisoned PCR 14, and that slot only clears on a hardware "
 		"reset - so same-boot re-attestation is impossible by design.");
-	ui_text(&ctx->ui,
-		"After the reboot the agent starts on its own (socket-"
-		"activated), re-measures into a fresh PCR 14, and attests "
-		"again. Nothing else is needed.");
+	install_service_state(&state);
+	ui_text(&ctx->ui, "%s", install_resume_start(&state));
 	ui_text(&ctx->ui,
 		"A host left paused still boots normally; the agent simply "
 		"refuses to run until then (fail-closed), so pausing never "
@@ -581,7 +583,7 @@ int main(int argc, char **argv)
 				print_reboot_box(&ctx, note);
 				return EXIT_INSTALL_REBOOT;
 			}
-			ctx.reboot_needed = 1;
+			install_stage_waits_reboot(&ctx, i);
 			break;
 		case STAGE_BLOCKED:
 			ui_stage_result(&ctx.ui, UI_BLOCKED, s->title, NULL);
@@ -599,6 +601,8 @@ int main(int argc, char **argv)
 		case STAGE_PENDING:
 			ui_stage_result(&ctx.ui, UI_FAIL, s->title,
 					"still unmet after applying");
+			ui_text(&ctx.ui, "%s%s", note,
+				ends_in_stop(note) ? "" : ".");
 			return EXIT_INSTALL_FAIL;
 		}
 	}

@@ -27,14 +27,18 @@
 #include "../include/lota_ima_policy_scope.h"
 #include "../include/lota_ima_xattr.h"
 #include "../include/lota_secure_boot.h"
+#include "../src/agent/config.h"
 
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 
 int probe_read_text(const char *path, char *buf, size_t cap)
 {
-	ssize_t got;
+	size_t got = 0;
+	ssize_t n;
+	char more;
 	int fd;
+	int err;
 
 	if (!path || !buf || cap < 2)
 		return -EINVAL;
@@ -43,10 +47,28 @@ int probe_read_text(const char *path, char *buf, size_t cap)
 	if (fd < 0)
 		return -errno;
 
-	got = read(fd, buf, cap - 1);
+	/* a short read is no end of file: fill @buf, then one byte tells EOF */
+	for (;;) {
+		if (got < cap - 1)
+			n = read(fd, buf + got, cap - 1 - got);
+		else
+			n = read(fd, &more, 1);
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n < 0) {
+			err = -errno;
+			close(fd);
+			return err;
+		}
+		if (n == 0)
+			break;
+		if (got == cap - 1) {
+			close(fd);
+			return -EFBIG;
+		}
+		got += (size_t)n;
+	}
 	close(fd);
-	if (got < 0)
-		return -errno;
 
 	buf[got] = '\0';
 	if (got > 0 && buf[got - 1] == '\n') {
@@ -780,33 +802,6 @@ int probe_cert_days_left(const char *der_path, int *days_left)
 	return 0;
 }
 
-int probe_conf_buf_has_key(const char *buf, const char *key)
-{
-	size_t klen;
-	const char *line;
-
-	if (!buf || !key)
-		return 0;
-	klen = strlen(key);
-
-	for (line = buf; line && *line;) {
-		const char *p = line;
-		const char *eol = strchr(line, '\n');
-
-		while (*p == ' ' || *p == '\t')
-			p++;
-		if (*p != '#' && strncmp(p, key, klen) == 0) {
-			p += klen;
-			while (*p == ' ' || *p == '\t')
-				p++;
-			if (*p == '=')
-				return 1;
-		}
-		line = eol ? eol + 1 : NULL;
-	}
-	return 0;
-}
-
 int probe_file_equals(const char *path, const char *buf, size_t len)
 {
 	char chunk[4096];
@@ -859,76 +854,6 @@ int probe_auto_bringup_at(const char *path)
 	return access(path, F_OK) == 0;
 }
 
-int probe_conf_buf_value(const char *buf, const char *key, char *out,
-			 size_t cap)
-{
-	size_t klen;
-	const char *line;
-
-	if (!out || cap == 0)
-		return 0;
-	out[0] = '\0';
-	if (!buf || !key)
-		return 0;
-	klen = strlen(key);
-
-	for (line = buf; line && *line;) {
-		const char *p = line;
-		const char *eol = strchr(line, '\n');
-
-		while (*p == ' ' || *p == '\t')
-			p++;
-		if (*p != '#' && strncmp(p, key, klen) == 0) {
-			const char *end;
-			size_t len;
-
-			p += klen;
-			while (*p == ' ' || *p == '\t')
-				p++;
-			if (*p != '=')
-				goto next;
-			p++;
-			while (*p == ' ' || *p == '\t')
-				p++;
-			end = eol ? eol : p + strlen(p);
-			while (end > p && (end[-1] == ' ' || end[-1] == '\t' ||
-					   end[-1] == '\r'))
-				end--;
-			len = (size_t)(end - p);
-			if (len == 0 || len >= cap)
-				return 0;
-			memcpy(out, p, len);
-			out[len] = '\0';
-			return 1;
-		}
-next:
-		line = eol ? eol + 1 : NULL;
-	}
-	return 0;
-}
-
-int probe_conf_value(const char *conf_path, const char *key, char *out,
-		     size_t cap)
-{
-	char buf[16384] = { 0 };
-
-	if (out && cap)
-		out[0] = '\0';
-	if (probe_read_text(conf_path, buf, sizeof(buf)) < 0)
-		return 0;
-	return probe_conf_buf_value(buf, key, out, cap);
-}
-
-int probe_conf_has_key(const char *conf_path, const char *key)
-{
-	char buf[16384] = { 0 };
-	int ret = probe_read_text(conf_path, buf, sizeof(buf));
-
-	if (ret < 0)
-		return ret;
-	return probe_conf_buf_has_key(buf, key);
-}
-
 int probe_conf_buf_profile_count(const char *buf)
 {
 	const char *line;
@@ -957,12 +882,16 @@ int probe_conf_buf_profile_count(const char *buf)
 
 int probe_conf_profile_count(const char *conf_path)
 {
-	char buf[16384] = { 0 };
-	int ret = probe_read_text(conf_path, buf, sizeof(buf));
+	char *buf = calloc(1, LOTA_CONFIG_MAX_FILE + 1);
+	int ret;
 
-	if (ret < 0)
-		return ret;
-	return probe_conf_buf_profile_count(buf);
+	if (!buf)
+		return -ENOMEM;
+	ret = probe_read_text(conf_path, buf, LOTA_CONFIG_MAX_FILE + 1);
+	if (ret >= 0)
+		ret = probe_conf_buf_profile_count(buf);
+	free(buf);
+	return ret;
 }
 
 /* 1 and the value in @out when @line sets @key; '-' reads as '_' */
@@ -1545,6 +1474,55 @@ static int port_row_lists(const char *row, unsigned long want, char *type,
 			p++;
 	}
 	return found;
+}
+
+int probe_selinux_unmet_note(const struct probe_selinux_unmet *u, char *note,
+			     size_t cap)
+{
+	char item[6][96];
+	size_t used = 0;
+	int i, n = 0;
+
+	if (u->tpm)
+		snprintf(item[n++], sizeof(item[0]),
+			 "the TPM device label (lota_tpm_device_t)");
+	if (u->agent)
+		snprintf(item[n++], sizeof(item[0]),
+			 "the agent binary label (lota_agent_exec_t)");
+	if (u->state)
+		snprintf(item[n++], sizeof(item[0]),
+			 "the state directory label (lota_var_t)");
+	if (u->conf)
+		snprintf(item[n++], sizeof(item[0]),
+			 "the config directory label (lota_etc_t)");
+	if (u->ca_port)
+		snprintf(item[n++], sizeof(item[0]),
+			 "the CA port %s label (semanage port)", u->ca_port);
+	if (u->ver_port)
+		snprintf(item[n++], sizeof(item[0]),
+			 "the verifier port %s label (semanage port)",
+			 u->ver_port);
+
+	if (!note || cap == 0)
+		return n + !!u->port_check;
+	note[0] = '\0';
+	if (n) {
+		used = (size_t)snprintf(note, cap, "Not in place yet: ");
+		for (i = 0; i < n && used < cap; i++)
+			used += (size_t)snprintf(note + used, cap - used,
+						 "%s%s",
+						 i == 0	    ? "" :
+						 i == n - 1 ? " and " :
+							      ", ",
+						 item[i]);
+		if (used < cap)
+			used += (size_t)snprintf(note + used, cap - used, ".");
+	}
+	if (u->port_check && used < cap)
+		snprintf(note + used, cap - used,
+			 "%sCannot check the port labels: %s.", n ? " " : "",
+			 u->port_check);
+	return n + !!u->port_check;
 }
 
 int probe_port_needs_label(const char *listing, const char *port)

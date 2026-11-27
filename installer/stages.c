@@ -20,6 +20,8 @@
 #include "run.h"
 #include "ui.h"
 #include "../include/lota_secure_boot.h"
+#include "../src/agent/config.h"
+#include "../src/agent/io_utils.h"
 #include "../src/agent/policy_pubkey.h"
 #include "../src/agent/profile.h"
 
@@ -296,32 +298,90 @@ void installer_trust_refusal(char *buf, size_t cap, const char *key,
 		 key, installer_trust_key_source_says(src), either, obj);
 }
 
-static const char *trust_key_in_use(const struct install_ctx *ctx,
-				    char *conf_buf, size_t conf_cap,
-				    enum trust_key_source *src,
-				    const char **configured)
+int installer_conf_pubkey(const char *conf_path, char *key, size_t cap)
 {
-	*configured = NULL;
-	if (probe_conf_value(PATH_LOTA_CONF, "policy_pubkey", conf_buf,
-			     conf_cap) == 1)
-		*configured = conf_buf;
+	struct lota_config *cfg = config_new();
+	int rc;
 
-	return installer_trust_key(ctx->opts.policy_pubkey, *configured,
-				   PATH_POLICY_PUB_OVERRIDE,
-				   PATH_ENFORCEMENT_PUB, src);
+	key[0] = '\0';
+	if (!cfg)
+		return -ENOMEM;
+	rc = config_load(cfg, conf_path);
+	if (rc == -ENOENT) {
+		rc = 0;
+	} else if (rc == 0 && cfg->policy_pubkey[0]) {
+		rc = -ENAMETOOLONG;
+		if (strlen(cfg->policy_pubkey) < cap) {
+			strcpy(key, cfg->policy_pubkey);
+			rc = 1;
+		}
+	}
+	config_free(cfg);
+	return rc;
+}
+
+enum stage_state installer_trust_named(const char *named,
+				       const char *conf_pubkey,
+				       const char *override_path,
+				       const char *packaged_path, char *note,
+				       size_t cap)
+{
+	enum trust_key_source src = TRUST_KEY_NONE;
+	const char *used;
+	char gone[PATH_MAX + 64] = "";
+
+	if (conf_pubkey && same_file(conf_pubkey, named)) {
+		snprintf(note, cap, "Signature verifies, %s names the key",
+			 PATH_LOTA_CONF);
+		return STAGE_DONE;
+	}
+
+	used = installer_trust_key(NULL, conf_pubkey, override_path,
+				   packaged_path, &src);
+	if (conf_pubkey && used != conf_pubkey)
+		snprintf(gone, sizeof(gone),
+			 " It names %s, which is not readable.", conf_pubkey);
+	if (!used)
+		snprintf(note, cap,
+			 "Signature verifies against the key you named. %s "
+			 "still needs the policy_pubkey line for it, and the "
+			 "agent has no key until then.%s",
+			 PATH_LOTA_CONF, gone);
+	else
+		snprintf(note, cap,
+			 "Signature verifies against the key you named. %s "
+			 "still needs the policy_pubkey line for it, and the "
+			 "agent verifies against %s (%s) until then.%s",
+			 PATH_LOTA_CONF, used,
+			 installer_trust_key_source_says(src), gone);
+	return STAGE_PENDING;
 }
 
 static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 				       size_t cap)
 {
 	enum trust_key_source src = TRUST_KEY_NONE;
+	const char *configured = NULL;
 	char conf_key[PATH_MAX];
-	const char *configured;
-	const char *key = trust_key_in_use(ctx, conf_key, sizeof(conf_key),
-					   &src, &configured);
+	const char *key;
 	char sig[512];
 	char out[4096];
 	int rc;
+
+	rc = installer_conf_pubkey(PATH_LOTA_CONF, conf_key, sizeof(conf_key));
+	if (rc < 0) {
+		snprintf(note, cap,
+			 "Cannot load %s (%s), and the agent fails to start on "
+			 "it. 'lota-agent --dump-config' names each line it "
+			 "refuses.",
+			 PATH_LOTA_CONF, strerror(-rc));
+		return STAGE_BLOCKED;
+	}
+	if (rc == 1)
+		configured = conf_key;
+	key = installer_trust_key(ctx->opts.policy_pubkey, configured,
+				  PATH_POLICY_PUB_OVERRIDE,
+				  PATH_ENFORCEMENT_PUB, &src);
 
 	snprintf(sig, sizeof(sig), "%s.sig", PATH_BPF_OBJ);
 
@@ -373,52 +433,120 @@ static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 			 installer_trust_key_source_says(src));
 		return STAGE_DONE;
 	}
-	rc = probe_conf_has_key(PATH_LOTA_CONF, "policy_pubkey");
-	if (rc == 1) {
-		snprintf(note, cap, "Signature verifies, %s names the key",
-			 PATH_LOTA_CONF);
-		return STAGE_DONE;
+	return installer_trust_named(ctx->opts.policy_pubkey, configured,
+				     PATH_POLICY_PUB_OVERRIDE,
+				     PATH_ENFORCEMENT_PUB, note, cap);
+}
+
+/* the new line lands above the first section, where top-level keys go */
+static int conf_pubkey_text(const char *conf, const char *key, char *out,
+			    size_t cap)
+{
+	const char *at = conf;
+	const char *sep = "";
+	size_t n;
+
+	while (*at) {
+		const char *p = at + strspn(at, " \t");
+
+		if (*p == '[')
+			break;
+		at = strchrnul(at, '\n');
+		if (*at)
+			at++;
 	}
-	snprintf(note, cap,
-		 "Signature verifies against the key you named. %s still needs "
-		 "the policy_pubkey reference.",
-		 PATH_LOTA_CONF);
-	return STAGE_PENDING;
+	n = (size_t)(at - conf);
+	if (!*conf)
+		sep = "# LOTA agent configuration (created by lota-install)\n";
+	else if (!n)
+		sep = "";
+	else if (conf[n - 1] != '\n')
+		sep = "\n\n";
+	else if (n < 2 || conf[n - 2] != '\n')
+		sep = "\n";
+	if ((size_t)snprintf(out, cap,
+			     "%.*s%s# Key the enforcement object's signature "
+			     "is verified against.\npolicy_pubkey = %s\n%s%s",
+			     (int)n, conf, sep, key, *at ? "\n" : "",
+			     at) >= cap)
+		return -EOVERFLOW;
+	return 0;
+}
+
+int installer_conf_set_pubkey(const char *conf_path, const char *key)
+{
+	const size_t cap = 2 * LOTA_CONFIG_MAX_FILE + PATH_MAX;
+	char tmp[PATH_MAX];
+	char got[PATH_MAX];
+	struct stat sb;
+	char *conf;
+	char *out;
+	size_t len;
+	int rc;
+	int fd;
+
+	if (snprintf(tmp, sizeof(tmp), "%s.new", conf_path) >= (int)sizeof(tmp))
+		return -ENAMETOOLONG;
+	conf = calloc(1, LOTA_CONFIG_MAX_FILE + 1);
+	out = malloc(cap);
+	if (!conf || !out) {
+		rc = -ENOMEM;
+		goto out;
+	}
+	rc = lota_read_file_bounded(conf_path, conf, LOTA_CONFIG_MAX_FILE,
+				    &len);
+	if (rc < 0)
+		goto out;
+	conf[len] = '\0';
+	rc = conf_pubkey_text(conf, key, out, cap);
+	if (rc < 0)
+		goto out;
+
+	unlink(tmp);
+	fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+		  0644);
+	if (fd < 0) {
+		rc = -errno;
+		goto out;
+	}
+	rc = 0;
+	if (stat(conf_path, &sb) == 0 &&
+	    (fchown(fd, sb.st_uid, sb.st_gid) != 0 ||
+	     fchmod(fd, sb.st_mode & 07777) != 0))
+		rc = -errno;
+	if (rc == 0)
+		rc = lota_write_full(fd, out, strlen(out));
+	if (rc == 0 && fsync(fd) != 0)
+		rc = -errno;
+	close(fd);
+	/* the agent reads the line back, or the file stays as it was */
+	if (rc == 0 && (installer_conf_pubkey(tmp, got, sizeof(got)) != 1 ||
+			strcmp(got, key) != 0))
+		rc = -EPROTO;
+	if (rc == 0) {
+		rc = lota_copy_xattr(conf_path, tmp, "security.selinux");
+		if (rc == -ENOENT)
+			rc = 0;
+	}
+	if (rc == 0 && rename(tmp, conf_path) != 0)
+		rc = -errno;
+	if (rc < 0)
+		unlink(tmp);
+out:
+	free(conf);
+	free(out);
+	return rc;
 }
 
 static int st_trust_apply(struct install_ctx *ctx)
 {
-	struct stat sb;
-	int fresh;
-	int fd;
-	FILE *f;
-
 	if (!ctx->opts.policy_pubkey)
 		return 0;
 
 	if (mkdir(PATH_LOTA_CONF_DIR, 0755) != 0 && errno != EEXIST)
 		return -errno;
-
-	fresh = stat(PATH_LOTA_CONF, &sb) != 0 || sb.st_size == 0;
-	/* fopen("a") would create 0666 */
-	fd = open(PATH_LOTA_CONF, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
-		  0644);
-	if (fd < 0)
-		return -errno;
-	f = fdopen(fd, "a");
-	if (!f) {
-		close(fd);
-		return -errno;
-	}
-	if (fresh)
-		fprintf(f, "# LOTA agent configuration (created by "
-			   "lota-install)\n");
-	fprintf(f,
-		"\n# Key the enforcement object's signature is verified "
-		"against.\npolicy_pubkey = %s\n",
-		ctx->opts.policy_pubkey);
-	fclose(f);
-	return 0;
+	return installer_conf_set_pubkey(PATH_LOTA_CONF,
+					 ctx->opts.policy_pubkey);
 }
 
 /*
@@ -530,6 +658,15 @@ static enum stage_state st_initrd_probe(struct install_ctx *ctx, char *note,
 	return STAGE_PENDING;
 }
 
+/* names the stage whose @apply changed the boot chain in this run */
+static void boot_changed_by(struct install_ctx *ctx,
+			    int (*apply)(struct install_ctx *))
+{
+	for (int i = 0; i < install_stage_count; i++)
+		if (install_stages[i].apply == apply)
+			ctx->boot_changed |= 1u << i;
+}
+
 static int st_initrd_apply(struct install_ctx *ctx)
 {
 	const char *const argv[] = { "dracut", "-f", "--regenerate-all", NULL };
@@ -541,6 +678,7 @@ static int st_initrd_apply(struct install_ctx *ctx)
 	if (rc != 0)
 		return rc > 0 ? -EIO : rc;
 	ctx->reboot_needed = 1;
+	boot_changed_by(ctx, st_initrd_apply);
 	return 0;
 }
 
@@ -655,6 +793,7 @@ static int st_cmdline_apply(struct install_ctx *ctx)
 	if (rc != 0)
 		return rc > 0 ? -EIO : rc;
 	ctx->reboot_needed = 1;
+	boot_changed_by(ctx, st_cmdline_apply);
 	return 0;
 }
 
@@ -717,34 +856,43 @@ static int selinux_module_loaded(void)
 	return 0;
 }
 
-static int selinux_port_pending(const struct install_ctx *ctx)
+static void selinux_port_unmet(const struct install_ctx *ctx,
+			       struct probe_selinux_unmet *u)
 {
 	static char out[65536];
 	const char *const argv[] = { "semanage", "port", "-l", NULL };
-	const char *const ports[] = { ctx->opts.ca_port,
-				      ctx->opts.verifier_port };
+	const char *ca = ctx->opts.ca_port;
+	const char *ver = ctx->opts.verifier_port;
 
-	if ((!ctx->opts.ca_port && !ctx->opts.verifier_port) ||
-	    !tool_exists("semanage") ||
-	    run_capture(argv, out, sizeof(out)) != 0)
-		return 0;
-
-	for (size_t i = 0; i < sizeof(ports) / sizeof(ports[0]); i++) {
-		if (ports[i] && probe_port_needs_label(out, ports[i]) > 0)
-			return 1;
+	if (!ca && !ver)
+		return;
+	if (!tool_exists("semanage")) {
+		u->port_check = "semanage is not installed";
+		return;
 	}
-	return 0;
+	if (run_capture(argv, out, sizeof(out)) != 0) {
+		u->port_check = "semanage port -l failed";
+		return;
+	}
+	if (ca && probe_port_needs_label(out, ca) > 0)
+		u->ca_port = ca;
+	if (ver && probe_port_needs_label(out, ver) > 0)
+		u->ver_port = ver;
 }
 
 static enum stage_state st_selinux_probe(struct install_ctx *ctx, char *note,
 					 size_t cap)
 {
+	struct probe_selinux_unmet u = { 0 };
 	int dev = probe_selinux_tpm_label();
 
-	if (dev == 0 && label_ok(PATH_AGENT_BIN, "lota_agent_exec_t") &&
-	    label_ok_if_present(PATH_LOTA_STATE_DIR, "lota_var_t") &&
-	    label_ok_if_present(PATH_LOTA_CONF_DIR, "lota_etc_t") &&
-	    !selinux_port_pending(ctx)) {
+	u.tpm = dev != 0;
+	u.agent = !label_ok(PATH_AGENT_BIN, "lota_agent_exec_t");
+	u.state = !label_ok_if_present(PATH_LOTA_STATE_DIR, "lota_var_t");
+	u.conf = !label_ok_if_present(PATH_LOTA_CONF_DIR, "lota_etc_t");
+	selinux_port_unmet(ctx, &u);
+
+	if (probe_selinux_unmet_note(&u, NULL, 0) == 0) {
 		snprintf(note, cap,
 			 "TPM device, agent binary, state directory and config "
 			 "directory carry the LOTA SELinux labels.%s",
@@ -775,7 +923,7 @@ static enum stage_state st_selinux_probe(struct install_ctx *ctx, char *note,
 		return STAGE_BLOCKED;
 	}
 
-	snprintf(note, cap, "SELinux labels not yet applied.");
+	probe_selinux_unmet_note(&u, note, cap);
 	return STAGE_PENDING;
 }
 
@@ -902,7 +1050,7 @@ static int agent_start_failed(void)
 	return run_capture(failed, out, sizeof(out)) == 0;
 }
 
-static void read_service_state(struct probe_service_state *s)
+void install_service_state(struct probe_service_state *s)
 {
 	s->agent_active = agent_service_active();
 	s->agent_enabled = unit_enabled("lota-agent.service");
@@ -916,9 +1064,7 @@ static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 	int pcr;
 
 	if (ctx->reboot_needed) {
-		snprintf(note, cap,
-			 "Earlier stages changed the boot chain "
-			 "(initramfs or kernel cmdline).");
+		install_reboot_note(note, cap, ctx);
 		return STAGE_REBOOT;
 	}
 
@@ -943,7 +1089,7 @@ static enum stage_state st_agent_probe(struct install_ctx *ctx, char *note,
 
 	(void)ctx;
 
-	read_service_state(&state);
+	install_service_state(&state);
 	return probe_agent_service_stage(&state, note, cap);
 }
 
@@ -1004,7 +1150,7 @@ static int enroll_profile(const struct install_ctx *ctx,
 struct profile_recorded_scratch {
 	struct profile_paths want;
 	struct profile_paths have;
-	char buf[16384];
+	char buf[LOTA_CONFIG_MAX_FILE + 1];
 	char path[PATH_MAX];
 };
 
@@ -1021,9 +1167,15 @@ int installer_profile_recorded(const char *conf_path, const char *anchor)
 	if (!s)
 		return -ENOMEM;
 
-	if (profile_paths_from_anchor(anchor, &s->want) < 0 ||
-	    probe_read_text(conf_path, s->buf, sizeof(s->buf)) < 0)
+	if (profile_paths_from_anchor(anchor, &s->want) < 0)
 		goto out;
+	ret = probe_read_text(conf_path, s->buf, sizeof(s->buf));
+	if (ret < 0) {
+		if (ret == -ENOENT)
+			ret = 0;
+		goto out;
+	}
+	ret = 0;
 
 	count = probe_conf_buf_profile_count(s->buf);
 	for (int i = 0; i < count; i++) {
@@ -1255,28 +1407,37 @@ static int st_enroll_apply(struct install_ctx *ctx)
 #define SELFCHECK_LOOP_WAIT_SEC 90
 #define SELFCHECK_LOOP_POLL_SEC 2
 
+int installer_loop_reports_expected(const char *conf_path)
+{
+	const size_t cap = LOTA_CONFIG_MAX_FILE + 1;
+	char *conf = calloc(1, cap);
+	int rc;
+
+	if (!conf)
+		return -ENOMEM;
+	rc = probe_read_text(conf_path, conf, cap);
+	if (rc >= 0)
+		rc = probe_conf_buf_continuous_count(conf);
+	else if (rc == -ENOENT)
+		rc = 0;
+	free(conf);
+	return rc < 0 ? rc : rc > 1 ? rc : 1;
+}
+
 static int wait_for_loop_report(struct install_ctx *ctx)
 {
 	const char *const argv[] = { "systemctl", "show",
 				     "-p",	  "StatusText",
 				     "--value",	  "lota-attest.service",
 				     NULL };
-	const size_t conf_cap = 16384;
 	char status[512] = { 0 };
-	int expected = 1;
-	char *conf;
+	int expected = installer_loop_reports_expected(PATH_LOTA_CONF);
 
-	/* inlined into install_self_check(), whose frame cannot hold it */
-	conf = calloc(1, conf_cap);
-	if (!conf) {
+	if (expected < 0) {
 		ui_text(&ctx->ui, "Cannot read %s (%s)", PATH_LOTA_CONF,
-			strerror(ENOMEM));
-		return -ENOMEM;
+			strerror(-expected));
+		return expected;
 	}
-	if (probe_read_text(PATH_LOTA_CONF, conf, conf_cap) == 0 &&
-	    probe_conf_buf_continuous_count(conf) > expected)
-		expected = probe_conf_buf_continuous_count(conf);
-	free(conf);
 
 	ui_text(&ctx->ui,
 		"Waiting up to %d s for the attestation loop to report to the "
@@ -1308,20 +1469,23 @@ static int wait_for_loop_report(struct install_ctx *ctx)
 	return -1;
 }
 
-static const char telemetry_summary[] =
+const char install_telemetry_summary[] =
 	"Every attestation report sent to the operator's verifier "
 	"contains:\n"
 	"  - TPM PCR values and a TPM-signed quote over them\n"
+	"  - AIK public key and AIK certificate, whose subject is the "
+	"device pseudonym the attestation CA issued\n"
+	"  - Agent hash, kernel measurement digest and the kernel path\n"
+	"  - IOMMU state\n"
+	"  - Security state flags: TPM quote, IOMMU, boot measurement, Secure "
+	"Boot, kernel lockdown, module signatures, IMA appraisal, PCR 14 boot "
+	"commitment and initramfs lock, whether the agent's LSM is loaded and "
+	"enforcing, which of its mmap, exec, module, anonymous-exec and "
+	"ptrace rules are on, bench mode and lost events\n"
 	"  - Boot event log (firmware and bootloader measurements, "
 	"including the kernel command line, which carries disk UUIDs)\n"
-	"  - Agent and kernel image hashes and the kernel path\n"
-	"  - IOMMU status and counts + hashes of recently executed "
-	"binaries with their paths, PIDs and UIDs (the BPF telemetry the "
-	"anti-cheat verdict is based on)\n"
-	"  - Stable device identifier derived by hashing the TPM "
-	"endorsement key's public name (the key itself never leaves the "
-	"TPM)\n"
-	"  - AIK certificate, whose subject is a CA-issued pseudonym\n"
+	"  - ESRT system firmware entry, or a mark that the platform has none\n"
+	"  - Shim MOK list, empty when it cannot be read\n"
 	"During enrollment only, the attestation CA (never the verifier) "
 	"additionally receives the TPM's EK certificate to prove the TPM "
 	"is genuine.\n"
@@ -1443,6 +1607,14 @@ after_cert:
 		      "one needs operator approval)");
 
 	profiles = probe_conf_profile_count(PATH_LOTA_CONF);
+	if (profiles < 0 && profiles != -ENOENT) {
+		char why[128];
+
+		snprintf(why, sizeof(why), "NOT readable: %s",
+			 strerror(-profiles));
+		ui_kv(&ctx->ui, PATH_LOTA_CONF, why);
+		ok = 0;
+	}
 	if (profiles < 0)
 		profiles = 0;
 
@@ -1512,7 +1684,7 @@ after_cert:
 		break;
 	}
 
-	ui_explain(&ctx->ui, telemetry_summary);
+	ui_explain(&ctx->ui, install_telemetry_summary);
 	return ok ? 0 : -1;
 }
 
@@ -1537,22 +1709,30 @@ static enum stage_state st_firmware_readiness_probe(struct install_ctx *ctx,
 	return STAGE_DONE;
 }
 
-int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
-				  int n)
+/* 'A', 'B' and 'C' */
+static void stage_list(char *buf, size_t cap, const int *idx, int n)
 {
-	char left[1024] = "";
 	size_t used = 0;
 	int i;
 
-	for (i = 0; i < n && used < sizeof(left); i++) {
+	buf[0] = '\0';
+	for (i = 0; i < n && used < cap; i++) {
 		const char *sep = i == 0 ? "" : i == n - 1 ? " and " : ", ";
-		int w = snprintf(left + used, sizeof(left) - used, "%s'%s'",
-				 sep, install_stages[deferred[i]].title);
+		int w = snprintf(buf + used, cap - used, "%s'%s'", sep,
+				 install_stages[idx[i]].title);
 
 		if (w < 0)
 			break;
 		used += (size_t)w;
 	}
+}
+
+int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
+				  int n)
+{
+	char left[1024];
+
+	stage_list(left, sizeof(left), deferred, n);
 
 	snprintf(buf, cap,
 		 "Host-local setup is done. What is left changes how this "
@@ -1572,6 +1752,60 @@ void install_reboot_required(char *buf, size_t cap, const char *note)
 	snprintf(buf, cap,
 		 "Reboot is required before the install can continue: %s%s",
 		 note ? note : "", stop ? "" : ".");
+}
+
+const char *install_resume_start(const struct probe_service_state *s)
+{
+	if (s->agent_enabled)
+		return "After the reboot the agent starts with the boot, "
+		       "re-measures into a fresh PCR 14, and attests again. "
+		       "Nothing else is needed.";
+	if (s->socket_enabled)
+		return "After the reboot the agent starts on the first "
+		       "connection to lota-agent.socket, re-measures into a "
+		       "fresh PCR 14, and attests again.";
+	return "Nothing starts the agent after the reboot: neither "
+	       "lota-agent.service nor lota-agent.socket is enabled. Run "
+	       "'sudo lota-install' to enable it.";
+}
+
+void install_stage_waits_reboot(struct install_ctx *ctx, int stage)
+{
+	ctx->reboot_needed = 1;
+	if (stage >= 0 && stage < install_stage_count)
+		ctx->reboot_stages |= 1u << stage;
+}
+
+void install_reboot_note(char *buf, size_t cap, const struct install_ctx *ctx)
+{
+	int changed[INSTALL_MAX_TUI_STAGES], waits[INSTALL_MAX_TUI_STAGES];
+	char list[1024];
+	int i, nc = 0, nw = 0;
+	size_t used = 0;
+
+	for (i = 0; i < install_stage_count; i++) {
+		if (ctx->boot_changed & (1u << i))
+			changed[nc++] = i;
+		else if (ctx->reboot_stages & (1u << i))
+			waits[nw++] = i;
+	}
+
+	buf[0] = '\0';
+	if (nc) {
+		stage_list(list, sizeof(list), changed, nc);
+		used = (size_t)snprintf(buf, cap,
+					"This run changed the boot chain: %s.",
+					list);
+	}
+	if (nw && used < cap) {
+		stage_list(list, sizeof(list), waits, nw);
+		snprintf(buf + used, cap - used,
+			 "%s%s %s configured and %s effect on the next boot.",
+			 nc ? " " : "", list, nw == 1 ? "is" : "are",
+			 nw == 1 ? "takes" : "take");
+	}
+	if (!nc && !nw)
+		snprintf(buf, cap, "A stage waits for the next boot.");
 }
 
 enum ui_result install_stage_result(enum stage_state st, int applied)

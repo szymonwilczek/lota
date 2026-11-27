@@ -157,6 +157,9 @@ struct lota_esrt {
  *   [lota_esrt: 28 bytes]
  *   [mok_list_size: uint32_t]
  *   [mok_list: uint8_t * mok_list_size]  (EFI_SIGNATURE_LIST data of MokListRT)
+ *
+ * install_telemetry_summary in installer/stages.c lists these sections to the
+ * player.
  */
 struct lota_attestation_report {
 	struct lota_report_header header;
