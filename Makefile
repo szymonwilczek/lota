@@ -212,7 +212,7 @@ LOTA_HOOK32 := 0
 endif
 
 HOOK32_MISSING := the 32-bit half of the Wine hook needs a multilib toolchain \
-(glibc-devel.i686 and libatomic.i686 on Fedora/RHEL, gcc-multilib on \
+(glibc-devel.i686 and libatomic.i686 on Fedora, gcc-multilib on \
 Debian/Ubuntu)
 
 ifeq ($(LOTA_HOOK32),1)
@@ -652,10 +652,6 @@ package-lint:
 		echo "  RPMLINT skipped ($(RPMLINT) not installed)"; \
 	fi
 
-.PHONY: rhel-package-smoke
-rhel-package-smoke:
-	$(Q)scripts/rhel-package-smoke.sh
-
 KO ?= ko
 KO_DOCKER_REPO ?= ghcr.io/szymonwilczek/lota
 KO_IMAGE_TAGS ?= $(PROJECT_VERSION),latest
@@ -868,10 +864,6 @@ check-package-manifests:
 .PHONY: check-includes
 check-includes:
 	@scripts/check-includes.sh
-
-.PHONY: check-el9-decls
-check-el9-decls:
-	@scripts/check-el9-decls.sh
 
 .PHONY: check-player-build
 check-player-build:
@@ -2186,7 +2178,6 @@ help:
 	@$(HELP_ROW) install-lota-bench "Install lota-bench under LOTA_BENCH_PREFIX"
 	@$(HELP_ROW) packages "Build native RPMs via nfpm"
 	@$(HELP_ROW) package-lint "rpmlint the built RPMs (gating)"
-	@$(HELP_ROW) rhel-package-smoke "Install RPMs in Rocky 9 podman; no attestation"
 	@$(HELP_ROW) container-images "Build distroless verifier + attest-CA images"
 	@$(HELP_ROW) container-image-attest-ca-hsm "Build the PKCS#11 (HSM) attest-CA image"
 	@$(HELP_ROW) srpm "Build a source RPM from HEAD (COPR / rpmbuild)"
@@ -2204,7 +2195,6 @@ help:
 	@$(HELP_ROW) valgrind-unit "Run unit tests under valgrind memcheck"
 	@$(HELP_ROW) valgrind-smoke "Run CLI smoke paths under valgrind memcheck"
 	@$(HELP_ROW) check-includes "Fail on unused #includes"
-	@$(HELP_ROW) check-el9-decls "Syntax-check the C tree against el9 headers"
 	@$(HELP_ROW) check-player-build "Run the player build+install in clean Fedora"
 	@$(HELP_ROW) check-abi "Fail on public SDK symbol/header/layout drift"
 	@$(HELP_ROW) check-stack-frames "Fail on an oversized stack frame in a binary"
