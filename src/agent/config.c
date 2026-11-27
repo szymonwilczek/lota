@@ -434,12 +434,12 @@ static int value_defect(const char *key, const char *value, char *why,
 		return -EILSEQ;
 	}
 
-	line = strlen(key) + strlen(" = ") + strlen(value) + 1;
-	if (line >= LOTA_CONFIG_MAX_LINE) {
+	line = strlen(key) + strlen(" = ") + strlen(value);
+	if (line > LOTA_CONFIG_MAX_LINE - 2) {
 		snprintf(why, why_cap,
 			 "needs a %zu-character line; the parser reads at most "
 			 "%d",
-			 line, LOTA_CONFIG_MAX_LINE - 1);
+			 line, LOTA_CONFIG_MAX_LINE - 2);
 		return -EILSEQ;
 	}
 
@@ -1059,9 +1059,8 @@ static int config_load_stream(struct lota_config *cfg, FILE *f,
 		len = strlen(line);
 		if (len > 0 && line[len - 1] != '\n' && !feof(f)) {
 			int ch;
-			fprintf(stderr,
-				"%s:%d: line exceeds %d characters, skipping\n",
-				filepath, lineno, LOTA_CONFIG_MAX_LINE - 1);
+			fprintf(stderr, "%s:%d: line exceeds %d characters\n",
+				filepath, lineno, LOTA_CONFIG_MAX_LINE - 2);
 			errors++;
 			while ((ch = fgetc(f)) != EOF && ch != '\n')
 				;
@@ -1438,7 +1437,6 @@ static int profile_append_text(const char *label, const char *existing,
 			       size_t out_cap)
 {
 	struct lota_config *cur;
-	char section[1024];
 	size_t existing_len;
 	int rendered;
 	int ret;
@@ -1502,15 +1500,13 @@ static int profile_append_text(const char *label, const char *existing,
 	if (ret < 0)
 		return ret;
 
-	rendered = profile_section_render(p, section, sizeof(section));
+	if (existing_len >= out_cap)
+		return -EOVERFLOW;
+	memcpy(out, existing, existing_len);
+	rendered = profile_section_render(p, out + existing_len,
+					  out_cap - existing_len);
 	if (rendered < 0)
 		return rendered;
-
-	if (existing_len + (size_t)rendered + 1 > out_cap)
-		return -EOVERFLOW;
-
-	memcpy(out, existing, existing_len);
-	memcpy(out + existing_len, section, (size_t)rendered + 1);
 	return 1;
 }
 

@@ -904,6 +904,94 @@ static void test_config_load_value_too_long(void)
 	PASS();
 }
 
+/* fgets keeps one byte for the newline and one for the NUL */
+static void test_config_load_line_limit(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char log_path[PATH_MAX];
+	char text[LOTA_CONFIG_MAX_LINE + 2];
+	char log[256] = "";
+	struct lota_profile prof;
+	char want[96];
+	char why[256];
+	size_t anchor;
+	int saved, fd, rc;
+
+	TEST("config_load takes a line of the documented length, no longer");
+
+	memset(text, '#', LOTA_CONFIG_MAX_LINE - 2);
+	text[LOTA_CONFIG_MAX_LINE - 2] = '\n';
+	text[LOTA_CONFIG_MAX_LINE - 1] = '\0';
+	write_config("line_limit.conf", text);
+	config_path("line_limit.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != 0) {
+		FAIL("a line of the limit is refused");
+		return;
+	}
+
+	memset(text, '#', LOTA_CONFIG_MAX_LINE - 1);
+	text[LOTA_CONFIG_MAX_LINE - 1] = '\n';
+	text[LOTA_CONFIG_MAX_LINE] = '\0';
+	write_config("line_limit.conf", text);
+	config_path("line_limit.log", log_path, sizeof(log_path));
+	saved = dup(STDERR_FILENO);
+	fd = open(log_path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (saved < 0 || fd < 0) {
+		FAIL("setup");
+		return;
+	}
+	fflush(stderr);
+	dup2(fd, STDERR_FILENO);
+	config_init(&cfg);
+	rc = config_load(&cfg, path);
+	fflush(stderr);
+	dup2(saved, STDERR_FILENO);
+	close(saved);
+	if (pread(fd, log, sizeof(log) - 1, 0) < 0)
+		log[0] = '\0';
+	close(fd);
+	unlink(log_path);
+
+	if (rc != -EINVAL) {
+		FAIL("a line one character too long loads");
+		return;
+	}
+	snprintf(want, sizeof(want), ":1: line exceeds %d characters\n",
+		 LOTA_CONFIG_MAX_LINE - 2);
+	if (!strstr(log, want)) {
+		FAIL(log);
+		return;
+	}
+
+	/* the writer refuses what the parser would refuse, by the same count */
+	memset(&prof, 0, sizeof(prof));
+	strcpy(prof.name, "limit");
+	strcpy(prof.ca, "ca.example");
+	prof.token_only = true;
+	anchor = LOTA_CONFIG_MAX_LINE - 2 - strlen("ca_cert = ");
+	prof.ca_cert[0] = '/';
+	memset(prof.ca_cert + 1, 'a', anchor - 1);
+	prof.ca_cert[anchor] = '\0';
+	if (config_profile_defect(&prof, why, sizeof(why)) != 0) {
+		FAIL(why);
+		return;
+	}
+	prof.ca_cert[anchor] = 'a';
+	prof.ca_cert[anchor + 1] = '\0';
+	snprintf(want, sizeof(want),
+		 "needs a %d-character line; the parser reads at most %d",
+		 LOTA_CONFIG_MAX_LINE - 1, LOTA_CONFIG_MAX_LINE - 2);
+	if (config_profile_defect(&prof, why, sizeof(why)) != -EILSEQ ||
+	    !strstr(why, want)) {
+		FAIL(why);
+		return;
+	}
+
+	PASS();
+}
+
 static void test_config_load_whitespace_trimming(void)
 {
 	struct lota_config cfg;
@@ -2988,6 +3076,7 @@ int main(void)
 		test_config_load_invalid_mode,
 		test_config_load_invalid_log_level,
 		test_config_load_value_too_long,
+		test_config_load_line_limit,
 		test_config_load_whitespace_trimming,
 		test_config_load_unknown_keys,
 		test_config_load_malformed_lines,

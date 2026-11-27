@@ -807,6 +807,47 @@ int probe_conf_buf_has_key(const char *buf, const char *key)
 	return 0;
 }
 
+int probe_file_equals(const char *path, const char *buf, size_t len)
+{
+	char chunk[4096];
+	struct stat st;
+	size_t off = 0;
+	int fd;
+	int rc = 1;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+	if (fstat(fd, &st) < 0) {
+		rc = -errno;
+		close(fd);
+		return rc;
+	}
+	if (!S_ISREG(st.st_mode) || (size_t)st.st_size != len) {
+		close(fd);
+		return 0;
+	}
+
+	while (off < len) {
+		ssize_t got = read(fd, chunk, sizeof(chunk));
+
+		if (got < 0 && errno == EINTR)
+			continue;
+		if (got < 0) {
+			rc = -errno;
+			break;
+		}
+		if (got == 0 || (size_t)got > len - off ||
+		    memcmp(chunk, buf + off, (size_t)got) != 0) {
+			rc = 0;
+			break;
+		}
+		off += (size_t)got;
+	}
+	close(fd);
+	return rc;
+}
+
 int probe_auto_bringup_at(const char *path)
 {
 	const char *env = getenv("LOTA_AUTO_BRINGUP");

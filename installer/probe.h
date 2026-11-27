@@ -483,6 +483,17 @@ enum probe_selfcheck_plan probe_selfcheck_plan(const char *verifier,
 					       bool fleet_profile);
 
 /**
+ * probe_file_equals() - Whether a file holds exactly the given bytes.
+ * @path: file to compare.
+ * @buf:  expected contents.
+ * @len:  bytes in @buf.
+ *
+ * Return: 1 when the file is @len bytes long and equal to @buf,
+ * 0 when it differs, or -errno when @path cannot be read.
+ */
+int probe_file_equals(const char *path, const char *buf, size_t len);
+
+/**
  * probe_auto_bringup_at() - Whether unattended boot-path bring-up is allowed.
  * @path: marker file, or NULL.
  *

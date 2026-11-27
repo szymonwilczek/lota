@@ -225,9 +225,11 @@ The lock belongs in **every** installed kernel's initramfs, not only the
 running one. The kernel command-line floor is armed on every boot entry, so a
 kernel that can be selected from the boot menu without the lock boots a host
 with no commitment; ``lota-install`` regenerates them all and reports the stage
-unsatisfied while any installed kernel is missing the helper. A kernel
-installed later picks the helper up from the packaged dracut module without
-further action.
+unsatisfied while the initramfs of any installed kernel holds no helper, or
+one whose bytes differ from the installed ``/usr/lib/lota/lota-pcr14-lock``.
+A kernel installed later picks the helper up from the packaged dracut module
+without further action; a package upgrade replaces the helper on disk only,
+so an existing initramfs keeps the older one until it is regenerated.
 
 A MOK change (enrolling a key with ``mokutil``, a shim/SBAT update) shifts the
 baseline and therefore the final PCR14, so an enrolled host reports an
