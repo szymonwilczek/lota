@@ -207,6 +207,7 @@ func TestAgentHashRepin_StoreGuardIsAuthoritative(t *testing.T) {
 
 	now := time.Now()
 	outcome := bs.CheckAndUpdateAttestation(baselineKey(clientID),
+		DefaultTenant,
 		fixturePCR14Seed(repinOldBuild), fixtureAgentHashSeed(repinOldBuild), nil, false)
 	if outcome.AgentHashResult != TOFUFirstUse {
 		t.Fatalf("expected TOFUFirstUse, got %v", outcome.AgentHashResult)
@@ -247,7 +248,7 @@ func TestAgentHashRepin_SQLitePersistsAndRateLimits(t *testing.T) {
 
 	oldHash := fixtureAgentHashSeed(repinOldBuild)
 	newHash := fixtureAgentHashSeed(repinNewBuild)
-	outcome := bs.CheckAndUpdateAttestation(clientID,
+	outcome := bs.CheckAndUpdateAttestation(clientID, DefaultTenant,
 		fixturePCR14Seed(repinOldBuild), oldHash, nil, false)
 	if outcome.AgentHashResult != TOFUFirstUse {
 		t.Fatalf("expected TOFUFirstUse, got %v", outcome.AgentHashResult)
@@ -266,7 +267,7 @@ func TestAgentHashRepin_SQLitePersistsAndRateLimits(t *testing.T) {
 	}
 
 	// row now holds the new build, so the same report matches
-	outcome = bs.CheckAndUpdateAttestation(clientID,
+	outcome = bs.CheckAndUpdateAttestation(clientID, DefaultTenant,
 		fixturePCR14Seed(repinNewBuild), newHash, nil, false)
 	if outcome.AgentHashResult != TOFUMatch {
 		t.Fatalf("expected TOFUMatch after the re-pin, got %v", outcome.AgentHashResult)

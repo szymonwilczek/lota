@@ -50,7 +50,7 @@ Each connection carries one round (:ghsrc:`src/verifier/server/server.go`).
    policy and every tenant-bound policy pin, with PCR 0, 1, 7, 9 and 14 always
    set, and PCR 8 when such a policy pins the kernel command line.
 #. The client sends its report (:doc:`report-format`). A frame with a foreign
-   magic, or a size outside 32 bytes to 256 KiB, is answered with
+   magic, or a size outside 32 to 562416 bytes, is answered with
    ``report_malformed`` before the body is read. The read timeout covers the
    whole report.
 #. The verifier checks the report and sends the 24-byte result: the verdict

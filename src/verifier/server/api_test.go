@@ -1563,6 +1563,58 @@ func TestReanchorReviewListStoreError(t *testing.T) {
 	}
 }
 
+// TestListBansStoreError answers a bad cursor with 400 and a failed store
+// read with 500, without the store's error text.
+func TestListBansStoreError(t *testing.T) {
+	db, err := store.OpenDB(t.TempDir() + "/b.sqlite")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	m := metrics.New()
+	cfg := verify.DefaultConfig()
+	cfg.RequireBootEnrollment = false
+	cfg.Metrics = m
+	auditLog := store.NewSQLiteAuditLog(db)
+	cfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
+	v := verify.NewVerifier(cfg, newCertVerifier(t))
+	srv := &Server{verifier: v, addr: ":8443"}
+	mux := http.NewServeMux()
+	NewAPIHandler(mux, v, srv, auditLog, nil, m, nil,
+		"admin-key", "reader-key")
+
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer reader-key")
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		return rr
+	}
+
+	rr := get("/api/v1/bans?next_id=bogus")
+	body := rr.Body.String()
+	if rr.Code != http.StatusBadRequest ||
+		!strings.Contains(body, "invalid next_id") {
+		t.Fatalf("bad cursor: got %d, body %s", rr.Code, body)
+	}
+
+	_, err = db.Exec(
+		"ALTER TABLE hardware_bans RENAME TO hardware_bans_gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr = get("/api/v1/bans")
+	body = rr.Body.String()
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("store error: got %d, body %s", rr.Code, body)
+	}
+	if !strings.Contains(body, "database unavailable") ||
+		strings.Contains(body, "hardware_bans") {
+		t.Fatalf("store error: body %s", body)
+	}
+}
+
 func TestReanchorReviewEndpoints(t *testing.T) {
 	aikVerifier := newCertVerifier(t)
 

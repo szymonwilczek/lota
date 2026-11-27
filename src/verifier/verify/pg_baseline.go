@@ -526,7 +526,8 @@ func (s *PostgresBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot Boo
 
 // CheckAndUpdateAttestation implements AtomicBaselineStorer in one
 // transaction under lockClient. A branch that does not commit rolls back.
-func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
+func (s *PostgresBaselineStore) CheckAndUpdateAttestation(
+	clientID, tenant string,
 	pcr14, agentHash [types.HashSize]byte,
 	boot *BootBaseline, consent bool,
 ) AttestationOutcome {
@@ -604,11 +605,12 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 				INSERT INTO baselines (
 					client_id, pcr14, agent_hash, first_seen, last_seen,
 					attest_count, pcr0, pcr1, pcr7, boot_first_seen,
-					boot_last_seen
-				) VALUES ($1, $2, $3, $4, $5, 1, $6, $7, $8, $9, $10)`,
+					boot_last_seen, tenant
+				) VALUES ($1, $2, $3, $4, $5, 1, $6, $7, $8,
+					$9, $10, $11)`,
 				clientID, pcr14[:], agentHash[:], now.UTC(), now.UTC(),
 				boot.PCR0[:], boot.PCR1[:], boot.PCR7[:],
-				now.UTC(), now.UTC()); err != nil {
+				now.UTC(), now.UTC(), tenant); err != nil {
 				slog.Error("attestation tx: INSERT (with boot) failed",
 					"client_id", clientID, "error", err)
 				outcome.AgentHashResult = TOFUError
@@ -629,9 +631,10 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO baselines (
 					client_id, pcr14, agent_hash, first_seen, last_seen,
-					attest_count
-				) VALUES ($1, $2, $3, $4, $5, 1)`,
-				clientID, pcr14[:], agentHash[:], now.UTC(), now.UTC()); err != nil {
+					attest_count, tenant
+				) VALUES ($1, $2, $3, $4, $5, 1, $6)`,
+				clientID, pcr14[:], agentHash[:], now.UTC(),
+				now.UTC(), tenant); err != nil {
 				slog.Error("attestation tx: INSERT (agent_hash only) failed",
 					"client_id", clientID, "error", err)
 				outcome.AgentHashResult = TOFUError

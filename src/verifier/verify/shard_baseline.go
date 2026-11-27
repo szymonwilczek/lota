@@ -153,11 +153,12 @@ func (s *ShardedBaselineStore) GetBootBaseline(clientID string,
 	return s.shardFor(clientID).GetBootBaseline(clientID)
 }
 
-func (s *ShardedBaselineStore) CheckAndUpdateAttestation(clientID string,
+func (s *ShardedBaselineStore) CheckAndUpdateAttestation(
+	clientID, tenant string,
 	pcr14, agentHash [types.HashSize]byte, boot *BootBaseline, consent bool,
 ) AttestationOutcome {
-	return s.shardFor(clientID).CheckAndUpdateAttestation(clientID, pcr14,
-		agentHash, boot, consent)
+	return s.shardFor(clientID).CheckAndUpdateAttestation(clientID, tenant,
+		pcr14, agentHash, boot, consent)
 }
 
 func (s *ShardedBaselineStore) CheckAndUpdateAgentHash(clientID string,

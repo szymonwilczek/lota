@@ -51,6 +51,13 @@
 #include "watchdog_pace.h"
 #include "iommu_types.h"
 
+_Static_assert(TPM_MAX_EVENT_LOG_SIZE == 512 * 1024,
+	       "event log cap changed; update MaxEventLogSize in "
+	       "types/report.go");
+_Static_assert(MOK_LIST_MAX == 32 * 1024,
+	       "MOK list cap changed; update MaxMokListSize in "
+	       "types/report.go");
+
 static int read_pcr_for_kernel_measurement(void *ctx, int pcr,
 					   uint8_t out[LOTA_HASH_SIZE])
 {
@@ -632,7 +639,12 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 	if (event_log) {
 		ret = tpm_read_event_log(event_log, TPM_MAX_EVENT_LOG_SIZE,
 					 &event_log_size);
-		if (ret < 0) {
+		if (ret == -ENOSPC) {
+			lota_err("TPM event log is over %d bytes; the report "
+				 "is sent without it",
+				 TPM_MAX_EVENT_LOG_SIZE);
+			event_log_size = 0;
+		} else if (ret < 0) {
 			if (verbose)
 				fprintf(stderr,
 					"Warning: Failed to read TPM event "

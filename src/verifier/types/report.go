@@ -320,9 +320,18 @@ var (
 // TPM(4912) + System(396) + event_log_size(4) + ESRT(28) + mok_list_size(4).
 const MinReportSize = 5360
 
-// MaxReportWireSize caps a report before the verifier allocates for it. A
-// firmware event log takes most of it, and dbx grows over a machine's life.
-const MaxReportWireSize = 256 * 1024
+// MaxEventLogSize is the largest event log section;
+// the agent reads at most TPM_MAX_EVENT_LOG_SIZE (src/agent/tpm.h).
+const MaxEventLogSize = 512 * 1024
+
+// MaxMokListSize is the largest MOK list section;
+// the agent reads at most MOK_LIST_MAX (src/agent/moklist.h).
+const MaxMokListSize = 32 * 1024
+
+// MaxReportWireSize caps a report before the verifier allocates for it:
+// the fixed part with both variable sections at their limits.
+const MaxReportWireSize = FixedReportSize + 4 + MaxEventLogSize +
+	ESRTWireSize + MokListSizeLen + MaxMokListSize
 
 // FixedReportSize is Header(16) + TPM(4912) + System(396).
 const FixedReportSize = 5324
@@ -416,6 +425,10 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	}
 	eventLogSize := binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
+	if eventLogSize > MaxEventLogSize {
+		return nil, fmt.Errorf("%w: event_log_size %d exceeds max %d",
+			ErrInvalidSize, eventLogSize, MaxEventLogSize)
+	}
 	if len(data) < offset+int(eventLogSize) {
 		return nil, fmt.Errorf("%w: truncated at event_log (need %d, have %d)",
 			ErrInvalidSize, eventLogSize, len(data)-offset)
@@ -446,6 +459,10 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	}
 	mokListSize := binary.LittleEndian.Uint32(data[offset:])
 	offset += MokListSizeLen
+	if mokListSize > MaxMokListSize {
+		return nil, fmt.Errorf("%w: mok_list_size %d exceeds max %d",
+			ErrInvalidSize, mokListSize, MaxMokListSize)
+	}
 	if len(data) < offset+int(mokListSize) {
 		return nil, fmt.Errorf("%w: truncated at MOK list (need %d, have %d)",
 			ErrInvalidSize, mokListSize, len(data)-offset)

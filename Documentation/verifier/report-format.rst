@@ -65,6 +65,10 @@ smallest report is 5360 bytes. A host with nothing to put in a section says so
 in it: an event log or a MOK list of size 0, an ESRT entry with ``present``
 0.
 
+The event log holds at most 524288 bytes and the MOK list at most 32768, so
+the largest report is 562416 bytes. The agent sends a longer event log or MOK
+list as size 0.
+
 Header
 ------
 
@@ -252,12 +256,13 @@ Report                                    Verdict
 ========================================= ==================================
 Another magic                             ``report_malformed``, before the
                                           body is read.
-``report_size`` below 32 or above 256 KiB ``report_malformed``, before the
-                                          body is read.
+``report_size`` below 32 or above         ``report_malformed``, before the
+562416 bytes                              body is read.
 Shorter than 5360 bytes, in any version   ``report_malformed``.
 Another version                           ``old_version``.
-A length field above its buffer, or a     ``report_malformed``.
-section cut off
+A length field above its buffer, a        ``report_malformed``.
+section above its limit, or a section
+cut off
 ========================================= ==================================
 
 Versions

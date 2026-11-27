@@ -52,9 +52,10 @@ Records
   decision log rows carry its tenant, and each listing of the monitoring API
   filters on it.
 
-A client's baseline takes its tenant on its first passing round, and reads
-``default`` until then. The trust roots, the CRLs, the nonce history and
-the verifier's limits are shared by every tenant.
+A client's baseline takes its tenant from the round that pins it, and each
+passing round records the tenant of its certificate. The trust roots, the
+CRLs, the nonce history and the verifier's limits are shared by every
+tenant.
 
 Policies
 ========

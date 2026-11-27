@@ -923,7 +923,19 @@ func TestVerify_BootEnrollmentGateRefusesTOFUFirstUse(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.NonceLifetime = 1 * time.Second
 
-	result, err := attestUnderConfig(t, cfg, "boot-enrollment-refused")
+	verifier := NewVerifier(cfg, newCertVerifier(t))
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
+	}
+	challenge, err := verifier.GenerateChallenge("boot-enrollment-refused")
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+	reportData := createValidReport(t, "boot-enrollment-refused",
+		challenge.Nonce, fixturePCR14())
+
+	result, err := verifier.VerifyReportFrom("boot-enrollment-refused", "",
+		reportData)
 	if err == nil {
 		t.Fatal("expected rejection: boot baseline not enrolled")
 	}
@@ -935,6 +947,14 @@ func TestVerify_BootEnrollmentGateRefusesTOFUFirstUse(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "boot baseline not enrolled") {
 		t.Fatalf("expected the enrollment-gate error, got: %v", err)
+	}
+	counts := verifier.metrics.Rejections.Values()
+	refused := types.VerifyResultString(types.VerifyPolicyRequirement)
+	if got := counts[refused]; got != 1 {
+		t.Fatalf("policy_requirement rejections = %d, want 1", got)
+	}
+	if got := counts["baseline_error"]; got != 0 {
+		t.Fatalf("baseline_error rejections = %d, want 0", got)
 	}
 }
 

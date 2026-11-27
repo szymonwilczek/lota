@@ -1021,10 +1021,19 @@ func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 
 	switch lister := banStr.(type) {
 	case store.CursorBanLister:
+		if nextID != "" {
+			if _, err := store.DecodeBanCursor(nextID); err != nil {
+				writeJSONStatus(w, http.StatusBadRequest,
+					errorResponse{Error: "invalid next_id"})
+				return
+			}
+		}
 		var err error
 		entries, err = lister.ListBansAfter(limit+1, nextID)
 		if err != nil {
-			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			h.log.Error("failed to list bans", "error", err)
+			writeJSONStatus(w, http.StatusInternalServerError,
+				errorResponse{Error: "database unavailable"})
 			return
 		}
 

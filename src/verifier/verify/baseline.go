@@ -291,9 +291,9 @@ type AttestationOutcome struct {
 // A nil boot leaves the boot baseline untouched. Any mismatch writes nothing.
 // With consent, a first boot pin spends the client's forced re-anchor consent
 // in the same transaction; with no consent left it writes nothing and reads
-// TOFUError.
+// TOFUError. A row the call creates carries tenant.
 type AtomicBaselineStorer interface {
-	CheckAndUpdateAttestation(clientID string,
+	CheckAndUpdateAttestation(clientID, tenant string,
 		pcr14, agentHash [types.HashSize]byte,
 		boot *BootBaseline, consent bool) AttestationOutcome
 }
@@ -904,7 +904,7 @@ func (s *BaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootBaselin
 
 // CheckAndUpdateAttestation implements AtomicBaselineStorer under the store
 // mutex.
-func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
+func (s *BaselineStore) CheckAndUpdateAttestation(clientID, tenant string,
 	pcr14, agentHash [types.HashSize]byte,
 	boot *BootBaseline, consent bool,
 ) AttestationOutcome {
@@ -936,6 +936,7 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 			LastSeen:    now,
 			AttestCount: 1,
 		}
+		s.tenants[clientID] = tenant
 		snap := *b
 		outcome.AgentHashResult = TOFUFirstUse
 		outcome.AgentHashBaseline = &snap

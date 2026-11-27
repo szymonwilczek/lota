@@ -14,8 +14,10 @@ import (
 	"log/slog"
 	"runtime"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/szymonwilczek/lota/verifier/logging"
 	"github.com/szymonwilczek/lota/verifier/metrics"
@@ -256,15 +258,23 @@ func certificateVerdict(err error) uint32 {
 // The reason quotes report data, so it is capped when written.
 const MaxRecordedDetail = 2048
 
-// recordedDetail returns err as one sanitized, bounded line for the decision
-// log. An accepted round (nil err) records an empty reason.
+// recordedDetail returns err as one sanitized, valid UTF-8 line of at most
+// MaxRecordedDetail bytes for the decision log; a longer one is cut on a rune
+// boundary and ends in "...[truncated]". An accepted round (nil err) records
+// an empty reason.
 func recordedDetail(err error) string {
 	if err == nil {
 		return ""
 	}
-	detail := logging.SanitizeField(err.Error())
+	detail := strings.ToValidUTF8(logging.SanitizeField(err.Error()),
+		"\uFFFD")
 	if len(detail) > MaxRecordedDetail {
-		detail = detail[:MaxRecordedDetail]
+		const marker = "...[truncated]"
+		cut := MaxRecordedDetail - len(marker)
+		for cut > 0 && !utf8.RuneStart(detail[cut]) {
+			cut--
+		}
+		detail = detail[:cut] + marker
 	}
 	return detail
 }
@@ -668,9 +678,12 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 			logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
 				"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
 				"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, enable require_secureboot for diverse fleets, or run with --allow-tofu-boot-baseline")
-			v.metrics.Rejections.Inc("baseline_error")
+			v.metrics.Rejections.Inc(types.VerifyResultString(
+				types.VerifyPolicyRequirement))
 			result.Result = types.VerifyPolicyRequirement
-			return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")
+			return result, errors.New("FAIL_POLICY_REQUIREMENT: " +
+				"boot baseline not enrolled (TOFU first-use " +
+				"refused under RequireBootEnrollment)")
 		}
 		bootPin = bootBaselineRoad{
 			allowedBy: "--allow-tofu-boot-baseline",
@@ -679,7 +692,7 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	}
 
 	outcome := atomicStore.CheckAndUpdateAttestation(
-		clientID, pcr14, report.System.AgentHash, bootPtr,
+		clientID, tenant, pcr14, report.System.AgentHash, bootPtr,
 		bootPin.consent)
 
 	switch outcome.AgentHashResult {
@@ -695,7 +708,8 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		if v.tryAgentHashRepin(clog, clientID, tenant, pcr14, report) {
 			// the mismatch aborted the transaction; re-run it
 			outcome = atomicStore.CheckAndUpdateAttestation(
-				clientID, pcr14, report.System.AgentHash, bootPtr,
+				clientID, tenant, pcr14,
+				report.System.AgentHash, bootPtr,
 				bootPin.consent)
 			if outcome.AgentHashResult != TOFUMatch {
 				logging.Security(clog, "agent_hash re-pin did not settle; refusing",
@@ -750,7 +764,8 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		if v.tryMOKRepin(clog, clientID, tenant, pinned, pcr14, report, bootFacts) {
 			// the mismatch aborted the transaction; re-run it on the moved pin
 			outcome = atomicStore.CheckAndUpdateAttestation(
-				clientID, pcr14, report.System.AgentHash, bootPtr,
+				clientID, tenant, pcr14,
+				report.System.AgentHash, bootPtr,
 				bootPin.consent)
 			if outcome.PCR14Result == TOFUMatch {
 				break

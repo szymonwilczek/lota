@@ -468,6 +468,7 @@ func newBootEntryCase(t *testing.T, current []byte) *bootEntryCase {
 	c := &bootEntryCase{v: v, id: "boot-entry-client",
 		pinned: bootOfLog(t, pinnedLog)}
 	v.baselineStore.(AtomicBaselineStorer).CheckAndUpdateAttestation(c.id,
+		DefaultTenant,
 		[types.HashSize]byte{1}, fixtureAgentHash(), &c.pinned, false)
 	rs := v.baselineStore.(ReanchorStorer)
 	if err := rs.ArchiveAndReanchor(c.id, c.pinned, pinnedLog, 0, false,
