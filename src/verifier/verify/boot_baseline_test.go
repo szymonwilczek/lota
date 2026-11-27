@@ -303,17 +303,25 @@ func TestPCRVerifier_PolicyDeclaresBootPCRsForTenant(t *testing.T) {
 		t.Fatal("expected false with no active policy")
 	}
 
+	a, b, c := strings.Repeat("aa", 32), strings.Repeat("bb", 32),
+		strings.Repeat("cc", 32)
+	d := strings.Repeat("dd", 32)
+	agent := []string{strings.Repeat("de", 32)}
 	for _, tc := range []struct {
 		name string
 		pcrs map[int]string
 		want bool
 	}{
-		{"pin-all", map[int]string{0: "aa", 1: "bb", 7: "cc"}, true},
-		{"pin-partial", map[int]string{0: "aa", 7: "cc"}, false},
-		{"pin-none", map[int]string{14: "dd"}, false},
+		{"pin-all", map[int]string{0: a, 1: b, 7: c}, true},
+		{"pin-partial", map[int]string{0: a, 7: c}, false},
+		{"pin-none", map[int]string{14: d}, false},
 	} {
 		v := NewPCRVerifier()
-		policy := &PCRPolicy{Name: tc.name, PCRs: tc.pcrs, AgentHashes: []string{"de"}}
+		policy := &PCRPolicy{
+			Name:        tc.name,
+			PCRs:        tc.pcrs,
+			AgentHashes: agent,
+		}
 		if err := v.AddPolicy(policy); err != nil {
 			t.Fatalf("AddPolicy: %v", err)
 		}
@@ -330,7 +338,11 @@ func TestPCRVerifier_PolicyRequiresSecureBootForTenant(t *testing.T) {
 
 	for _, want := range []bool{true, false} {
 		v := NewPCRVerifier()
-		policy := &PCRPolicy{Name: "sb", RequireSecureBoot: want, AgentHashes: []string{"de"}}
+		policy := &PCRPolicy{
+			Name:              "sb",
+			RequireSecureBoot: want,
+			AgentHashes:       []string{strings.Repeat("de", 32)},
+		}
 		if err := v.AddPolicy(policy); err != nil {
 			t.Fatalf("AddPolicy: %v", err)
 		}
@@ -866,9 +878,13 @@ func TestVerify_AnchoredBootPinNamesItsAnchor(t *testing.T) {
 func TestBootBaselineRoad_PolicyPinsClaimNoSignature(t *testing.T) {
 	v := NewVerifier(DefaultConfig(), newCertVerifier(t))
 	policy := &PCRPolicy{
-		Name:        "pinned",
-		PCRs:        map[int]string{0: "aa", 1: "bb", 7: "cc"},
-		AgentHashes: []string{"de"},
+		Name: "pinned",
+		PCRs: map[int]string{
+			0: strings.Repeat("aa", 32),
+			1: strings.Repeat("bb", 32),
+			7: strings.Repeat("cc", 32),
+		},
+		AgentHashes: []string{strings.Repeat("de", 32)},
 	}
 	if err := v.AddPolicy(policy); err != nil {
 		t.Fatalf("AddPolicy: %v", err)

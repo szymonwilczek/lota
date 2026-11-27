@@ -423,10 +423,19 @@ func TestTenantPolicyBinding(t *testing.T) {
 func TestChallengePolicyMaskIsUnion(t *testing.T) {
 	pv := NewPCRVerifier()
 
-	if err := pv.AddPolicy(&PCRPolicy{Name: "base", PCRs: map[int]string{4: "aa"}}); err != nil {
+	base := &PCRPolicy{
+		Name: "base",
+		PCRs: map[int]string{4: strings.Repeat("aa", 32)},
+	}
+	if err := pv.AddPolicy(base); err != nil {
 		t.Fatalf("AddPolicy(base): %v", err)
 	}
-	if err := pv.AddPolicy(&PCRPolicy{Name: "bound", Tenant: "acme", PCRs: map[int]string{5: "bb"}}); err != nil {
+	bound := &PCRPolicy{
+		Name:   "bound",
+		Tenant: "acme",
+		PCRs:   map[int]string{5: strings.Repeat("bb", 32)},
+	}
+	if err := pv.AddPolicy(bound); err != nil {
 		t.Fatalf("AddPolicy(bound): %v", err)
 	}
 

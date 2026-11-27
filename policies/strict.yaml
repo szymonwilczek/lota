@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # LOTA PCR Policy - Strict Security
 #
-# Every require_* check on, with PCR 0/1/7/8 pinned. A host must show
+# Every require_* check on, with PCR 0/1/7 pinned. A host must show
 # require_iommu, require_enforce, require_module_sig, require_secureboot,
 # require_lockdown and require_ima_appraisal true in
 #
@@ -17,7 +17,7 @@ description: "Strict security policy - all protections required"
 # with -enable-self-service-reanchor; see production.yaml for consumer.
 profile: enterprise
 
-# A host whose PCR 0, 1, 7 or 8 differs from these values is refused.
+# A host whose PCR 0, 1 or 7 differs from these values is refused.
 pcrs:
   # firmware
   0: "REPLACE_WITH_REAL_PCR0_FROM_lota-agent_--export-policy"
@@ -25,10 +25,8 @@ pcrs:
   1: "REPLACE_WITH_REAL_PCR1_FROM_lota-agent_--export-policy"
   # Secure Boot state
   7: "REPLACE_WITH_REAL_PCR7_FROM_lota-agent_--export-policy"
-  # GRUB kernel command line; on systemd-boot or a UKI pin 12 instead
-  8: "REPLACE_WITH_REAL_PCR8_FROM_lota-agent_--export-policy"
 
-# Left empty: PCR 7 and PCR 8 bind the kernel. See production.yaml.
+# Left empty: no kernel image is bound. See production.yaml.
 kernel_hashes: []
 
 agent_hashes:

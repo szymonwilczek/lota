@@ -7,10 +7,9 @@ package server
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
@@ -104,8 +103,14 @@ func LoadAPIKeysFile(path string) (*APIKeySet, error) {
 	}
 
 	var file apiKeyFile
-	if err := yaml.Unmarshal(data, &file); err != nil {
-		return nil, fmt.Errorf("failed to parse API keys file %s: malformed YAML", path)
+	err = verify.DecodeYAMLDocument(data, &file)
+	if errors.Is(err, verify.ErrExtraYAMLDocument) {
+		return nil, fmt.Errorf("failed to parse API keys file %s: %w",
+			path, err)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse API keys file %s: "+
+			"unknown key or malformed YAML", path)
 	}
 	if len(file.Keys) == 0 {
 		return nil, fmt.Errorf("API keys file %s defines no keys", path)

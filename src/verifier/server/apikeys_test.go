@@ -42,6 +42,7 @@ func TestLoadAPIKeysFile(t *testing.T) {
   - key_sha256: %s
     role: reader
     tenants: ["*"]
+---
 `, keyHashHex("admin-acme"), keyHashHex("reader-all")))
 
 	set, err := LoadAPIKeysFile(path)
@@ -83,6 +84,12 @@ func TestLoadAPIKeysFileRejectsInvalid(t *testing.T) {
 		"invalid tenant":  fmt.Sprintf("keys:\n  - key_sha256: %s\n    role: admin\n    tenants: [\"Not Valid\"]\n", hash),
 		"duplicate hash":  fmt.Sprintf("keys:\n  - key_sha256: %s\n    role: admin\n    tenants: [\"*\"]\n  - key_sha256: %s\n    role: reader\n    tenants: [\"*\"]\n", hash, hash),
 		"not yaml at all": "{{{{",
+		"unknown key": fmt.Sprintf("keys:\n  - key_sha256: %s\n"+
+			"    role: admin\n    tenants: [\"*\"]\n"+
+			"    comment: ops\n", hash),
+		"second document": fmt.Sprintf("keys:\n  - key_sha256: %s\n"+
+			"    role: admin\n    tenants: [\"*\"]\n"+
+			"---\nkeys: []\n", hash),
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
