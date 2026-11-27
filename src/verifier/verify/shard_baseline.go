@@ -229,12 +229,16 @@ func (s *ShardedBaselineStore) RecordBootEvidence(clientID string, eventLog []by
 	return s.shardFor(clientID).RecordBootEvidence(clientID, eventLog, esrtVersion, esrtPresent)
 }
 
-func (s *ShardedBaselineStore) ListLFAReviewPending() []string {
+func (s *ShardedBaselineStore) ListLFAReviewPending() ([]string, error) {
 	var all []string
 	for _, sh := range s.shards {
-		all = append(all, sh.ListLFAReviewPending()...)
+		ids, err := sh.ListLFAReviewPending()
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, ids...)
 	}
-	return all
+	return all, nil
 }
 
 func (s *ShardedBaselineStore) AcknowledgeLFAReview(clientID string) error {

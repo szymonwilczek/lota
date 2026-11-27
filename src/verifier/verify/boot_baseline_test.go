@@ -612,20 +612,20 @@ func TestLFAReview_MemoryAndSQLite(t *testing.T) {
 	// strong re-anchor clears it; acknowledge clears it too
 	bs := NewBaselineStore()
 	bs.CheckAndUpdateBootPCRs("c", boot(1, 2, 7))
-	if len(bs.ListLFAReviewPending()) != 0 {
+	if len(lfaPending(t, bs)) != 0 {
 		t.Fatal("no review pending before any LFA re-anchor")
 	}
 	t0 := time.Now()
 	if err := bs.ArchiveAndReanchor("c", boot(2, 2, 7), []byte("l"), 0, false, true, "lfa", t0); err != nil {
 		t.Fatal(err)
 	}
-	if got := bs.ListLFAReviewPending(); len(got) != 1 || got[0] != "c" {
+	if got := lfaPending(t, bs); len(got) != 1 || got[0] != "c" {
 		t.Fatalf("expected c pending review, got %v", got)
 	}
 	if err := bs.AcknowledgeLFAReview("c"); err != nil {
 		t.Fatal(err)
 	}
-	if len(bs.ListLFAReviewPending()) != 0 {
+	if len(lfaPending(t, bs)) != 0 {
 		t.Error("review should be cleared after acknowledge (in-memory)")
 	}
 	// an unacknowledged LFA re-anchor is cleared by a strong one
@@ -640,7 +640,7 @@ func TestLFAReview_MemoryAndSQLite(t *testing.T) {
 		t1.Add(ReanchorMinIntervalLFA+time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if len(bs.ListLFAReviewPending()) != 0 {
+	if len(lfaPending(t, bs)) != 0 {
 		t.Error("strong re-anchor must clear the review flag")
 	}
 
@@ -659,15 +659,36 @@ func TestLFAReview_MemoryAndSQLite(t *testing.T) {
 	if err := sq.ArchiveAndReanchor("c", boot(2, 2, 7), []byte("l"), 0, false, true, "lfa", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if got := sq.ListLFAReviewPending(); len(got) != 1 || got[0] != "c" {
+	if got := lfaPending(t, sq); len(got) != 1 || got[0] != "c" {
 		t.Fatalf("sqlite: expected c pending, got %v", got)
 	}
 	if err := sq.AcknowledgeLFAReview("c"); err != nil {
 		t.Fatal(err)
 	}
-	if len(sq.ListLFAReviewPending()) != 0 {
+	if len(lfaPending(t, sq)) != 0 {
 		t.Error("review should be cleared after acknowledge (SQLite)")
 	}
+
+	// a failed read is an error, not an empty queue
+	_, err = db.Exec("ALTER TABLE baselines RENAME TO baselines_gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := sq.ListLFAReviewPending(); err == nil {
+		t.Fatalf("sqlite: unreadable table listed %v", got)
+	}
+}
+
+func lfaPending(t *testing.T, s interface {
+	ListLFAReviewPending() ([]string, error)
+},
+) []string {
+	t.Helper()
+	ids, err := s.ListLFAReviewPending()
+	if err != nil {
+		t.Fatalf("list LFA review: %v", err)
+	}
+	return ids
 }
 
 // TestPinnedRegister_MemoryRefusesAMovedPCR14 and its SQLite twin cover the

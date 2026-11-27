@@ -1410,9 +1410,10 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 func (v *Verifier) ListReanchorReview() ([]string, error) {
 	rs, ok := v.baselineStore.(ReanchorStorer)
 	if !ok {
-		return nil, fmt.Errorf("baseline store does not support self-service re-anchor")
+		// only a ReanchorStorer re-anchors, so nothing awaits review
+		return nil, nil
 	}
-	return rs.ListLFAReviewPending(), nil
+	return rs.ListLFAReviewPending()
 }
 
 // AcknowledgeReanchorReview clears a client's pending-review flag once an

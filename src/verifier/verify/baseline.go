@@ -343,7 +343,7 @@ type ReanchorStorer interface {
 
 	// ListLFAReviewPending returns the clients with an applied LFA
 	// re-anchor no operator has reviewed.
-	ListLFAReviewPending() []string
+	ListLFAReviewPending() ([]string, error)
 
 	// AcknowledgeLFAReview takes the client off the review list, leaving
 	// the baseline alone. It returns ErrNoReviewPending when nothing is
@@ -682,7 +682,7 @@ func (s *BaselineStore) RecordBootEvidence(clientID string, eventLog []byte,
 }
 
 // ListLFAReviewPending implements ReanchorStorer.
-func (s *BaselineStore) ListLFAReviewPending() []string {
+func (s *BaselineStore) ListLFAReviewPending() ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []string
@@ -691,7 +691,7 @@ func (s *BaselineStore) ListLFAReviewPending() []string {
 			out = append(out, id)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // AcknowledgeLFAReview implements ReanchorStorer.

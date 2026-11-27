@@ -1417,7 +1417,7 @@ func validateJSONComplexity(body []byte) error {
 func (h *APIHandler) handleReanchorReviewList(w http.ResponseWriter, r *http.Request) {
 	clients, err := h.verifier.ListReanchorReview()
 	if err != nil {
-		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		h.writeStoreError(w, err)
 		return
 	}
 	if p := requestPrincipal(r); scopedToTenants(p) {

@@ -1513,6 +1513,56 @@ func assertMetric(t *testing.T, body, metric, expectedValue string) {
 	t.Errorf("Metric %s not found in output", metric)
 }
 
+func lfaPending(t *testing.T, s interface {
+	ListLFAReviewPending() ([]string, error)
+},
+) []string {
+	t.Helper()
+	ids, err := s.ListLFAReviewPending()
+	if err != nil {
+		t.Fatalf("list LFA review: %v", err)
+	}
+	return ids
+}
+
+// TestReanchorReviewListStoreError answers a failed store read with 500,
+// not with an empty queue.
+func TestReanchorReviewListStoreError(t *testing.T) {
+	db, err := store.OpenDB(t.TempDir() + "/b.sqlite")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	_, err = db.Exec("ALTER TABLE baselines RENAME TO baselines_gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := metrics.New()
+	cfg := verify.DefaultConfig()
+	cfg.RequireBootEnrollment = false
+	cfg.BaselineStore = verify.NewSQLiteBaselineStore(db)
+	cfg.Metrics = m
+	v := verify.NewVerifier(cfg, newCertVerifier(t))
+	srv := &Server{verifier: v, addr: ":8443"}
+	mux := http.NewServeMux()
+	attLog := store.NewSQLiteAttestationLog(db, store.DefaultCollapseWindow)
+	NewAPIHandler(mux, v, srv, store.NewSQLiteAuditLog(db), nil, m,
+		attLog, "admin-key", "reader-key")
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/reanchor/review", nil)
+	req.Header.Set("Authorization", "Bearer reader-key")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("got %d, body %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "database unavailable") {
+		t.Fatalf("body %s", rr.Body.String())
+	}
+}
+
 func TestReanchorReviewEndpoints(t *testing.T) {
 	aikVerifier := newCertVerifier(t)
 
@@ -1559,7 +1609,7 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 	if rr.Code != http.StatusUnauthorized && rr.Code != http.StatusForbidden {
 		t.Fatalf("unauthenticated ack: got %d, want 401/403", rr.Code)
 	}
-	if len(bs.ListLFAReviewPending()) != 1 {
+	if len(lfaPending(t, bs)) != 1 {
 		t.Fatal("review must stay pending without admin auth")
 	}
 
@@ -1573,7 +1623,7 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("admin ack: got %d, body %s", rr.Code, rr.Body.String())
 	}
-	if len(bs.ListLFAReviewPending()) != 0 {
+	if len(lfaPending(t, bs)) != 0 {
 		t.Error("review should be cleared after admin acknowledge")
 	}
 }

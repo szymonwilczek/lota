@@ -1105,21 +1105,22 @@ func (s *PostgresBaselineStore) RecordBootEvidence(clientID string,
 }
 
 // ListLFAReviewPending implements ReanchorStorer.
-func (s *PostgresBaselineStore) ListLFAReviewPending() []string {
+func (s *PostgresBaselineStore) ListLFAReviewPending() ([]string, error) {
 	rows, err := s.db.QueryContext(context.Background(),
 		"SELECT client_id FROM baselines WHERE lfa_review_pending = TRUE ORDER BY client_id")
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 	var out []string
 	for rows.Next() {
 		var id string
-		if rows.Scan(&id) == nil {
-			out = append(out, id)
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
 		}
+		out = append(out, id)
 	}
-	return out
+	return out, rows.Err()
 }
 
 // AcknowledgeLFAReview implements ReanchorStorer.
