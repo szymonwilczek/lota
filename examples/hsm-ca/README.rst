@@ -1,130 +1,115 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
+===================================
 HSM-backed attestation CA (PKCS#11)
 ===================================
 
-The attestation CA's signing key is the root every issued AIK certificate
-chains to. In production it belongs in an HSM, where the private key never
-leaves the device; ``lota-attest-ca`` reaches it through PKCS#11. This example
-stands the same flow up on **SoftHSM** so it can be exercised without hardware
--- the ``-ca-key-pkcs11-*`` flags are identical for a real HSM.
+This example keeps the attestation CA's signing key in a SoftHSM token and
+runs ``lota-attest-ca`` against it through PKCS#11. The ``-ca-key-pkcs11-*``
+options are the same for a hardware token; they are described in
+`ca-enrollment.rst
+<../../Documentation/admin-guide/bringup/ca-enrollment.rst>`_, "PKCS#11
+token", and the life of the key in `ca-key.rst
+<../../Documentation/security/ca-key.rst>`_.
 
-PKCS#11 support is **not** in the default binary (which is pure-Go); build the
-CA with the ``pkcs11`` tag:
+The default build has no PKCS#11 support. Build the CA with the ``pkcs11``
+tag, which needs cgo:
 
-.. code:: sh
+.. code-block:: console
 
-   make attest-ca GO_TAGS=pkcs11
+	$ make attest-ca GO_TAGS=pkcs11
 
-The tag is part of what the build depends on, so this rebuilds a tree that was
-already built without it. A containerised CA takes the ``-hsm`` tag of the
-published image instead, which is that build on a base with a loader under it
-(see `Documentation/admin-guide/container-images.rst
+A change of ``GO_TAGS`` rebuilds the CA. The ``-hsm`` container image is
+that build (`container-images.rst
 <../../Documentation/admin-guide/container-images.rst>`_).
 
-.. _1-stand-up-the-token-and-the-ca-material:
+Token and CA material
+=====================
 
-1. Stand up the token and the CA material
------------------------------------------
+``setup-token.sh`` needs ``softhsm2-util``, ``pkcs11-tool`` from opensc, and
+``openssl`` with the PKCS#11 provider. It runs without root and touches no
+system token::
 
-``setup-token.sh`` initialises a throwaway SoftHSM token, generates an RSA CA
-key inside it, and issues everything the CA needs to start from that key. It
-needs ``softhsm2-util``, ``pkcs11-tool`` (opensc) and ``openssl`` with the
-pkcs11 provider:
+	examples/hsm-ca/setup-token.sh [out-dir] [token-label] [key-label] [pin]
 
-.. code:: sh
+The defaults are ``./hsm-ca``, token ``lota-ca``, key ``lota-ca-key`` and PIN
+``1234``; the security officer PIN is ``12345678``. The script finds
+``libsofthsm2.so`` under ``/usr/lib/softhsm``, ``/usr/lib64/softhsm``,
+``/usr/lib64/pkcs11`` or ``/usr/lib/x86_64-linux-gnu/softhsm``, or takes
+it from ``MODULE``. It then:
 
-   examples/hsm-ca/setup-token.sh ./hsm-ca     # token lota-ca, key lota-ca-key, PIN 1234
+#. writes ``softhsm2.conf`` with a token store in ``tokens/`` and
+   initialises a token with that label;
 
-It writes into the output directory:
+#. generates an RSA 2048 key pair in the token with the key label and
+   ``CKA_ID`` ``01``;
 
-==================== ==========================================================
-``softhsm2.conf``    token store; export it as ``SOFTHSM2_CONF``
-``tokens/``          the token itself, holding the CA signing key
-``ca.crt``           CA certificate whose public key is the token key
-``tls.crt``/``.key`` listener keypair, issued **by** the token key
-``pseudonym.key``    device-pseudonym secret
-==================== ==========================================================
+#. issues ``ca.crt``, a self-signed certificate over the token key valid for
+   365 days, with ``CA:TRUE`` and the ``keyCertSign`` and ``cRLSign`` key
+   usages;
 
-The script probes the common module paths (Fedora ``/usr/lib64/pkcs11``,
-Debian ``/usr/lib/.../softhsm``); on an unusual layout set
-``MODULE=/path/to/libsofthsm2.so``. It prints the resolved
-``-ca-key-pkcs11-module`` in the command to run next.
+#. generates a P-256 listener key ``tls.key`` and issues ``tls.crt`` with the
+   token key, valid for 825 days, for ``127.0.0.1`` and ``localhost``;
 
-The PIN is passed to the CA through ``LOTA_CA_PKCS11_PIN``, never a flag, so
-it stays out of the process argument list.
+#. writes 32 random bytes to ``pseudonym.key``, unless the file exists.
 
-.. _2-how-the-certificates-are-issued:
+Files are created with umask 077. Run the script on a directory without
+``tokens/``: a second run adds another token with the same label, and the
+later steps pick a token by its label alone. The script ends by printing the
+build and run commands with the module it found and a build directory from
+``BUILD_DIR``, else ``LOTA_BUILD_DIR``, else ``build/`` of the repository.
 
-2. How the certificates are issued
-----------------------------------
+Both certificates are signed inside the token through OpenSSL's PKCS#11
+provider. A ceremony against another module uses the same commands:
 
-Both certificates are signed by the key **inside** the token, through
-OpenSSL's PKCS#11 provider (``pkcs11-provider`` / ``libp11``), so the private
-key never leaves it. Step 1 does this for you; the commands are here because a
-real ceremony runs them against the operator's own module:
+.. code-block:: console
 
-.. code:: sh
-
-   export SOFTHSM2_CONF=./hsm-ca/softhsm2.conf
-   openssl req -new -x509 -days 365 -provider pkcs11 -provider default \
-       -key "pkcs11:token=lota-ca;object=lota-ca-key;type=private?pin-value=1234" \
-       -subj "/CN=lota-attest-ca" -addext basicConstraints=critical,CA:TRUE \
-       -addext keyUsage=critical,keyCertSign,cRLSign -out ca.crt
+	$ export SOFTHSM2_CONF=./hsm-ca/softhsm2.conf
+	$ openssl req -new -x509 -days 365 -provider pkcs11 -provider default \
+		-key "pkcs11:token=lota-ca;object=lota-ca-key;type=private?pin-value=1234" \
+		-subj "/CN=lota-attest-ca" -addext basicConstraints=critical,CA:TRUE \
+		-addext keyUsage=critical,keyCertSign,cRLSign -out ca.crt
 
 The ``pin-value`` in the URI is what makes this run unattended. Without it
-OpenSSL prompts for the PIN, and a run with nothing on stdin fails with
-``Could not find private key from pkcs11:...`` -- an authentication failure
-reported as a missing object. A ceremony where the operator is present can
+OpenSSL asks for the PIN, and a run with empty standard input fails to load
+the key. A ceremony where the operator is present can
 drop it and answer the prompt; ``pin-source=file:/path`` reads it from a file
 the ceremony controls.
 
-The listener certificate is issued the same way, with ``openssl x509 -req
--CA ca.crt -CAkey "pkcs11:...?pin-value=..."``. It has to be issued **from
-this CA**: the agent passes one file as ``--ca-cert``, and that file both
-anchors the listener's chain and is the publisher identity the host enrolls
-with. A listener borrowed from another example is signed by a different root
-and the agent refuses the handshake.
+The listener certificate is issued by the CA key so that one file serves the
+agent as ``--ca-cert``: it verifies the listener's certificate, and its
+public key is the publisher identity the host enrolls under. A listener
+certificate signed by another key fails the agent's TLS handshake.
 
-A real HSM follows the same steps against its own module and a key generated
-or imported under the operator's key ceremony (see
-`Documentation/admin-guide/bringup/index.rst <../../Documentation/admin-guide/bringup/index.rst>`_, "CA
-signing key in an HSM").
+Running the CA
+==============
 
-.. _3-run-the-ca-against-the-token:
+.. code-block:: console
 
-3. Run the CA against the token
--------------------------------
+	$ export SOFTHSM2_CONF=./hsm-ca/softhsm2.conf
+	$ export LOTA_CA_PKCS11_PIN=1234
+	$ build/lota-attest-ca -listen :8444 \
+		-ca-cert ./hsm-ca/ca.crt \
+		-ca-key-pkcs11-module /usr/lib64/pkcs11/libsofthsm2.so \
+		-ca-key-pkcs11-token lota-ca \
+		-ca-key-pkcs11-label lota-ca-key \
+		-tls-cert ./hsm-ca/tls.crt -tls-key ./hsm-ca/tls.key \
+		-pseudonym-key ./hsm-ca/pseudonym.key \
+		-ek-root-bundle /var/lib/lota/ek-roots
 
-.. code:: sh
+The CA reads the PIN from ``LOTA_CA_PKCS11_PIN`` alone, so it stays out of
+the argument list. It logs ``using PKCS#11 CA signing key`` with the module
+and the token, and refuses to start when the token key does not match
+``ca.crt``. An agent enrolls with ``ca.crt`` as its ``--ca-cert``.
 
-   export SOFTHSM2_CONF=./hsm-ca/softhsm2.conf
-   export LOTA_CA_PKCS11_PIN=1234
-   build/lota-attest-ca -listen :8444 \
-       -ca-cert ./hsm-ca/ca.crt \
-       -ca-key-pkcs11-module /usr/lib64/pkcs11/libsofthsm2.so \
-       -ca-key-pkcs11-token lota-ca \
-       -ca-key-pkcs11-label lota-ca-key \
-       -tls-cert ./hsm-ca/tls.crt -tls-key ./hsm-ca/tls.key \
-       -pseudonym-key ./hsm-ca/pseudonym.key \
-       -ek-root-bundle /var/lib/lota/ek-roots
+Tests
+=====
 
-It logs ``using PKCS#11 CA signing key`` with the module and token it opened.
-The CA refuses to start if the token key's public key does not match
-``ca.crt``, the same check applied to an on-disk key, so a wrong token or
-label cannot sign under the CA identity.
-
-An agent enrolls against it with ``ca.crt`` as its ``--ca-cert``; the AIK
-certificate that comes back is signed by the key in the token, which
-``openssl verify -CAfile ca.crt`` confirms.
-
-Continuous integration
-----------------------
-
-The ``pkcs11-softhsm`` job in ``.github/workflows/go-static-analysis.yml``
-generates a key in a SoftHSM token, loads it through the production signer
-path, and checks that an issued AIK certificate chains to a CA certificate
-bound to that token key -- the end-to-end PKCS#11 signing path on every PR.
-``tests/integration/test_hsm_ca_example.sh`` runs this example's setup script
-and reads what it produced.
+``TestPKCS11SignerIssuesAIK`` in ``src/attestca/casigner_pkcs11_test.go``
+generates a key in a SoftHSM token, signs an AIK certificate through the
+PKCS#11 signer and checks that it chains to a CA certificate over that key;
+the ``pkcs11-softhsm`` job of ``.github/workflows/go-static-analysis.yml``
+runs it. ``tests/integration/test_hsm_ca_example.sh`` runs ``setup-token.sh``
+with standard input from ``/dev/null`` and checks what it wrote;
+``make test-unit`` runs it when the three tools are installed.
