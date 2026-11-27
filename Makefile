@@ -886,6 +886,7 @@ check-test-build-dir:
 
 .PHONY: check-doc-diagnostics
 check-doc-diagnostics:
+	$(Q)tests/integration/test_doc_diagnostics.sh >/dev/null
 	@scripts/check-doc-diagnostics.sh
 
 .PHONY: check-config-commands
