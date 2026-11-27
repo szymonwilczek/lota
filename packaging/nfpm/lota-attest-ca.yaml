@@ -15,7 +15,7 @@ vendor: LOTA
 homepage: https://github.com/szymonwilczek/lota
 license: MIT
 description: |
-  LOTA attestation CA
+  LOTA attestation CA enrollment service
   Self-hosted enrollment service that proves an AIK lives in a genuine TPM
   through credential activation and issues short-lived AIK certificates that
   the fleet verifier trusts.

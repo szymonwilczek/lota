@@ -43,7 +43,6 @@ overrides:
       - libseccomp
       - systemd
       - dracut
-      - fsverity-utils
       - lota-sdk = ${LOTA_RPM_VERSION}
 
 contents:

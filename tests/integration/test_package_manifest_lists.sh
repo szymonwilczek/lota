@@ -12,6 +12,12 @@
 # Each case edits a copy of what the gate reads, never the checkout.
 # The last case is the control: a dependency really removed must still fail.
 #
+# A Requires, a sibling pin or a pkgconfig() provide that only one manifest
+# makes fails the gate, in either direction.
+#
+# A Summary or %description the spec words apart from the nfpm description
+# fails the gate.
+#
 # The same manifests take every file from ./build, so `make packages` with
 # another BUILD_DIR must stop before it builds anything.
 #
@@ -86,6 +92,17 @@ drop_line() {
     mv "$WORK_DIR/edited" "$WORK_DIR/tree/$file"
 }
 
+# Replace the first line of file equal to what
+replace_line() {
+    local file="$1" what="$2" text="$3"
+
+    awk -v what="$what" -v text="$text" '
+		$0 == what && !done { print text; done = 1; next }
+		{ print }
+	' "$WORK_DIR/tree/$file" >"$WORK_DIR/edited"
+    mv "$WORK_DIR/edited" "$WORK_DIR/tree/$file"
+}
+
 echo "=== what a commented manifest list reads as ==="
 
 # Unedited copy must pass, or the cases below test the copy
@@ -119,6 +136,81 @@ if gate_passes; then
 else
     echo "PASS: a dependency genuinely taken out is still caught"
 fi
+
+echo "=== what one manifest promises and the other does not ==="
+
+# Fails, naming what
+gate_fails_with() {
+    ! gate_passes && grep -qF -- "$1" "$WORK_DIR/gate.out"
+}
+
+fixture
+insert_above "$AGENT_YAML" "lota-sdk = " "      - fsverity-utils"
+check "a Requires only nfpm makes fails" \
+      gate_fails_with "lota-agent require fsverity-utils and packaging/rpm"
+
+fixture
+drop_line "$AGENT_YAML" "      - dracut"
+check "a Requires only the spec makes fails" \
+      gate_fails_with "makes lota-agent require dracut and packaging/nfpm"
+
+fixture
+drop_line "$AGENT_YAML" "      - libseccomp"
+check "a soname Requires nfpm leaves out fails" \
+      gate_fails_with "soname_requires lists libseccomp for lota-agent"
+
+fixture
+replace_line packaging/rpm/lota.spec \
+	     "Requires:       %{name}-sdk%{?_isa} = %{version}-%{release}" \
+	     "Requires:       %{name}-sdk%{?_isa}"
+check "a sibling pin only nfpm makes fails" \
+      gate_fails_with "lota-agent to one build of lota-sdk and packaging/rpm"
+
+fixture
+replace_line "$AGENT_YAML" "      - lota-sdk = \${LOTA_RPM_VERSION}" \
+	     "      - lota-sdk >= \${LOTA_RPM_VERSION}"
+check "a lower bound in nfpm against a spec pin fails" \
+      gate_fails_with "lota-agent to one build of lota-sdk and packaging/nfpm"
+
+fixture
+replace_line packaging/rpm/lota.spec \
+	     "Requires:       %{name}-sdk%{?_isa} = %{version}-%{release}" \
+	     "Requires:       %{name}-sdk%{?_isa} >= %{version}-%{release}"
+check "a lower bound in the spec against an nfpm pin fails" \
+      gate_fails_with "lota-agent to one build of lota-sdk and packaging/rpm"
+
+fixture
+insert_above packaging/rpm/lota.spec "Requires:       dracut" \
+	     "Requires(post): coreutils"
+check "a scriptlet Requires only the spec makes fails" \
+      gate_fails_with "makes lota-agent require coreutils and packaging/nfpm"
+
+fixture
+insert_above "$DEVEL_YAML" "pkgconfig(lota-server)" \
+	     "      - pkgconfig(lota-made-up)"
+check "a pkgconfig() provide with no .pc behind it fails" \
+      gate_fails_with "provides pkgconfig(lota-made-up) and ships no"
+
+echo "=== what each manifest says a package is ==="
+
+gate_fails_on_description() {
+    ! gate_passes &&
+	grep -q 'lota-sdk-devel reads differently' "$WORK_DIR/gate.out"
+}
+
+fixture
+replace_line packaging/rpm/lota.spec \
+	     "Summary:        LOTA SDK development files" \
+	     "Summary:        LOTA SDK headers and shared libraries"
+check "a Summary the nfpm description does not open with fails" \
+      gate_fails_on_description
+
+fixture
+replace_line packaging/rpm/lota.spec \
+	     "Requires lota-sdk." \
+	     "Requires lota-sdk and ships the Proton/Steam helpers."
+check "a %description that differs from the nfpm description fails" \
+      gate_fails_on_description
 
 echo "=== make packages with another BUILD_DIR ==="
 
