@@ -742,6 +742,35 @@ static void test_boot_state_hint_is_for_a_tpm_that_did_not_say(void)
 	PASS();
 }
 
+static void test_seal_primary_name_match(void)
+{
+	TPM2B_NAME a = { .size = 4, .name = { 0x00, 0x0b, 0xaa, 0xbb } };
+	TPM2B_NAME b = a;
+
+	TEST("seal primary is used only under the recorded Name");
+	if (!tpm_seal_primary_name_equal(&a, &b)) {
+		FAIL("the same Name");
+		return;
+	}
+	b.name[3] = 0xbc;
+	if (tpm_seal_primary_name_equal(&a, &b)) {
+		FAIL("another object at the handle");
+		return;
+	}
+	b = a;
+	b.size = 3;
+	if (tpm_seal_primary_name_equal(&a, &b)) {
+		FAIL("a Name that is a prefix of the recorded one");
+		return;
+	}
+	a.size = b.size = sizeof(a.name) + 1;
+	if (tpm_seal_primary_name_equal(&a, &b)) {
+		FAIL("a size past the buffer");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("Running LOTA AIK-auth hardening tests...\n\n");
@@ -765,6 +794,7 @@ int main(void)
 	test_unseal_arg_validation();
 	test_policy_fail_maps_clean();
 	test_boot_state_hint_is_for_a_tpm_that_did_not_say();
+	test_seal_primary_name_match();
 
 	cleanup_dir();
 	printf("\n%d/%d tests passed\n", tests_passed, tests_run);

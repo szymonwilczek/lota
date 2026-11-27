@@ -59,10 +59,11 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    (default: %s)\n", LOTA_CONFIG_DEFAULT_PATH);
 	printf("  --dump-config     Print loaded configuration and exit\n");
 	printf("  --test-tpm        Report on TPM operations and exit.\n"
-	       "                    Creates no persistent key: the quote is\n"
+	       "                    Creates or replaces no key: the quote is\n"
 	       "                    skipped when the attestation handle is\n"
 	       "                    free, since a key made here would\n"
-	       "                    outlive the command\n");
+	       "                    outlive the command. Checks PCR 14\n"
+	       "                    without extending it\n");
 	printf("  --test-iommu      Test IOMMU verification and exit\n");
 	printf("  --seal            Seal a secret read from stdin to the PCR "
 	       "state;\n");
@@ -93,17 +94,24 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "re-enrolling)\n");
 	printf("  --reprovision-aik Rotate + re-seal the AIK auth after a "
 	       "boot-state\n");
-	printf("                    change (strict recovery); then re-enroll\n");
+	printf("                    change (strict recovery); names a "
+	       "--reenroll only\n");
+	printf("                    for a key that moved\n");
 	printf("  --seal-persist-primary\n");
 	printf("                    Persist the seal storage primary at a handle "
 	       "so\n");
 	printf("                    seal/unseal skip per-op CreatePrimary (needs "
 	       "\n");
-	printf("                    seal_persistent_primary=true in lota.conf)\n");
+	printf("                    seal_persistent_primary=true in lota.conf);"
+	       "\n");
+	printf("                    refuses a handle that holds another "
+	       "object\n");
 	printf("  --seal-evict-primary\n");
 	printf("                    Remove the persistent seal storage primary "
 	       "(sealed\n");
-	printf("                    blobs stay valid)\n");
+	printf("                    blobs stay valid); refuses a handle that "
+	       "holds\n");
+	printf("                    another object\n");
 	printf("  --test-ipc        Run IPC server with simulated attested "
 	       "state\n");
 	printf("                    (no TPM: status, D-Bus and profile "
@@ -186,19 +194,25 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "one\n");
 	printf("                    publisher, named by the SHA-256 of their "
 	       "CA\n");
-	printf("                    trust anchor's public key. Nothing "
+	printf("                    trust anchor's public key. The agent "
 	       "enrolls\n");
-	printf("                    with a publisher before this\n");
+	printf("                    with no publisher on its own before "
+	       "this;\n");
+	printf("                    --enroll records it too\n");
 	printf("  --list-publishers Show every publisher this machine "
 	       "answers to,\n");
 	printf("                    what it stores for each and when it was "
 	       "agreed to\n");
 	printf("  --forget-publisher HEX\n");
-	printf("                    Destroy that publisher's attestation key "
+	printf("                    Evict that publisher's attestation key "
 	       "and\n");
 	printf("                    everything stored for them. They can ask "
 	       "again\n");
-	printf("                    and would need consent and a new key\n");
+	printf("                    and would need consent and enrollment; "
+	       "the same\n");
+	printf("                    key comes back until the TPM owner "
+	       "hierarchy is\n");
+	printf("                    cleared\n");
 	printf("  --enroll-token-file PATH\n");
 	printf("                    File holding a per-tenant enrollment "
 	       "token to\n");
@@ -313,15 +327,16 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "PREFIX.pub\n");
 	printf("  --sign-policy FILE --signing-key KEY\n");
 	printf("                    Sign policy YAML, write detached FILE.sig\n");
-	printf("  --verify-policy FILE --policy-pubkey PUB\n");
+	printf("  --verify-policy FILE [--policy-pubkey PUB]\n");
 	printf("                    Verify detached Ed25519 signature on FILE\n");
+	printf("                    Without --policy-pubkey: %s, then\n",
+	       LOTA_POLICY_PUBKEY_OVERRIDE);
+	printf("                    %s\n", LOTA_ENFORCEMENT_PUBKEY_PATH);
 	printf("  --signing-key PATH   Ed25519 private key (PEM) for signing\n");
 	printf("  --policy-pubkey PATH Ed25519 public key (PEM) for "
 	       "verification\n");
 	printf("                    Reused for BOTH policy YAML signatures and\n");
 	printf("                    BPF object signatures (.bpf.o.sig).\n");
-	printf("                    Use a separate option/config if you want\n");
-	printf("                    distinct keypairs for policy vs BPF.\n");
 	printf("\n");
 	printf("  --help            Show this help\n");
 }
@@ -394,7 +409,10 @@ int handle_policy_ops(const struct policy_ops_args *args)
 
 		if (!args->policy_pubkey_path) {
 			fprintf(stderr,
-				"--verify-policy requires --policy-pubkey\n");
+				"--verify-policy needs --policy-pubkey, or a "
+				"readable %s or %s\n",
+				LOTA_POLICY_PUBKEY_OVERRIDE,
+				LOTA_ENFORCEMENT_PUBKEY_PATH);
 			return 1;
 		}
 
@@ -660,7 +678,7 @@ int ipc_init_or_activate(struct ipc_context *ctx)
 	return ipc_init(ctx);
 }
 
-int self_measure(struct tpm_context *ctx)
+static int boot_commitment(struct tpm_context *ctx, bool write)
 {
 	uint8_t self_hash[LOTA_HASH_SIZE];
 	int fd;
@@ -683,7 +701,8 @@ int self_measure(struct tpm_context *ctx)
 	 * No clock counter goes in: a TPM obfuscates resetCount and
 	 * restartCount per signing key.
 	 */
-	ret = tpm_extend_boot_commitment(ctx, self_hash);
+	ret = write ? tpm_extend_boot_commitment(ctx, self_hash) :
+		      tpm_observe_boot_commitment(ctx, self_hash);
 	if (ret < 0) {
 		/* every refusal is -EBADMSG; the state names it */
 		if (ret == -EBADMSG) {
@@ -731,10 +750,22 @@ int self_measure(struct tpm_context *ctx)
 		}
 		return ret;
 	}
+	if (!write)
+		return 0;
 
 	/* reports carry the committed hash even after the file is replaced */
 	memcpy(ctx->self_hash, self_hash, LOTA_HASH_SIZE);
 	ctx->self_hash_ready = true;
 
 	return (int)tpm_boot_commitment_outcome(ctx->boot_commitment_state);
+}
+
+int self_measure(struct tpm_context *ctx)
+{
+	return boot_commitment(ctx, true);
+}
+
+int self_check_commitment(struct tpm_context *ctx)
+{
+	return boot_commitment(ctx, false);
 }

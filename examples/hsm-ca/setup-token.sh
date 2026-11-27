@@ -54,6 +54,12 @@ mkdir -p "$OUT_DIR"
 OUT_DIR=$(cd "$OUT_DIR" && pwd)
 umask 077
 
+# a second token under this label: later steps pick by label alone
+if [ -d "$OUT_DIR/tokens" ] && [ -n "$(ls -A "$OUT_DIR/tokens")" ]; then
+    die "$OUT_DIR/tokens already holds a token;" \
+        "run on a new directory or remove tokens/"
+fi
+
 export SOFTHSM2_CONF="$OUT_DIR/softhsm2.conf"
 mkdir -p "$OUT_DIR/tokens"
 printf 'directories.tokendir = %s\nobjectstore.backend = file\n' \

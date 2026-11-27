@@ -91,7 +91,7 @@ struct cli_options {
 	const char *publisher_name; /* --publisher-name, the section label */
 	bool reporting_continuous; /* --reporting continuous */
 	int list_publishers_flag;
-	/* --forget-publisher: destroy one publisher's key and stored state */
+	/* --forget-publisher: evict one publisher's key, drop its state */
 	const char *forget_publisher;
 	int no_verify_tls;
 	int insecure_allow_no_verify_tls;

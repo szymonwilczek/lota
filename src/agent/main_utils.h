@@ -51,4 +51,16 @@ int ipc_init_or_activate(struct ipc_context *ctx);
  */
 int self_measure(struct tpm_context *ctx);
 
+/**
+ * self_check_commitment() - Check PCR 14 against the running binary.
+ * @ctx: An initialized TPM context.
+ *
+ * As self_measure(), but PCR 14, the snapshot and @ctx->self_hash stay as
+ * they are.
+ *
+ * Return: 0 when ctx->boot_commitment_state is TPM_PCR14_AWAITING_EXTEND or
+ * TPM_PCR14_ALREADY_COMMITTED, or a negative errno as for self_measure().
+ */
+int self_check_commitment(struct tpm_context *ctx);
+
 #endif /* LOTA_MAIN_UTILS_H */

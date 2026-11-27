@@ -57,6 +57,10 @@
 #include "lota_endian.h"
 #include "socket_watch.h"
 
+_Static_assert(MEASURE_REPORT_STATEMENT_MAX >=
+		       MEASURE_REPORT_PREFIX_MAX + LOTA_RT_REASON_MAX,
+	       "a measurement line cuts its reason");
+
 #define MAX_EVENTS 64
 #define MAX_CONNECTED_CLIENTS 2048
 

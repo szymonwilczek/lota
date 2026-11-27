@@ -10,9 +10,9 @@
 /**
  * test_tpm() - Probe the TPM: --test-tpm.
  *
- * Reads PCRs 0, 1, 10 and 14, hashes the kernel and the agent, runs
- * self_measure(), which extends PCR 14 when it holds this boot's initramfs
- * lock value, and quotes with each key the host attests with.
+ * Reads PCRs 0, 1, 10 and 14, hashes the kernel and the agent, checks PCR 14
+ * against this binary's commitment without extending it, and quotes with each
+ * key the host attests with. It changes no key or record.
  *
  * Return: 0, -EIO when a step failed, or the tpm_init() error.
  */
@@ -55,6 +55,32 @@ static inline enum selftest_aik_plan selftest_aik_plan(int holds_object)
 {
 	return holds_object == 1 ? SELFTEST_AIK_USE_EXISTING :
 				   SELFTEST_AIK_SKIP;
+}
+
+/**
+ * enum selftest_aik_load - What a probe does after loading the key's auth.
+ * @SELFTEST_AIK_LOAD_QUOTE: the authorization loaded; quote.
+ * @SELFTEST_AIK_LOAD_SKIP: no authorization record; the key is left as it is.
+ * @SELFTEST_AIK_LOAD_FAIL: the load failed.
+ */
+enum selftest_aik_load {
+	SELFTEST_AIK_LOAD_QUOTE,
+	SELFTEST_AIK_LOAD_SKIP,
+	SELFTEST_AIK_LOAD_FAIL,
+};
+
+/**
+ * selftest_aik_load_plan() - Plan after tpm_load_aik().
+ * @load_rc: tpm_load_aik() result.
+ *
+ * Return: QUOTE for 0, SKIP for -ENOENT, FAIL otherwise.
+ */
+static inline enum selftest_aik_load selftest_aik_load_plan(int load_rc)
+{
+	if (load_rc == 0)
+		return SELFTEST_AIK_LOAD_QUOTE;
+	return load_rc == -ENOENT ? SELFTEST_AIK_LOAD_SKIP :
+				    SELFTEST_AIK_LOAD_FAIL;
 }
 
 /**

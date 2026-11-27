@@ -9,9 +9,9 @@
 #   sha256    hex SHA-256 over the certificate DER. Take it from the vendor
 #             out of band, never from the download: the script refuses a
 #             certificate whose fingerprint differs from it.
-#   filename  bare name the certificate is written under in the bundle;
-#             only a name ending in .pem is installed, though the manifest
-#             lists any name.
+#   filename  bare name the certificate is written under in the bundle.
+#             The CA loads any name the manifest lists; a .pem file the
+#             manifest does not name makes it refuse the bundle.
 #   class     `root` for a self-signed manufacturer root, which anchors a
 #             chain, or `intermediate` for a certificate the CA builds a
 #             path through but never anchors at.

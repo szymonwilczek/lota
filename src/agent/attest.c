@@ -169,14 +169,6 @@ int export_policy(int mode)
 		return ret;
 	}
 
-	fprintf(stderr, "Performing self-measurement...\n");
-	ret = self_measure(&g_agent.tpm_ctx);
-	if (ret < 0) {
-		fprintf(stderr, "Warning: Self-measurement failed: %s\n",
-			attest_failure_reason(ret));
-		fprintf(stderr, "PCR 14 may not contain agent measurement.\n");
-	}
-
 	snap.pcr_count = (int)pcr_export_count;
 	for (int i = 0; i < snap.pcr_count; i++) {
 		snap.pcrs[i].index = pcrs_to_export[i];

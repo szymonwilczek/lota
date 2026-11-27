@@ -171,8 +171,9 @@ Publishers
   when consent was given.
 
 ``--forget-publisher HEX``
-  Destroys the publisher's AIK and everything stored for it. The publisher
-  needs consent and a new key to be answered again.
+  Evicts the publisher's AIK and deletes everything stored for it. The
+  publisher needs consent and enrollment to be answered again, and gets the
+  same key back until the owner hierarchy is cleared.
 
 TPM and sealing
 ===============
@@ -180,9 +181,9 @@ TPM and sealing
 The TPM verbs are described in :doc:`tpm`.
 
 ``--test-tpm``, ``-t``
-  Reports on the TPM operations and exits. It creates no persistent key; it
-  skips the quote when the attestation handle is free. When PCR 14 waits for
-  this boot's commitment, it extends the register as the daemon does.
+  Reports on the TPM operations and exits. It creates or replaces no key; it
+  skips the quote when the attestation handle is free. It checks PCR 14
+  against this binary's commitment and never extends it.
 
 ``--seal``
   Reads a secret from standard input, seals it to the PCR state and writes
@@ -210,12 +211,15 @@ The TPM verbs are described in :doc:`tpm`.
   names the ``--reenroll --publisher`` command for it.
 
 ``--seal-persist-primary``
-  Stores the seal storage primary key at a persistent handle. Seal and
-  unseal use it, and skip ``CreatePrimary``, with
-  ``seal_persistent_primary = true`` in the configuration.
+  Stores the seal storage primary key at a persistent handle and records its
+  Name. Seal and unseal use it, and skip ``CreatePrimary``, with
+  ``seal_persistent_primary = true`` in the configuration, while its Name
+  matches the record. A handle that holds another object is left alone and
+  the command exits 1.
 
 ``--seal-evict-primary``
-  Removes that key. Blobs sealed before stay valid.
+  Removes that key and its record. Blobs sealed before stay valid. A handle
+  that holds another object is left alone and the command exits 1.
 
 Diagnostics
 ===========
@@ -230,7 +234,8 @@ Diagnostics
 
 ``--export-policy``, ``-E``
   Writes a YAML policy of the running system to standard output, for the
-  verifier. It opens the TPM and performs the self-measurement.
+  verifier. It opens the TPM and reads the PCRs it exports; it does not
+  extend PCR 14.
 
 ``--test-ipc``, ``-c``
   Runs the IPC server without a TPM, in a simulated attested state, until
@@ -334,6 +339,8 @@ Policy signing
   signature of the enforcement object. Without it the agent takes
   ``policy_pubkey`` from the file, then ``/etc/lota/policy.pub``, then
   ``/usr/lib/lota/enforcement.pub``, the first one it can read.
+  ``--verify-policy``, which does not read the file, starts at
+  ``/etc/lota/policy.pub``.
 
 Environment
 ===========

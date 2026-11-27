@@ -12,10 +12,13 @@ package main
 import (
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/szymonwilczek/lota/attestca/ca"
 	"github.com/szymonwilczek/lota/attestca/enroll"
 )
 
@@ -31,6 +34,7 @@ func hsmConfig(mutate func(*runConfig)) *runConfig {
 		ekRootBundle: "/nonexistent/ek-roots",
 		sessionTTL:   enroll.DefaultSessionTTL,
 		maxPending:   enroll.DefaultMaxPending,
+		aikCertTTL:   ca.DefaultAIKCertTTL,
 	}
 	mutate(cfg)
 	return cfg
@@ -105,12 +109,17 @@ func TestNeitherKeySourceNamesCaKey(t *testing.T) {
 	}
 }
 
-// A non-positive -session-ttl or -max-pending is refused by flag name
+// A non-positive -aik-cert-ttl, -session-ttl or -max-pending
+// is refused by flag name
 func TestNonPositiveCeilingIsRefusedByName(t *testing.T) {
 	cases := map[string]struct {
 		mutate func(*runConfig)
 		flag   string
 	}{
+		"-aik-cert-ttl 0": {
+			mutate: func(c *runConfig) { c.aikCertTTL = 0 },
+			flag:   "-aik-cert-ttl",
+		},
 		"-session-ttl 0": {
 			mutate: func(c *runConfig) { c.sessionTTL = 0 },
 			flag:   "-session-ttl",
@@ -168,5 +177,13 @@ func TestStartupLineCarriesBothCeilings(t *testing.T) {
 	if fields["max_pending"] != 32 {
 		t.Errorf("max_pending on the startup line is %v, want the 32 that was passed",
 			fields["max_pending"])
+	}
+}
+
+// The on-disk key warning names a page that exists
+func TestOnDiskKeyDocExists(t *testing.T) {
+	page := filepath.Join("..", "..", onDiskKeyDoc)
+	if _, err := os.Stat(page); err != nil {
+		t.Fatalf("the warning names a missing page: %v", err)
 	}
 }

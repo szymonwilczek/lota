@@ -274,8 +274,23 @@ static void test_either_field_alone_is_an_endpoint(void)
 	      "a host alone keeps the recorded port");
 }
 
+/* an empty handle holds no key at all, not someone else's */
+static void test_forget_key_plan(void)
+{
+	CHECK(forget_key_plan(0, 0) == FORGET_KEY_NONE,
+	      "forget: an empty handle is neither evicted nor foreign");
+	CHECK(forget_key_plan(1, 1) == FORGET_KEY_EVICT,
+	      "forget: the publisher's own key is evicted");
+	CHECK(forget_key_plan(1, 0) == FORGET_KEY_FOREIGN,
+	      "forget: another object at the handle is left alone");
+	CHECK(forget_key_plan(-EIO, 0) == FORGET_KEY_UNKNOWN &&
+		      forget_key_plan(1, -EIO) == FORGET_KEY_UNKNOWN,
+	      "forget: a handle that cannot be checked removes nothing");
+}
+
 int main(void)
 {
+	test_forget_key_plan();
 	test_nothing_given_keeps_the_recorded_endpoint();
 	test_a_given_endpoint_wins();
 	test_either_field_alone_is_an_endpoint();

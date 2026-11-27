@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <openssl/crypto.h>
 #include <linux/fsverity.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,20 +63,40 @@ void lota_rt_set_content_hasher(lota_rt_content_hasher_fn fn)
 	lota_rt_verity_cache_clear(&rt_content_cache);
 }
 
-static const char *rt_basename(const char *path)
-{
-	const char *slash = strrchr(path, '/');
-	return slash ? slash + 1 : path;
-}
-
-static void rt_strip_deleted_suffix(char *path)
+/* length of the first @len bytes of @path without a " (deleted)" mark */
+static size_t rt_deleted_suffix_len(const char *path, size_t len)
 {
 	static const char suffix[] = " (deleted)";
-	size_t len = strlen(path);
 	size_t slen = sizeof(suffix) - 1;
 
-	if (len >= slen && strcmp(path + len - slen, suffix) == 0)
-		path[len - slen] = '\0';
+	if (len >= slen && memcmp(path + len - slen, suffix, slen) == 0)
+		return len - slen;
+	return len;
+}
+
+static void rt_path_keep_tail(const char *path, size_t len, char *out,
+			      size_t cap)
+{
+	size_t keep;
+
+	if (!out || cap == 0)
+		return;
+	out[0] = '\0';
+	if (!path)
+		return;
+
+	if (len < cap) {
+		memcpy(out, path, len);
+		out[len] = '\0';
+		return;
+	}
+	if (cap < sizeof(LOTA_RT_PATH_CUT) + 1)
+		return;
+
+	keep = cap - sizeof(LOTA_RT_PATH_CUT);
+	memcpy(out, LOTA_RT_PATH_CUT, sizeof(LOTA_RT_PATH_CUT) - 1);
+	memcpy(out + sizeof(LOTA_RT_PATH_CUT) - 1, path + len - keep, keep);
+	out[cap - 1] = '\0';
 }
 
 static int rt_map_files_leaf_is_safe(const char *leaf)
@@ -113,9 +134,9 @@ int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out)
 	unsigned int maj, min;
 	unsigned long long ino;
 	char perms[5] = { 0 };
-	char path[LOTA_RT_MAP_PATH_MAX];
 	const char *p;
 	const char *soname;
+	size_t len, slen;
 	int pos = 0;
 	int n;
 
@@ -138,15 +159,11 @@ int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out)
 	if (*p == '[')
 		return 0;
 
-	if (strlen(p) >= sizeof(path))
-		return -ENAMETOOLONG;
-	snprintf(path, sizeof(path), "%s", p);
-	path[strcspn(path, "\n")] = '\0';
-	rt_strip_deleted_suffix(path);
-
-	soname = rt_basename(path);
-	if (soname[0] == '\0' ||
-	    strlen(soname) >= LOTA_RUNTIME_IMAGE_SONAME_MAX)
+	len = rt_deleted_suffix_len(p, strcspn(p, "\n"));
+	soname = memrchr(p, '/', len);
+	soname = soname ? soname + 1 : p;
+	slen = len - (size_t)(soname - p);
+	if (slen == 0 || slen >= LOTA_RUNTIME_IMAGE_SONAME_MAX)
 		return -ENAMETOOLONG;
 
 	memset(out, 0, sizeof(*out));
@@ -155,8 +172,8 @@ int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out)
 	out->dev_major = maj;
 	out->dev_minor = min;
 	out->ino = ino;
-	snprintf(out->soname, sizeof(out->soname), "%s", soname);
-	snprintf(out->path, sizeof(out->path), "%s", path);
+	memcpy(out->soname, soname, slen);
+	rt_path_keep_tail(p, len, out->path, sizeof(out->path));
 	return 1;
 }
 
@@ -425,19 +442,29 @@ static int rt_read_verity(const struct rt_mapping *map,
 	return 0;
 }
 
-/* the link reads where the file behind it may not be reached */
+void lota_rt_path_keep_tail(const char *path, char *out, size_t cap)
+{
+	rt_path_keep_tail(path, path ? strlen(path) : 0, out, cap);
+}
+
+/*
+ * The link reads where the file behind it may not be reached; a longer link
+ * keeps its tail, marked.
+ */
 static void rt_name_exe_failure(pid_t pid, int err,
 				struct lota_runtime_measure_failure *fail)
 {
 	char exe_path[64];
+	char link[PATH_MAX];
 	ssize_t len;
 
 	snprintf(exe_path, sizeof(exe_path), "/proc/%d/exe", (int)pid);
-	len = readlink(exe_path, fail->path, sizeof(fail->path) - 1);
+	len = readlink(exe_path, link, sizeof(link) - 1);
 	if (len <= 0)
 		return;
 
-	fail->path[len] = '\0';
+	link[len] = '\0';
+	lota_rt_path_keep_tail(link, fail->path, sizeof(fail->path));
 	fail->role = LOTA_RT_ROLE_EXECUTABLE;
 	fail->err = err;
 }
@@ -448,6 +475,26 @@ static int rt_err_is_unmeasurable(int err)
 	return err == -ENODATA || err == -EOPNOTSUPP || err == -EINVAL ||
 	       err == -ENOTTY;
 }
+
+#define RT_REASON_MAPPED ", an object the process has mapped"
+#define RT_REASON_NO_HASH                                    \
+	" carries no fs-verity digest and the kernel would " \
+	"not hash its content either: "
+#define RT_REASON_NO_DIGEST                                         \
+	" carries no fs-verity digest (enable fs-verity on it, or " \
+	"drop the process from the protected set)"
+/* room for a strerror() text */
+#define RT_REASON_ERRNO_ROOM 64
+
+/* the longest reasons: a mapped object's path and the longest texts */
+_Static_assert(LOTA_RT_REASON_MAX >=
+		       LOTA_RT_MAP_PATH_MAX + sizeof(RT_REASON_MAPPED) +
+			       sizeof(RT_REASON_NO_HASH) + RT_REASON_ERRNO_ROOM,
+	       "a reason naming the longest path is cut");
+_Static_assert(LOTA_RT_REASON_MAX >= LOTA_RT_MAP_PATH_MAX +
+					     sizeof(RT_REASON_MAPPED) +
+					     sizeof(RT_REASON_NO_DIGEST),
+	       "a reason naming the longest path is cut");
 
 void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 			    int err, char *buf, size_t buflen)
@@ -489,8 +536,8 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 		tail = "";
 		break;
 	case LOTA_RT_ROLE_MAPPED_OBJECT:
-		snprintf(subject, sizeof(subject),
-			 "%s, an object the process has mapped", object);
+		snprintf(subject, sizeof(subject), "%s" RT_REASON_MAPPED,
+			 object);
 		tail = ",";
 		break;
 	default:
@@ -512,10 +559,8 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 
 	if (no_digest && fail->road_err != 0) {
 		/* content road refused too: name its error, not fs-verity */
-		snprintf(buf, buflen,
-			 "%s%s carries no fs-verity digest and the kernel "
-			 "would not hash its content either: %s",
-			 subject, tail,
+		snprintf(buf, buflen, "%s%s" RT_REASON_NO_HASH "%s", subject,
+			 tail,
 			 strerror(fail->road_err < 0 ? -fail->road_err :
 						       fail->road_err));
 		return;
@@ -529,10 +574,8 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 	}
 
 	if (no_digest) {
-		snprintf(buf, buflen,
-			 "%s%s carries no fs-verity digest (enable fs-verity "
-			 "on it, or drop the process from the protected set)",
-			 subject, tail);
+		snprintf(buf, buflen, "%s%s" RT_REASON_NO_DIGEST, subject,
+			 tail);
 		return;
 	}
 

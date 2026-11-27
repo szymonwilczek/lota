@@ -95,7 +95,9 @@ Running the demo
 ``CA_ADDR``, ``VERIFIER_ADDR``
   The CA and verifier listen addresses, ``127.0.0.1:8444`` and
   ``127.0.0.1:9443`` by default. The script checks both before it starts
-  anything; a taken one makes it exit 1 with the variable to set.
+  anything; a taken one makes it exit 1 with the variable to set, and with
+  a free port to try when one of the next 100 on that host, other than
+  the port of the other address, is free.
 
 ``BIN``, ``CA_DIR``
   The binaries, by default ``LOTA_BUILD_DIR``, else ``build/`` of the
@@ -104,9 +106,9 @@ Running the demo
 
 ``RUN_DIR``, ``STATE_DB``, ``POLICY``
   The verifier's working directory, a new ``lota-enrollment.*`` under
-  ``$TMPDIR`` or ``/tmp`` by default; its state database, by default
-  ``verifier-state.sqlite`` there; and its policy, by default
-  ``policies/testing.yaml``.
+  ``$TMPDIR`` or ``/tmp`` by default, made once the checks pass; its state
+  database, by default ``verifier-state.sqlite`` there; and its policy, by
+  default ``policies/testing.yaml``. The directory is kept after the run.
 
 The script then runs four steps:
 

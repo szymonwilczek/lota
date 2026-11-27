@@ -108,8 +108,7 @@ An option takes one dash or two. A duration is a Go duration such as
   A manufacturer CRL, PEM or DER (`EK revocation`_). Repeatable.
 
 ``-aik-cert-ttl DURATION``
-  Lifetime of an issued AIK certificate. Default ``24h``. A value of zero or
-  less issues certificates of ``24h``.
+  Lifetime of an issued AIK certificate. Default ``24h``; must be positive.
 
 ``-session-ttl DURATION``
   How long a challenge stays open for its answer (`Sessions and limits`_).
@@ -151,8 +150,8 @@ token alike (:ghsrc:`src/attestca/ca/issuer.go`).
 
 ``-ca-key`` reads the key from a file in the clear. The CA starts with it and
 logs ``using on-disk CA signing key -- development-only fallback; hold the
-CA key in an HSM in production``. The custody of the key, its rotation and a
-two-tier CA are in :doc:`../../security/ca-key`.
+CA key in an HSM in production`` with this page as ``doc``. The custody of
+the key, its rotation and a two-tier CA are in :doc:`../../security/ca-key`.
 
 PKCS#11 token
 -------------
@@ -207,7 +206,17 @@ The token refusals, each fatal at startup:
   PIN fails; the module's error follows.
 
 ``pkcs11: find key pair:``
-  No key pair on the token matches the selector, or the search failed.
+  The search on the token failed; the module's error follows.
+
+``pkcs11: no key pair on token %q matches label %q, id %q``
+  Nothing on the token carries that label or id.
+
+``pkcs11: %d key pairs on token %q match label %q, id %q; ...``
+  The selector names more than one key pair. The message ends with the
+  selector left to give: ``-ca-key-pkcs11-id`` without an id,
+  ``-ca-key-pkcs11-label`` without a label, each followed by ``or give each
+  its own id`` for pairs that share it too, and ``they share that label and
+  id; give each its own id`` when both are given.
 
 EK trust
 ========

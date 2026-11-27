@@ -399,13 +399,39 @@ int do_add_publisher(const char *config_path, const char *name,
  */
 int do_list_publishers(void);
 
+/* What --forget-publisher does with the object at the profile's handle */
+enum forget_key_action {
+	FORGET_KEY_NONE, /* nothing at the handle */
+	FORGET_KEY_EVICT, /* the publisher's own key */
+	FORGET_KEY_FOREIGN, /* another object, left alone */
+	FORGET_KEY_UNKNOWN, /* could not be checked: nothing is removed */
+};
+
+/**
+ * forget_key_plan() - Decide what to do with the object at the handle.
+ * @held: tpm_handle_holds_object() for the handle.
+ * @owns: tpm_aik_handle_holds_profile_key(), read only when @held is 1.
+ *
+ * Return: the action.
+ */
+static inline enum forget_key_action forget_key_plan(int held, int owns)
+{
+	if (held < 0)
+		return FORGET_KEY_UNKNOWN;
+	if (held == 0)
+		return FORGET_KEY_NONE;
+	if (owns < 0)
+		return FORGET_KEY_UNKNOWN;
+	return owns ? FORGET_KEY_EVICT : FORGET_KEY_FOREIGN;
+}
+
 /**
  * do_forget_publisher() - Remove a profile: --forget-publisher.
  * @profile_id: Hex identity, as do_allow_publisher() takes.
  *
  * Evicts the profile's AIK unless another object holds its handle, then
  * removes the profile directory. A configured profile enrolls again only with
- * new consent and a new key.
+ * new consent, under the same derived key.
  *
  * Return: exit code 0 or 1; nothing is removed when the key cannot be checked
  * or evicted.

@@ -96,6 +96,16 @@ fi
 check "it prints the token configuration the CA needs in its environment" \
     grep -q "SOFTHSM2_CONF" "$WORK_DIR/setup.log"
 
+# a second token under the label would leave the CA to pick one by label
+before=$(sha256sum "$OUT_DIR/ca.crt")
+rc=0
+"$SETUP" "$OUT_DIR" >"$WORK_DIR/again.log" 2>&1 </dev/null || rc=$?
+check "a second run on the same directory is refused" test "$rc" -eq 1
+check "the refusal names the token already there" \
+    grep -q "already holds a token" "$WORK_DIR/again.log"
+check "a refused run leaves ca.crt alone" \
+    test "$(sha256sum "$OUT_DIR/ca.crt")" = "$before"
+
 if ((failures > 0)); then
     echo "$failures check(s) failed"
     exit 1

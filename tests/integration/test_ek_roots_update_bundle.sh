@@ -180,6 +180,28 @@ check "the refusal names the repeated line" \
 	grep -q "appears on two lines" dup.txt
 check "a repeated file writes no bundle" test ! -e bundle-dup/vendor-root.pem
 
+# a dropped line takes its .pem with it; other files stay
+run_update sources.ok bundle-drop >drop1.txt 2>&1
+echo "operator notes" >bundle-drop/notes.txt
+cp bundle-drop/vendor-root.pem bundle-drop/OLD.PEM
+ln -s notes.txt bundle-drop/link.pem
+mkdir bundle-drop/dir.pem
+printf '%s  vendor-root.pem  root  %s  Example TPM Root CA\n' \
+	"$root_pin" https://example.invalid/root.der >sources.drop
+rc=0
+run_update sources.drop bundle-drop >drop2.txt 2>&1 || rc=$?
+check "a second run without a line materializes" test "$rc" -eq 0
+check "the dropped line's .pem is removed" \
+	test ! -e bundle-drop/vendor-issuing.pem
+check "an unnamed .pem in another letter case is removed" \
+	test ! -e bundle-drop/OLD.PEM
+check "the removal is reported" \
+	grep -q "removed vendor-issuing.pem: not in the manifest" drop2.txt
+check "the kept line's .pem stays" test -f bundle-drop/vendor-root.pem
+check "a file that is not .pem stays" test -f bundle-drop/notes.txt
+check "an unnamed .pem link is removed" test ! -L bundle-drop/link.pem
+check "a directory named .pem stays" test -d bundle-drop/dir.pem
+
 if [[ $failures -ne 0 ]]; then
     echo "FAILURES: $failures"
     sed -n '1,10p' out.txt 2>/dev/null

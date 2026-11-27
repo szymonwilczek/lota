@@ -18,6 +18,7 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_tcti.h>
 #include <time.h>
@@ -117,9 +118,12 @@ const char *tpm_strerror(int err);
  * Esys_CreatePrimary, which costs one key derivation per call and no slot.
  * --seal-persist-primary with seal_persistent_primary in lota.conf reuses
  * the persisted object. Both are the same key (owner hierarchy, fixed template,
- * empty unique), so blobs sealed either way unseal the other way.
+ * empty unique), so blobs sealed either way unseal the other way. The persisted
+ * object is used only while its Name matches the one --seal-persist-primary
+ * recorded at TPM_SEAL_PRIMARY_NAME_PATH.
  */
 #define TPM_SEAL_PRIMARY_HANDLE 0x81010003
+#define TPM_SEAL_PRIMARY_NAME_PATH "/var/lib/lota/seal_primary.name"
 
 /* Hash algorithm for PCR bank */
 #define TPM_HASH_ALG TPM2_ALG_SHA256
@@ -327,8 +331,9 @@ struct tpm_context {
 	bool boot_commitment_locked;
 
 	/*
-	 * Verdict from the last tpm_extend_boot_commitment() call: names
-	 * the refusal behind -EBADMSG. Meaningless before the first call.
+	 * Verdict from the last tpm_extend_boot_commitment() or
+	 * tpm_observe_boot_commitment() call: names the refusal behind
+	 * -EBADMSG. Meaningless before the first call.
 	 */
 	enum tpm_pcr14_state boot_commitment_state;
 
@@ -430,6 +435,17 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
  * Return: 0 or a negative errno.
  */
 int tpm_provision_aik(struct tpm_context *ctx);
+
+/**
+ * tpm_load_aik() - Load the key at @ctx->aik_handle and its authorization.
+ * @ctx: Initialized TPM context.
+ *
+ * Evicts, creates and writes nothing.
+ *
+ * Return: 0, -ENXIO with no object at the handle, -ENOENT with no
+ * authorization record, or another negative errno.
+ */
+int tpm_load_aik(struct tpm_context *ctx);
 
 /**
  * tpm_bind_profile() - Point the context at one publisher's AIK.
@@ -763,6 +779,36 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 			       const uint8_t self_hash[]);
 
 /**
+ * tpm_observe_boot_commitment() - Check PCR14 against the agent binary.
+ * @ctx: Initialized TPM context.
+ * @self_hash: SHA-256 of the running agent binary.
+ *
+ * As tpm_extend_boot_commitment(), with the same verdict and refusal
+ * messages, but it extends nothing, saves no snapshot and leaves
+ * @ctx->boot_commitment_locked as it is.
+ *
+ * Return: as for tpm_extend_boot_commitment().
+ */
+int tpm_observe_boot_commitment(struct tpm_context *ctx,
+				const uint8_t self_hash[]);
+
+/**
+ * tpm_boot_commitment_writes() - Whether a verdict changes the TPM or disk.
+ * @state: Verdict from tpm_classify_pcr14().
+ * @write: false for tpm_observe_boot_commitment().
+ *
+ * Return: true when @write is set and @state is TPM_PCR14_AWAITING_EXTEND,
+ * which extends and saves the snapshot, or TPM_PCR14_ALREADY_COMMITTED, which
+ * saves it.
+ */
+static inline bool tpm_boot_commitment_writes(enum tpm_pcr14_state state,
+					      bool write)
+{
+	return write && (state == TPM_PCR14_AWAITING_EXTEND ||
+			 state == TPM_PCR14_ALREADY_COMMITTED);
+}
+
+/**
  * tpm_get_self_hash() - Return the agent hash self_measure() captured.
  * @ctx: Initialized TPM context.
  * @out: LOTA_HASH_SIZE bytes.
@@ -1028,24 +1074,51 @@ int tpm_unseal_secret_envelope(struct tpm_context *ctx, const uint8_t *blob,
 			       size_t *out_len);
 
 /**
+ * tpm_seal_primary_name_equal() - Whether two object Names are the same.
+ * @a: A Name.
+ * @b: Another Name.
+ *
+ * Return: true when both sizes and bytes match.
+ */
+static inline bool tpm_seal_primary_name_equal(const TPM2B_NAME *a,
+					       const TPM2B_NAME *b)
+{
+	return a->size == b->size && a->size <= sizeof(a->name) &&
+	       memcmp(a->name, b->name, a->size) == 0;
+}
+
+/**
  * tpm_seal_persist_primary() - Persist the seal storage primary.
  * @ctx: Initialized TPM context.
- * @already: If non-NULL, set when an object was already at the handle.
+ * @already: If non-NULL, set when the seal primary was already at the handle.
+ * @record_err: If non-NULL, set to the negative errno of a failed write of
+ *              the Name record, or 0.
  *
- * Return: 0 in both cases, or a negative errno / LOTA_ERR_TPM_*.
+ * An object at TPM_SEAL_PRIMARY_HANDLE is compared with the derived primary by
+ * Name. Either way the Name is written to TPM_SEAL_PRIMARY_NAME_PATH: seal and
+ * unseal use the object only while that record names it.
+ *
+ * Return: 0 with the primary at the handle, also when only the record failed,
+ * -EEXIST when the handle holds another object, which is left alone, or a
+ * negative errno / LOTA_ERR_TPM_*.
  */
-int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already);
+int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already,
+			     int *record_err);
 
 /**
  * tpm_seal_evict_primary() - Remove the persistent seal storage primary.
  * @ctx: Initialized TPM context.
+ * @record_err: If non-NULL, set to the negative errno of a failed removal of
+ *              the Name record, or 0.
  *
- * Sealed blobs still unseal: the derived primary is the same key.
+ * Sealed blobs still unseal: the derived primary is the same key. The Name
+ * record at TPM_SEAL_PRIMARY_NAME_PATH is removed with it.
  *
- * Return: 0, -ENOENT with nothing persisted, or a negative errno /
- * LOTA_ERR_TPM_*.
+ * Return: 0 with the primary evicted, also when only the record stayed,
+ * -ENOENT with nothing persisted, -EEXIST when the handle holds another
+ * object, which is left alone, or a negative errno / LOTA_ERR_TPM_*.
  */
-int tpm_seal_evict_primary(struct tpm_context *ctx);
+int tpm_seal_evict_primary(struct tpm_context *ctx, int *record_err);
 
 /**
  * tpm_handle_holds_object() - Does this TPM have an object at @handle?

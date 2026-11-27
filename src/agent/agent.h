@@ -66,6 +66,7 @@ static inline void agent_globals_unlock(struct agent_globals *agent)
 }
 
 int self_measure(struct tpm_context *ctx);
+int self_check_commitment(struct tpm_context *ctx);
 struct lota_config;
 void setup_container_listener(struct ipc_context *ctx,
 			      const struct lota_config *cfg);

@@ -26,6 +26,10 @@ import (
 	"github.com/szymonwilczek/lota/attestca/server"
 )
 
+// onDiskKeyDoc is the page, from the repository root, that the on-disk key
+// warning names: it covers the PKCS#11 token
+const onDiskKeyDoc = "Documentation/admin-guide/bringup/ca-enrollment.rst"
+
 type stringList []string
 
 func (s *stringList) String() string { return fmt.Sprint(*s) }
@@ -140,7 +144,13 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 		return fmt.Errorf("at least one of -ek-root-bundle or -ek-root is required")
 	}
 
-	// enroll ignores a non-positive value and keeps its default
+	// enroll and the issuer ignore a non-positive value
+	// and keep their default
+	if cfg.aikCertTTL <= 0 {
+		return fmt.Errorf("-aik-cert-ttl must be positive (got %s); "+
+			"omit the flag for the default of %s",
+			cfg.aikCertTTL, ca.DefaultAIKCertTTL)
+	}
 	if cfg.sessionTTL <= 0 {
 		return fmt.Errorf("-session-ttl must be positive (got %s); omit the flag for the default of %s",
 			cfg.sessionTTL, enroll.DefaultSessionTTL)
@@ -180,7 +190,7 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 
 		log.Warn("using on-disk CA signing key -- development-only fallback; "+
 			"hold the CA key in an HSM in production",
-			"flag", "-ca-key", "doc", "Documentation/admin-guide/bringup/index.rst")
+			"flag", "-ca-key", "doc", onDiskKeyDoc)
 	}
 
 	var ekRootPEMs, ekIntermediatePEMs [][]byte

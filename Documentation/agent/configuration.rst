@@ -127,7 +127,8 @@ column says what ``SIGHUP`` does with a changed value (`Reloading`_).
      - Next start.
    * - ``seal_persistent_primary``
      - Boolean, default false: seal under the persistent primary key in
-       place of a transient one (:doc:`tpm`).
+       place of a transient one, while its Name matches the one
+       ``--seal-persist-primary`` recorded (:doc:`tpm`).
      - Next start.
    * - ``kernel_path``
      - Path of the kernel image the report names. Default
@@ -221,9 +222,10 @@ file is a warning.
 
 The daemon applies a changed ``mode``, the five switches, ``protect_pid``,
 ``trust_lib``, ``log_level`` and the profiles at once. A reload that leaves
-``enforce`` needs ``policy_pubkey`` set in the file the daemon started with,
-and a ``<file>.sig`` beside the file that verifies under that key; otherwise
-the reload is refused whole. A switch, library or PID given on the command
+``enforce`` needs a ``<file>.sig`` beside the file that verifies under the
+key the daemon started with (``--policy-pubkey``, ``policy_pubkey``,
+``/etc/lota/policy.pub``, then ``enforcement.pub``); otherwise the reload is
+refused whole. A switch, library or PID given on the command
 line stays in effect even when the file drops it.
 
 Every key marked "Next start" keeps the value the agent started with. For

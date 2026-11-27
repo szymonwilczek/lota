@@ -1257,7 +1257,8 @@ static void print_publisher(const struct publisher_entry *e,
 		strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%SZ", &tm);
 		printf("  agreed to      %s\n", when);
 	} else {
-		printf("  agreed to      no (nothing enrolls until it is)\n");
+		printf("  agreed to      no (the agent does not enroll it on "
+		       "its own)\n");
 	}
 
 	if (e->enrolled) {
@@ -1482,7 +1483,8 @@ int do_forget_publisher(const char *profile_id)
 	}
 
 	if (profile_aik_handle_load(&paths, &handle) == 0) {
-		int owns;
+		int held;
+		int owns = 0;
 
 		ret = tpm_init(&g_agent.tpm_ctx);
 		if (ret < 0) {
@@ -1498,24 +1500,31 @@ int do_forget_publisher(const char *profile_id)
 		 * Evict only this publisher's own key: an object that replaced
 		 * it at the handle belongs to whoever put it there.
 		 */
-		owns = tpm_bind_profile(&g_agent.tpm_ctx, &paths) == 0 ?
-			       tpm_aik_handle_holds_profile_key(
-				       &g_agent.tpm_ctx) :
-			       -EIO;
-		if (owns < 0) {
+		held = tpm_handle_holds_object(&g_agent.tpm_ctx, handle);
+		if (held == 1)
+			owns = tpm_bind_profile(&g_agent.tpm_ctx, &paths) == 0 ?
+				       tpm_aik_handle_holds_profile_key(
+					       &g_agent.tpm_ctx) :
+				       -EIO;
+		switch (forget_key_plan(held, owns)) {
+		case FORGET_KEY_UNKNOWN:
 			fprintf(stderr,
 				"Could not check what the key at 0x%08X is "
 				"(%s).\nNothing was deleted: destroying an "
 				"object this publisher may not own cannot be "
 				"undone.\n",
-				handle, tpm_strerror(owns));
+				handle, tpm_strerror(held < 0 ? held : owns));
 			tpm_cleanup(&g_agent.tpm_ctx);
 			return 1;
-		}
-		if (owns == 0) {
+		case FORGET_KEY_NONE:
+			tpm_cleanup(&g_agent.tpm_ctx);
+			goto forget;
+		case FORGET_KEY_FOREIGN:
 			foreign_key = true;
 			tpm_cleanup(&g_agent.tpm_ctx);
 			goto forget;
+		case FORGET_KEY_EVICT:
+			break;
 		}
 
 		ret = tpm_evict_profile_aik(&g_agent.tpm_ctx, handle);
@@ -1543,8 +1552,9 @@ forget:
 
 	printf("Publisher %s forgotten.\n", paths.id);
 	if (had_key)
-		printf("Its attestation key is destroyed; that identity "
-		       "cannot be handed back.\n");
+		printf("Its attestation key is evicted. Agreed to again, the "
+		       "publisher gets the same\npublic key back until the "
+		       "TPM owner hierarchy is cleared.\n");
 	if (foreign_key)
 		printf("The key at 0x%08X is not this publisher's, so it was "
 		       "left alone.\nThat slot stays claimed by whatever "
@@ -1552,7 +1562,7 @@ forget:
 		       "handles\nin the range nothing here records.\n",
 		       handle);
 	printf("A title of theirs can ask again, and will need consent and a "
-	       "new key.\n");
+	       "new enrollment.\n");
 	return 0;
 }
 

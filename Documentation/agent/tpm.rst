@@ -203,16 +203,22 @@ it with AES-256-GCM. An empty secret is refused.
 The parent is the seal storage primary, an RSA 2048 restricted decryption
 key of the owner hierarchy with AES-128-CFB and an empty ``unique``. The
 agent derives it for each operation, or uses the object at ``0x81010003``
-when ``seal_persistent_primary`` is set and the object is present. Both are
-the same key, so a blob opens either way. ``--unseal`` runs in a session
+when ``seal_persistent_primary`` is set and the object's Name matches the one
+``--seal-persist-primary`` recorded in ``/var/lib/lota/seal_primary.name``.
+With no record, or another Name, it derives the primary. Both are the same
+key, so a blob opens either way. ``--unseal`` runs in a session
 salted with that primary and with parameter encryption, so the secret does
 not cross the bus in the clear.
 
-``--seal-persist-primary`` stores the primary at ``0x81010003``, and reports
-when an object is already there. Seal and unseal use it only with
-``seal_persistent_primary``. ``--seal-evict-primary`` removes it; blobs stay
-valid, as the derived key is the same. With no object at the handle the
-command exits 1.
+``--seal-persist-primary`` stores the primary at ``0x81010003`` and records
+its Name, and reports when the primary is already there. Seal and unseal use
+it only with ``seal_persistent_primary``. ``--seal-evict-primary`` removes it
+and the record; blobs stay valid, as the derived key is the same. Both
+commands compare the object at the handle with the derived primary and leave
+another object alone, exiting 1. With no object at the handle
+``--seal-evict-primary`` exits 1. When the TPM step succeeds but the record
+cannot be written or removed, the command says the TPM step is done, names
+the record, and exits 1.
 
 PCR masks
 ---------
@@ -305,18 +311,20 @@ Diagnostics
 #. Open the TPM and run ``TPM2_SelfTest``.
 #. Read PCRs 0, 1 and 10.
 #. Hash the kernel image and the agent binary.
-#. Read PCR 14, perform the self-measurement and read PCR 14 again. When
-   the register waits for this boot's commitment, the self-measurement
-   extends it, as the daemon does at startup; a daemon started later in the
-   same boot then reports ``AGENT_RESTARTED``.
+#. Read PCR 14 and check it against this binary's commitment without
+   extending it: a daemon started later in the same boot still makes the
+   extend.
 #. Quote PCRs 0, 1 and 14 with each publisher's key, or with the host AIK
    when no publisher holds a key. A handle with no object is skipped.
 
 It ends with how many steps passed, failed and were skipped, and exits 1
 when one failed. It says before a quote that a rejected authorization costs
-one dictionary-attack attempt. It creates no key at an empty handle, but
-gives a key with no authorization record a fresh value, as provisioning
-does.
+one dictionary-attack attempt. It creates no key at an empty handle and
+replaces none: a key with no authorization record is skipped. The daemon
+gives a publisher's key a fresh value when it binds a ``lota.conf`` profile
+of that publisher, and the host key one when it runs with no publisher
+bound. It gives none to a key in the profile store that no profile
+names.
 
 ``--test-signed`` serves the IPC socket with tokens signed by the TPM, in a
 simulated attested state. It claims the socket before it opens the TPM, so

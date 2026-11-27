@@ -61,9 +61,13 @@ struct lota_rt_map_entry {
  * @line: the line.
  * @out: the mapping.
  *
+ * A path longer than @out->path holds is cut as lota_rt_path_keep_tail()
+ * cuts it.
+ *
  * Return: 1 and @out filled for a file-backed executable mapping, 0 for a
  * line to skip (not executable, anonymous, or a region such as [vdso]),
- * -ENAMETOOLONG for a path that does not fit, -EINVAL otherwise.
+ * -ENAMETOOLONG for an empty file name or one @out->soname cannot hold,
+ * -EINVAL otherwise.
  */
 int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out);
 
@@ -251,6 +255,21 @@ static inline int lota_rt_err_is_agent_failure(int err)
 }
 
 #define LOTA_RT_REASON_MAX 512
+
+/* marks a path cut to its tail */
+#define LOTA_RT_PATH_CUT "..."
+
+/**
+ * lota_rt_path_keep_tail() - Copy a path, cut to its tail when too long.
+ * @path: NUL-terminated path, or NULL for an empty one.
+ * @out: destination.
+ * @cap: size of @out.
+ *
+ * A path that does not fit becomes LOTA_RT_PATH_CUT and its last bytes,
+ * so the file name stays. @out is empty when @cap cannot hold the mark
+ * and one byte.
+ */
+void lota_rt_path_keep_tail(const char *path, char *out, size_t cap);
 
 /**
  * lota_rt_failure_reason() - Render a failure as one sentence.

@@ -129,4 +129,24 @@ for filename in "${written[@]}"; do
 	install -m 0644 "$WORK/certs/$filename" "$OUTDIR/$filename"
 done
 
+# a .pem the manifest does not name, a link included,
+# makes the CA refuse the bundle; the CA skips only directories
+shopt -s nullglob dotglob
+for path in "$OUTDIR"/*; do
+	if [ -d "$path" ] && [ ! -L "$path" ]; then
+		continue
+	fi
+	name="$(basename -- "$path")"
+	case "${name,,}" in
+	*.pem) ;;
+	*) continue ;;
+	esac
+	for seen in "${written[@]}"; do
+		[ "$seen" != "$name" ] || continue 2
+	done
+	rm -f -- "$path"
+	echo "removed $name: not in the manifest"
+done
+shopt -u nullglob dotglob
+
 echo "wrote $count pinned certificate(s), $roots of them anchors, to $OUTDIR"
