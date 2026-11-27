@@ -150,7 +150,7 @@ One command drives the rest::
 
     sudo lota-install
 
-It works in 13 steps. Before each one it says what it is about to change
+It works in 12 steps. Before each one it says what it is about to change
 and why, and waits for you to agree. Nothing is changed silently, and you can
 stop at any step.
 
@@ -268,7 +268,7 @@ spend an evening on it. Nothing else on this page helps here.
 The kernel needs boot settings it does not have yet
 ---------------------------------------------------
 
-Step 6 checks that the running kernel enforces a floor: signed drivers, kernel
+Step 5 checks that the running kernel enforces a floor: signed drivers, kernel
 lockdown, and file integrity checking. If it does not, the installer offers to
 add the missing boot parameters for you, explains that they take effect at the
 next boot and that removing them undoes it, and waits for you to agree.
@@ -325,9 +325,9 @@ In Steam, right-click the game, choose **Properties**, and paste the line into
 **Launch options** as a single line. Repeat for each game that uses LOTA.
 
 If it tells you a restart is needed first, that is the per-account setup:
-``lota-steam-setup --register-uid`` records the account that needs a socket,
-the agent reads that when it starts, and it takes effect at the next boot. The
-command says so before it changes anything.
+``sudo lota-steam-setup --register-uid`` records the account that needs a
+socket, the agent reads that when it starts, and it takes effect at the next
+boot. The command says so before it changes anything.
 
 Is it actually working?
 =======================
@@ -456,7 +456,7 @@ had recognised this PC sees a PC it has never met.
 Where to next
 =============
 
-* Every detail of the 13 steps, for somebody who wants to read ahead:
+* Every detail of the 12 steps, for somebody who wants to read ahead:
   :doc:`the guided install reference <../admin-guide/lota-install>`.
 * What a publisher receives and what they can do with it:
   :ghsrc:`examples/anticheat-integration.rst`.
