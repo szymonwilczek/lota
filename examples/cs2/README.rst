@@ -1,561 +1,278 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-.. _cs2--proton-hook-integration:
-
-CS2 / Proton hook integration
+=============================
+Counter-Strike 2 under Proton
 =============================
 
-This walk-through validates the LOTA Wine/Proton hook against a real
-Counter-Strike 2 install on Steam. It does not bundle any game asset and does
-not modify the game binary; the hook attaches through ``LD_PRELOAD`` from
-Steam's launch-options field so that every game launch carries the attestation
-bridge for the lifetime of the Wine prefix.
+Counter-Strike 2 runs as a Windows program under Proton, inside the
+pressure-vessel container of the Steam Linux Runtime. The LOTA Wine hook,
+``liblota_wine_hook.so``, is a Linux library preloaded into that process
+tree. It connects to the agent on the host, keeps a token current and
+writes it, with a status file, into a directory of the player's runtime
+directory. This page wires it into CS2 on the player's own Steam install
+and checks the result.
 
-Counter-Strike 2 (Steam app id ``730``, formerly CS:GO) runs under Proton on
-Linux. The matrix below names the Proton releases the hook has been exercised
-against; older Proton lines may also work but are not tracked.
+The hook itself, which processes it activates in, the files it writes and
+its environment are described in
+`the Wine hook <../../Documentation/userspace-api/wine-hook.rst>`_. The
+player's version of these steps is in
+`Installing LOTA on your PC <../../Documentation/player/index.rst>`_.
 
-=================== ===========
-Proton              Hook tested
-=================== ===========
-Proton 9.0-4        yes
-Proton Experimental yes
-Proton 8.x          no
-=================== ===========
+Requirements
+============
 
-Prerequisites
--------------
+* The agent running as the daemon, which signs tokens with the TPM; the
+  installed package starts it. An agent started with ``--test-ipc`` has
+  no TPM and issues no token.
+* The player in the ``lota`` group, in a session started after joining
+  it.
+* A socket for the player's session. The agent opens
+  ``$XDG_RUNTIME_DIR/lota/lota.sock`` for each ``container_listener_uid``
+  of its configuration, and for the user its own ``XDG_RUNTIME_DIR``
+  names, as described in `IPC <../../Documentation/agent/ipc.rst>`_.
+* Both halves of the hook, 64-bit and 32-bit, under ``/usr`` or
+  ``/usr/local``, as the package installs them (see
+  `Builds <../../Documentation/userspace-api/wine-hook.rst>`__).
 
-1. **Working LOTA install** with the agent running and reachable on
-   ``/run/lota/lota.sock``. The agent does not need to be in enforce mode for
-   the hook to attach; the hook reads attestation, it does not gate execve.
+``lota-steam-setup`` configures the socket. Either command writes a file
+the agent reads at its next start, and neither restarts it: a restart
+spends the boot commitment in PCR 14, so the change takes effect at the
+next boot.
 
-   .. code:: sh
+.. code-block:: console
 
-      systemctl status lota-agent.service
-      ls -l /run/lota/lota.sock
+   $ sudo lota-steam-setup --register-uid
+   $ sudo lota-steam-setup --install-systemd-dropin
 
-2. **Built and installed artefacts.** ``sudo make install`` deploys the hook
-   library to ``/usr/lib64/liblota_wine_hook.so`` and, on x86_64, its 32-bit
-   half to ``/usr/lib/liblota_wine_hook.so.*``, which Steam's 32-bit launch
-   processes load; the wrapper scripts go to
-   ``/usr/bin/lota-{proton-hook,steam-setup}``. The 32-bit half needs
-   ``glibc-devel.i686`` and ``libatomic.i686``; ``make install`` refuses
-   without them.
+``--register-uid`` writes ``container_listener_uid = <uid>`` into
+``/etc/lota/lota.conf`` (``LOTA_CONF``), before its first ``[profile]``
+section. It checks the result with ``lota-agent --dump-config`` and puts
+the old file back when the check fails. ``--install-systemd-dropin``
+writes ``10-xdg-runtime.conf`` into
+``/etc/systemd/system/lota-agent.service.d/`` (``LOTA_SETUP_DROPIN_DIR``),
+with ``Environment=XDG_RUNTIME_DIR=/run/user/<uid>``, and reloads
+systemd. Both take the uid of the player from ``SUDO_UID``, which must
+not be 0, and need root; ``--install-systemd-dropin`` with
+``LOTA_SETUP_DROPIN_DIR`` set skips the root check and the reload.
 
-3. **Steam Runtime is the host's Steam**, not a Flatpak/Snap copy. The Flatpak
-   Steam sandbox blocks ``LD_PRELOAD`` paths outside the container, so the hook
-   cannot reach ``liblota_wine_hook.so`` from ``/usr/lib64``. If you must use
-   Flatpak Steam, install the hook inside the Steam Flatpak runtime or skip
-   this walk-through.
+Checking the host
+=================
 
-4. **CS2 installed** via Steam and launched at least once so Proton has
-   provisioned the Wine prefix.
+.. code-block:: console
 
-One-time host setup
+   $ lota-steam-setup --verify
+
+The script checks, in order, that ``XDG_RUNTIME_DIR`` is set, the agent
+socket (``LOTA_AGENT_SOCKET``) exists and the player may read and write
+it, the player is in the ``lota``
+group, the container socket exists and the token directory can be
+created. A hook that is missing, or installed as one half only, is a
+warning and not an issue. Without ``--verify`` it also
+creates ``$XDG_RUNTIME_DIR/lota/`` with mode ``0750`` and group ``lota``.
+It prints the launch option and ends with
+``[OK]   All checks passed.  LOTA Steam integration is ready.``, or with
+``<n> issue(s) detected`` and exit code 1. An unknown option exits 1 as
+well.
+
+The launch option
+=================
+
+In Steam, open **Properties** of Counter-Strike 2 and set
+**Launch Options** to:
+
+.. code-block:: text
+
+   LOTA_HOOK_LOG_LEVEL=info lota-proton-hook %command%
+
+The next launch is hooked. ``lota-proton-hook`` runs before Proton starts
+and:
+
+* exits to the command unchanged, after one line on stderr, when
+  ``LOTA_HOOK_DISABLE`` is ``1`` or ``true``;
+* puts the hook into ``LD_PRELOAD``: ``LOTA_HOOK_LIB_PATH`` when it is
+  set, with no search; else both halves through ``$LIB`` when both are
+  installed, else the one found;
+* limits the hook to the title and its compatibility tools, from
+  ``STEAM_COMPAT_INSTALL_PATH`` and ``STEAM_COMPAT_TOOL_PATHS``, unless
+  ``LOTA_HOOK_ACTIVATE_PATH`` and ``LOTA_HOOK_ACTIVATE_PROGRAM`` are set;
+* creates the token directory and adds it, with the directory of the
+  socket, to ``PRESSURE_VESSEL_FILESYSTEMS_RW``, so the container sees
+  both on the paths of the host;
+* runs the command through ``lota-protect``, which puts the whole process
+  tree of the title in the protected set of the agent.
+
+A missing hook prints ``lota-proton-hook: hook library not found`` and
+``lota-proton-hook: continuing without the hook``, and a missing
+``lota-protect`` prints
+``lota-proton-hook: lota-protect not found, starting unprotected``; the
+title starts in both cases. The tools are described in
+`Launch tools <../../Documentation/userspace-api/wine-hook.rst>`__.
+
+With the publishers of the agent enrolled (see
+`publishers <../../Documentation/agent/publishers.rst>`_), the launch
+option also names the publisher of the title, the id
+``lota-agent --list-publishers`` prints:
+
+.. code-block:: text
+
+   LOTA_HOOK_PUBLISHER=<hex id> LOTA_HOOK_LOG_LEVEL=info \
+       lota-proton-hook %command%
+
+The line is wrapped here; Steam takes it on one line.
+
+Why a launch option
 -------------------
 
-1. **Add the operator user to the** ``lota`` **group.** The agent socket is
-   owned ``root:lota mode 0660``, and the Steam pressure-vessel container
-   inherits the launching user's supplementary group set, so the hook can only
-   ``connect()`` to the socket when the user is in the ``lota`` group. The
-   agent package creates the group from its ``sysusers.d`` fragment, so only
-   the membership is left to do:
-
-   .. code:: sh
-
-      # from a source install the group may be absent; the package creates it
-      getent group lota >/dev/null || sudo groupadd --system lota
-      sudo usermod -aG lota "$USER"
-      # newgrp lota - activates the group in the current shell without a full re-login
-      # restart Steam from that shell so CS2 inherits the new group
-
-2. **Pin** ``XDG_RUNTIME_DIR`` for ``lota-agent.service`` so the agent's
-   container-accessible secondary listener at
-   ``$XDG_RUNTIME_DIR/lota/lota.sock`` comes up on boot. The systemd unit runs
-   as root and inherits no ``XDG_RUNTIME_DIR``, so without the override only
-   ``/run/lota/lota.sock`` is bound and pressure-vessel cannot reach it.
-
-   The fastest path is the helper baked into ``lota-steam-setup``, which
-   generates the drop-in for the operator that wrapped sudo. Run it from your
-   own login shell, not from a root shell:
-
-   .. code:: sh
-
-      sudo lota-steam-setup --install-systemd-dropin
-
-   The helper reads ``$SUDO_UID`` to recover the operator UID, refuses to run
-   when ``$SUDO_UID`` is missing (direct root login or ``su -``), and writes
-   the drop-in at
-   ``/etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf`` with
-   ``Environment=XDG_RUNTIME_DIR=/run/user/<uid>``. The agent reads it when it
-   starts, so **reboot to get the listener**: the helper restarts nothing,
-   because ``lota-agent.socket`` triggers the service and stopping either
-   spends the boot's PCR 14 commitment, which takes the host out of
-   attestation until it reboots anyway. The same file can be
-   installed manually from the in-tree template at
-   ```systemd/lota-agent.service.d/10-xdg-runtime.conf.example`` <../../systemd/lota-agent.service.d/10-xdg-runtime.conf.example>`__
-   (``make install`` deploys it to ``/usr/share/lota/systemd/`` as a
-   reference).
-
-   The drop-in is single-valued: only one operator UID can have its
-   ``/run/user/<uid>/lota/lota.sock`` listener active at a time. Hosts with
-   multiple interactive operators should use the ``container_listener_uid``
-   config knob in ``/etc/lota/lota.conf`` instead. Each entry produces a
-   ``/run/user/<uid>/lota/lota.sock`` listener at startup, up to
-   ``LOTA_CONFIG_MAX_CONTAINER_LISTENERS``. Run
-
-   .. code:: sh
-
-      sudo lota-steam-setup --register-uid
-
-   from each operator's login shell to append their ``$SUDO_UID`` to the
-   config. That setting is read at startup too, so it lands at the next boot
-   and nothing is restarted. The drop-in is then redundant on the multi-user
-   path and can be left out.
-
-   With the drop-in in place start the agent via systemd:
-
-   .. code:: sh
-
-      sudo systemctl start lota-agent.socket
-
-   The agent banner (visible in ``journalctl -u lota-agent.service``) names
-   both listeners; the second one is the path the hook will use:
-
-   ::
-
-      IPC listening on /run/lota/lota.sock
-      IPC extra listener on /run/user/1000/lota/lota.sock
-
-   For the integration test against CS2 you want the TPM-signed-token path,
-   which is ``--test-signed``:
-
-   .. code:: sh
-
-      sudo systemctl stop lota-agent.socket lota-agent.service
-      sudo env XDG_RUNTIME_DIR=/run/user/"$(id -u)" \
-          /usr/bin/lota-agent --test-signed
-
-   ``--test-signed`` claims the socket first, then opens the TPM and readies
-   the AIK, runs the IPC + container listener under the operator's
-   ``XDG_RUNTIME_DIR``, and signs ``GET_TOKEN`` responses with a real TPM
-   Quote. A run whose socket is already held by the daemon exits there and
-   changes nothing. The banner names the attestation key it is about to use,
-   and says so plainly when there is none at the handle and it is about to
-   create one that outlives the command. The fixture policy digest (0xA5 x 32)
-   is applied automatically; the banner prints
-   ``Tokens are signed by the TPM AIK.`` plus the digest line. ``--test-ipc``
-   exists for the IPC bridge alone (status only: an agent with no TPM refuses
-   ``GET_TOKEN``); the Wine hook needs the signed-token path to produce
-   ``lota-token.bin``.
-
-   The full systemd daemon path (``systemctl start lota-agent.service`` against
-   the live ``lota-agent.service`` unit) is the eventual production target. It
-   also requires the signed BPF object, an ``/etc/lota/lota.conf`` with policy
-   entries, fs-verity on the agent binary, and the rest of the boot-time chain.
-   Not yet implemented.
-
-3. **Run** ``lota-steam-setup`` under the operator account (not root) to
-   confirm the runtime preconditions:
-
-   .. code:: sh
-
-      lota-steam-setup
-
-   The script verifies ``XDG_RUNTIME_DIR``, the ``lota`` group membership, the
-   hook library at ``/usr/lib64/``, and prints the exact Steam launch-options
-   string for the next step. ``lota-steam-setup --verify`` re-runs the checks
-   without modifying anything.
-
-Wire it into CS2
-----------------
-
-1. Open Steam, right-click ``Counter-Strike 2`` -> ``Properties``.
-
-2. Under **General -> Launch options**, paste:
-
-   ::
-
-      PRESSURE_VESSEL_FILESYSTEMS_RW=/run/user/1000/lota LOTA_HOOK_SOCKET=/run/user/1000/lota/lota.sock LOTA_HOOK_LOG_LEVEL=info lota-proton-hook %command%
-
-   Replace ``1000`` with the operator's UID (``id -u``). The three environment
-   variables carry the integration glue:
-
-   - ``PRESSURE_VESSEL_FILESYSTEMS_RW=<dir>`` tells Steam's pressure-vessel
-     container manager to bind-mount the named host directory into the
-     container with the same path. By default pressure-vessel replaces
-     ``/run/user/<uid>`` with a fresh tmpfs and selectively re-binds known
-     sockets (pipewire, pulseaudio, dbus); the LOTA socket is not in that
-     allowlist and is therefore invisible inside the container unless this
-     variable adds the parent directory.
-   - ``LOTA_HOOK_SOCKET=<path>`` points the hook at the user-scoped secondary
-     listener instead of the root-namespace ``/run/lota/lota.sock`` (which is
-     not visible in the container at all).
-   - ``LOTA_HOOK_LOG_LEVEL=info`` keeps the constructor / refresh events in
-     Steam's ``console-linux.txt``; raise to ``debug`` while bringing the
-     integration up, drop to ``warn`` once it is stable.
-
-3. Confirm Compatibility -> **Force the use of a specific Steam Play
-   compatibility tool** is set to Proton 9.0-4 or Proton Experimental.
-
-4. Close the dialog. The next CS2 launch is hooked.
-
-Why this is a launch option
----------------------------
-
-It is the one place in the player journey that asks somebody to type, so the
-reason is worth stating rather than apologising for.
-
-The bridge has to run on the **Linux** side of the process tree Steam starts.
-A Windows DLL inside the Wine prefix cannot open a host ``AF_UNIX`` socket, so
-the hook is a Linux ``.so`` preloaded into the process that goes on to run the
-game, and something has to put it there before Proton starts.
-
-Steam offers two documented ways to influence that process tree: the
-per-title launch options, and a compatibility tool in
-``compatibilitytools.d``. Three alternatives to the paste were examined and
-none of them is shipped:
-
-* **A compatibility tool.** Steam composes compat tools as layers, and a tool
-  states what it sits on with ``require_tool_appid`` -- Proton's own
-  ``toolmanifest.vdf`` names the Steam Linux Runtime that way. That names one
-  build, so a LOTA layer written like this would pin the player's Proton
-  version to whatever the package shipped against. A tool that instead located
-  and executed whichever Proton the player had selected would be
-  re-implementing Steam's compatibility manager against a private, unversioned
-  contract, and nothing in this tree could tell when a Steam update broke it.
-* **Writing the launch option into Steam's configuration.** ``LaunchOptions``
-  lives in ``userdata/<id>/config/localconfig.vdf``, which Steam owns and
-  rewrites when it exits. A third party editing it has to first be sure Steam
-  is not running and loses the edit whenever Steam decides to rewrite. A fix
-  that depends on somebody else's private file format is a fix that breaks
-  silently, on their release schedule.
-* **A machine-wide preload** (``/etc/ld.so.preload``, or the variable exported
-  from a login profile). This puts the bridge into every process on the
-  machine, including every process that never asked for it. It is wrong by
-  construction, not merely risky.
-
-What would remove the paste is Steam-side cooperation: a compat-tool layer
-that **composes with** the player's Proton choice instead of replacing it.
-Until that exists, this is one field, filled once per title, and
-``lota-steam-setup`` prints the exact string so it is a copy rather than a
-composition.
-
-A publisher who ships their own launcher needs none of this. That launcher
-starts the game itself, so it sets ``LD_PRELOAD`` and
-``PRESSURE_VESSEL_FILESYSTEMS_RW`` in the environment of the child it spawns,
-and the player sees nothing at all.
-
-For a one-off verification without persisting the launch option, the same
-wiring is reachable from the command line:
-
-.. code:: sh
-
-   LOTA_HOOK_LOG_LEVEL=info \
-   LOTA_HOOK_SOCKET=/run/user/"$(id -u)"/lota/lota.sock \
-   PRESSURE_VESSEL_FILESYSTEMS_RW=/run/user/"$(id -u)"/lota:/run/user/"$(id -u)"/lota-hook \
-   lota-proton-hook steam-runtime-launch-client -- steam://rungameid/730
-
-What the hook produces at runtime
----------------------------------
-
-Constructor-side (in the Wine/Proton process), the hook connects to the LOTA
-agent, asks for a freshly attested gaming token, and atomically writes three
-files under ``$XDG_RUNTIME_DIR/lota-hook/``. That directory is the player's
-own: ``$XDG_RUNTIME_DIR/lota`` belongs to the agent, which creates it
-``root:lota`` for the container socket, and the hook refuses to write a signed
-token into a directory somebody else owns.
-
-The files are:
-
-========================== ====== ================================
-File                       Format Owner
-========================== ====== ================================
-``lota-status``            text   hook state, last refresh, errors
-``lota-token.bin``         binary raw gaming SDK attestation token
-``lota-snapshot.bin``      binary combined flags + token blob
-``lota-boot-evidence.bin`` binary boot PCRs + PCR 7 events
-========================== ====== ================================
-
-A background refresh thread re-queries the agent every
-``LOTA_HOOK_REFRESH_SEC`` seconds (default 60) and rewrites the files
-atomically. The destructor leaves them alone, and does so deliberately: the
-Steam launch chain inherits ``LD_PRELOAD`` into every fork and exec, so each
-helper runs a destructor of its own against the same directory, and one
-exiting first would take the artefacts the running title had just written. A
-clean exit and a crash therefore both leave the files behind, and the next
-launch overwrites them on its first refresh.
-
-What removes the token, the snapshot and the boot evidence is losing the
-agent: ``publish_offline_status()`` rewrites ``lota-status`` with
-``LOTA_ATTESTED=0`` and unlinks the other three, because none can be trusted
-past the disconnect.
-
-Verify after launching CS2 (run from the operator account, not root, so
-``$XDG_RUNTIME_DIR`` resolves to the user's runtime dir):
-
-.. code:: sh
-
-   ls -l   "$XDG_RUNTIME_DIR/lota-hook/"
-   cat     "$XDG_RUNTIME_DIR/lota-hook/lota-status"
-
-A healthy run prints ``LOTA_ATTESTED=1``, ``LOTA_OFFLINE=0``, a non-zero
-``LOTA_VALID_UNTIL`` timestamp, and ``LOTA_PID`` matching the game process.
-``LOTA_PROTECTED=1`` appears once the hook first reaches the agent. An object
-the gates
-refuse is named in ``LOTA_REFUSED_OBJECT`` (with ``LOTA_REFUSED_AT``) and on
-the game's stderr.
-
-``lota-token.bin`` is the serialized token, up to ``LOTA_TOKEN_MAX_SIZE``
-bytes: ``LOTK`` magic, wire header, TPM Quote, AIK signature.
-
-``xxd | head`` is enough to confirm the file is not all-zeros:
-
-.. code:: sh
-
-   xxd "$XDG_RUNTIME_DIR/lota-hook/lota-token.bin" | head -3
-   # 00000000: 4c4f 544b ...    LOTK...
-
-``--test-ipc`` (the no-TPM IPC bridge) writes only the status file because
-GET_TOKEN refuses to issue unsigned tokens. The hook produces
-``lota-token.bin`` only on the ``--test-signed`` path (or the eventual full
-systemd daemon path).
-
-When the agent goes away the hook rewrites ``lota-status`` with
-``LOTA_OFFLINE=1`` and unlinks the token / snapshot artefacts. The consumer
-reads the marker and treats the session as OFFLINE rather than UNTRUSTED: those
-two states have distinct meanings ("hook lost the agent" vs "agent says no")
-and the marker is what lets a downstream verifier act on them separately.
-
-The hook attaches only to processes whose executable lives outside the FHS
-system paths (``/usr/``, ``/bin``, ``/sbin``, ``/lib``, ``/lib64``), which
-keeps it out of the launcher shell and the POSIX utilities Steam Runtime
-calls out to.
-
-Steam's client helpers live outside those paths too, so ``lota-proton-hook``
-pins the hook (``LOTA_HOOK_ACTIVATE_PATH``) to the directories Steam names
-for the launch: the title's install directory (``STEAM_COMPAT_INSTALL_PATH``)
-and its compatibility tools (``STEAM_COMPAT_TOOL_PATHS``: Proton, the
-container runtime). ``cs2`` and Proton run from them; ``reaper`` and the
-launch wrapper do not. A hooked process write-pins every library it maps,
-and ``reaper`` outlives the title, so hooking it would leave the C library
-unwritable after the game exits.
-
-Under Proton the pin is not enough: the title and every process the prefix
-starts (``services.exe``, ``explorer.exe``, device hosts, the tool's helpers)
-run the same loader, ``wine-preloader``, out of the pinned Proton directory.
-Each would protect itself, and a title that talks to them stops working. The
-wrapper therefore also writes the title's directory as Wine sees it into
-``LOTA_HOOK_ACTIVATE_PROGRAM``: from the library root down
-(``steamapps/common/<title>/``), since a Steam library is a drive of its own
-in the prefix, or the host path for a title outside any library. Wine's loader
-then activates only for a program (``argv[1]``) in that directory, on any
-drive and in any case; other processes are still decided by the pin.
-
-``LOTA_HOOK_ACTIVATE_PATH=<prefix-list>`` and
-``LOTA_HOOK_ACTIVATE_PROGRAM=<directory>`` set before the wrapper runs are
-kept. Without a pin, as outside Steam, the FHS rule applies, and
-``LOTA_HOOK_SKIP_PATH=<prefix-list>`` extends it for distros that keep
-utilities outside FHS, e.g. ``/nix/store/``.
-
-Which publisher the title attests for
--------------------------------------
-
-A token is signed with one publisher's attestation key. On a host with more
-than one enrollment, a connection that names no publisher gets the host-wide
-verdict but no token. ``LOTA_HOOK_PUBLISHER`` names it: the hex SHA-256 of
-the publisher's attestation-CA anchor SubjectPublicKeyInfo, as printed by
-``lota-agent --add-publisher``:
-
-::
-
-   LOTA_HOOK_PUBLISHER=5f2d18c4...7d4b2a18 lota-proton-hook %command%
-
-Without it the launch still attests and publishes ``lota-status``, but no
-``lota-token.bin``. The hook logs ``the agent issued no token: ...`` on the
-game's stderr once per reason. A value that is not 64 hex characters is
-reported and ignored; the launch goes on unnamed.
-
-A host with a single enrollment answers every connection with that profile,
-so fleets leave the variable unset.
-
-What registration costs the title
----------------------------------
-
-``lota-proton-hook`` starts the title through ``lota-protect``, so the title
-and every process it creates are protected from their first instruction. That
-scopes ``strict_mmap``, ``block_anon_exec`` and the ptrace gate to the whole
-tree. Under ``strict_mmap`` the title may map an executable file only if its
-fs-verity digest is allowed or its inode is in ``trusted_libs``, and a Proton
-tree's libraries are ordinary files: each one needs covering, ``ntdll.so``
-first.
-
-The hook also registers its own PID on the first connect, logging
-``registered pid=<pid> for runtime enforcement`` at ``info``.
-
-Hook environment overrides
---------------------------
-
-The hook honours a small set of environment variables, all documented in
-``include/lota_wine_hook.h``.
-
-+-----------------------------+-----------------------------------------------+
-| Variable                    | Effect                                        |
-+=============================+===============================================+
-| ``LOTA_HOOK_DISABLE=1``     | wrapper ``exec``\ s the game without          |
-|                             | ``LD_PRELOAD``                                |
-+-----------------------------+-----------------------------------------------+
-| ``LOTA_HOOK_LOG_LEVEL``     | ``debug`` / ``info`` / ``warn`` / ``error`` / |
-|                             | ``silent``                                    |
-+-----------------------------+-----------------------------------------------+
-| ``LOTA_HOOK_TOKEN_DIR``     | override the token sink directory             |
-+-----------------------------+-----------------------------------------------+
-| ``LOTA_HOOK_REFRESH_SEC``   | seconds between agent re-queries (default 60) |
-+-----------------------------+-----------------------------------------------+
-| ``LOTA_HOOK_SOCKET``        | override the agent socket path                |
-+-----------------------------+-----------------------------------------------+
-| ``LOTA_HOOK_ACTIVATE_PATH`` | positive ``/proc/self/exe`` prefix pin; the   |
-|                             | wrapper writes one from the launch when a     |
-|                             | player has not                                |
-+-----------------------------+-----------------------------------------------+
-| ``LOTA_HOOK_SKIP_PATH``     | extend the FHS system-path skip list          |
-+-----------------------------+-----------------------------------------------+
-| ``LOTA_HOOK_PUBLISHER``     | publisher to attest for: hex SHA-256 of its   |
-|                             | CA anchor SubjectPublicKeyInfo                |
-+-----------------------------+-----------------------------------------------+
-
-Set them on Steam's launch line, e.g.:
-
-::
-
-   LOTA_HOOK_LOG_LEVEL=debug LOTA_HOOK_SOCKET=/run/user/1000/lota/lota.sock \
-   PRESSURE_VESSEL_FILESYSTEMS_RW=/run/user/1000/lota:/run/user/1000/lota-hook \
-   lota-proton-hook %command%
-
-Logs are written to the game's stderr, which Steam captures under
-``~/.steam/steam/logs/console_log.txt`` and ``stderr.txt`` inside the Proton
-prefix.
-
-Fallback when attestation is unavailable
-----------------------------------------
-
-The hook is designed to never wedge the game. If the agent is not reachable,
-the hook logs the failure, leaves the token directory empty, and lets the game
-keep running. The ``lota-proton-hook`` wrapper has the same property at the
-launcher layer: if ``liblota_wine_hook.so`` is missing from every standard path
-or if ``LOTA_HOOK_DISABLE=1`` is exported, the wrapper writes a single warning
-to stderr and ``exec``\ s ``%command%`` unchanged so CS2 still launches.
-
-This matters for two operator scenarios:
-
-- **Fresh install before host bring-up.** The wrapper does not block launch
-  while the operator is still resolving the agent install. CS2 boots, the
-  launch-option entry stays valid, and the next launch after the agent comes up
-  picks up attestation automatically.
-- **Live tamper of the hook artefact.** Removing ``liblota_wine_hook.so``
-  between launches degrades to the unhooked path on the next launch; the
-  in-flight game keeps its process-loaded copy until exit. The agent's own
-  measurements (boot commitment, runtime BPF telemetry) continue to fire
-  whether or not the hook is loaded into the game.
-
-Verification scenarios
+The hook has to be a Linux library in the process tree Steam starts: a
+Windows DLL inside the Wine prefix cannot open the ``AF_UNIX`` socket of
+the agent. Something has to set ``LD_PRELOAD`` before Proton starts, and
+Steam offers two places for it: the launch options of a title and a
+compatibility tool in ``compatibilitytools.d``. Three other ways were
+examined and are not shipped:
+
+* A compatibility tool. A tool names the one tool it runs on with
+  ``require_tool_appid``, so a LOTA layer would fix the Proton version of
+  the player. A tool that ran whichever Proton the player chose would
+  depend on how Steam selects tools, which Steam does not document.
+* Writing the launch option into ``localconfig.vdf``. Steam owns the
+  file and rewrites it when it exits, so an edit made while Steam runs is
+  lost.
+* A preload for the whole machine, in ``/etc/ld.so.preload`` or a login
+  profile. It puts the hook into every process of the machine.
+
+A launcher shipped by a publisher starts the title itself, so it sets
+``LD_PRELOAD`` and ``PRESSURE_VESSEL_FILESYSTEMS_RW`` in the environment
+of the process it creates, and the player sets nothing.
+
+The cost of protection
 ----------------------
 
-Three operator-runnable scenarios under `scenarios/ <scenarios/README.rst>`__
-exercise the integration end-to- end and demonstrate the contracts the hook
-claims:
+``lota-protect`` puts every process of the title in the protected set.
+With the agent in ``enforce`` mode and ``strict_mmap`` on, a protected
+process may map executable only files that an ``allow_verity`` or a
+``trust_lib`` entry covers (see
+`configuration <../../Documentation/agent/configuration.rst>`_), and the
+title, Proton and the runtime map many. A refused load is logged by the
+hook, wrapped here:
 
-- ```scenarios/verify-attested.sh`` <scenarios/verify-attested.sh>`__ watches
-  ``$XDG_RUNTIME_DIR/lota-hook/lota-status`` and prints ``TRUSTED`` /
-  ``UNTRUSTED``
-  / ``OFFLINE`` transitions in real time.
-- ```scenarios/agent-down.rst`` <scenarios/agent-down.rst>`__ drives agent
-  disconnect and recovery against a live CS2 session, showing the hook degrades
-  gracefully without taking the game with it.
-- ```scenarios/lib-block.rst`` <scenarios/lib-block.rst>`__ loads an unauthorised
-  ``LD_PRELOAD`` library into the CS2 process tree and watches the BPF LSM gate
-  block the ``security_mmap_file`` call before the constructor runs.
+.. code-block:: text
 
-Caveats vs Valve Anti-Cheat (VAC)
----------------------------------
+   lota-hook: <file> did not load while this process is in LOTA's
+       protected set -- a protected process may map only objects the
+       agent allows, so cover this one (fs-verity digest or trusted_libs)
 
-VAC inspects loaded shared objects in the game process and flags unrecognised
-``LD_PRELOAD`` libraries on its own ban heuristics. The hook is built for an
-EAC / BattlEye style integration where the anti-cheat vendor explicitly allows
-the LOTA bridge; running it against a competitive VAC-enabled CS2 server is
-therefore at the operator's own risk. For the walk-through, exercise the hook
-against a local **Practice with Bots** match or a community server that does
-not enforce VAC. The hook itself never injects into the network protocol; it
-only writes attestation artefacts to disk that the host-side verifier consumes
-out-of-band.
+and recorded as ``LOTA_REFUSED_OBJECT`` in the status file. The names the
+configuration takes are ``allow_verity`` and ``trust_lib``. Without
+``strict_mmap`` the gate refuses no file mapping of a protected process;
+``block_anon_exec`` refuses anonymous executable memory.
+
+What the hook produces
+======================
+
+The hook writes into ``$XDG_RUNTIME_DIR/lota-hook/`` by default:
+
+``lota-status``
+  ``KEY=value`` lines: ``LOTA_ATTESTED``, ``LOTA_OFFLINE``, ``LOTA_FLAGS``,
+  ``LOTA_VALID_UNTIL``, ``LOTA_PROTECTED`` and others.
+
+``lota-token.bin``, ``lota-attestation.bin``, ``lota-boot-evidence.bin``
+  The token, the token with the flags it was read with, and the boot
+  evidence. They exist only while the host is attested.
+
+The keys, the formats and the order in which the hook picks the
+directory are in
+`Files <../../Documentation/userspace-api/wine-hook.rst>`__. The
+directory of the socket, ``$XDG_RUNTIME_DIR/lota/``, belongs to the agent
+and holds no file of the hook.
+
+A hooked launch logs, at ``info``:
+
+.. code-block:: text
+
+   lota-hook: initializing (token_dir=<dir>, refresh=60s)
+   lota-hook: hook active (pid=<pid>)
+   lota-hook: connected to agent
+   lota-hook: registered pid=<pid> for runtime enforcement
+
+``LOTA_HOOK_REFRESH_SEC`` sets the refresh, and ``LOTA_HOOK_LOG_LEVEL``
+takes ``debug``, ``info``, ``warn``, ``error`` or ``silent``. The lines go
+to the stderr of the title.
+
+When attestation is unavailable
+===============================
+
+The hook does not stop the title. When no agent answers, it logs the
+reason, writes ``LOTA_OFFLINE=1``, removes the binary files and keeps
+trying; a lost connection logs
+``lota-hook: connection lost (<reason>), reconnecting...``. A missing hook
+or ``LOTA_HOOK_DISABLE`` starts the title without the hook. Whether a title
+runs without a token is for its anti-cheat to decide.
 
 Troubleshooting
----------------
+===============
 
-The hook logs every state transition as a ``lota-hook: ...`` line in Steam's
-``~/.local/share/Steam/logs/console-linux.txt``. Tail that file during a launch
-attempt and match against this table:
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
 
-+----------------------------------------------+-----------------------------------------------------------------+
-| Symptom in console-linux.txt                 | Root cause                                                      |
-+==============================================+=================================================================+
-| ``lota-proton-hook: hook library not found`` | ``make install`` skipped, or installed to a non-standard        |
-|                                              | ``LIBDIR``. Set ``LOTA_HOOK_LIB_PATH`` to the actual ``.so``    |
-|                                              | path, or re-run                                                 |
-|                                              | ``sudo install -m 755 build/liblota_wine_hook.so /usr/lib64/``. |
-+----------------------------------------------+-----------------------------------------------------------------+
-| ``hook active (pid=...)`` repeated for       | The hook was loaded with ``LOTA_HOOK_ACTIVATE_PATH`` set to a   |
-| shells / utilities                           | prefix that matches a system path, or ``LOTA_HOOK_SKIP_PATH``   |
-|                                              | was set in a way that overrides the FHS default. Drop the env   |
-|                                              | override and let the built-in                                   |
-|                                              | ``/usr/, /bin/, /sbin/, /lib/, /lib64/`` skip list apply.       |
-+----------------------------------------------+-----------------------------------------------------------------+
-| ``agent not available, retrying in 60s``     | The socket the hook is pointed at is not reachable inside the   |
-| from the game PID (``/proc/<pid>/exe`` ends  | pressure-vessel container. The most common cause is that        |
-| in ``/cs2``)                                 | ``PRESSURE_VESSEL_FILESYSTEMS_RW`` is missing from the launch   |
-|                                              | options, so the container's tmpfs view of ``/run/user/<uid>``   |
-|                                              | does not include the LOTA socket directory.                     |
-+----------------------------------------------+-----------------------------------------------------------------+
-| ``connected to agent`` followed by           | Agent reachable but refusing token issuance. Under              |
-| ``get_token: The agent on this machine has`` | ``--test-ipc`` this is expected: there is no TPM context, and   |
-| ``no TPM and will not issue an unsigned``    | the agent will not sign a token it cannot back.                 |
-| ``token``                                    |                                                                 |
-|                                              | Switch to ``--test-signed`` to provision a real TPM Quote; the  |
-|                                              | in-tree fixture policy digest is applied automatically on the   |
-|                                              | test paths.                                                     |
-+----------------------------------------------+-----------------------------------------------------------------+
-| No files appear under                        | Check the hook's stderr: a candidate directory it cannot own is |
-| ``$XDG_RUNTIME_DIR/lota-hook``               | named, and the hook falls back to ``/tmp/lota-<uid>``, so look  |
-|                                              | there before assuming it did nothing. Never expect artifacts in |
-|                                              | ``$XDG_RUNTIME_DIR/lota``: that directory is the agent's and    |
-|                                              | holds only ``lota.sock``.                                       |
-+----------------------------------------------+-----------------------------------------------------------------+
-| Game window never appears, Steam shows       | Older hook revisions (before the ``should_activate()`` filter)  |
-| "Running"                                    | ran the constructor inside every launcher utility and stalled   |
-|                                              | on the 2 s connect timeout per hop. Reinstall                   |
-|                                              | ``liblota_wine_hook.so`` from this tree.                        |
-+----------------------------------------------+-----------------------------------------------------------------+
+   * - Message
+     - Cause
+   * - ``lota-proton-hook: hook library not found``
+     - ``LOTA_HOOK_LIB_PATH`` names no file, or, without it, neither
+       half is under ``/usr`` or ``/usr/local`` (``LOTA_HOOK_LIB_ROOTS``).
+   * - ``lota-hook: cannot reach the agent at <socket>: <error> --
+       <hint>``
+     - The hint names the cause: ``EACCES`` or ``EPERM``, the session is
+       usually missing the ``lota`` group; ``ENOENT``, the agent is not
+       running or has no listener for this session; ``ECONNREFUSED``, the
+       agent is stopped or restarting; ``ETIMEDOUT``, the agent did not
+       answer before the connect timeout.
+   * - ``lota-hook: the agent issued no token: <error> -- <hint>``
+     - The agent answered and refused. An unknown profile needs
+       ``LOTA_HOOK_PUBLISHER``; the others are consent, no TPM, a locked
+       TPM and the rate limit.
+   * - ``lota-hook: the agent will not attest for publisher ...``
+     - The publisher of ``LOTA_HOOK_PUBLISHER`` is not one the agent
+       attests for.
+   * - ``lota-hook: <dir> is inside this container, so the host cannot
+       read the status or the token written there; launch the title
+       through lota-proton-hook, which shares it``
+     - The hook was preloaded without the wrapper, so the token directory
+       is not shared with the host.
+   * - ``... did not load while this process is in LOTA's protected
+       set ...``
+     - See `The cost of protection`_.
 
-For deeper diagnosis, raise the hook log level and tail the Steam console log:
+The messages are wrapped here. ``lota-steam-setup --verify`` looks for
+the hook only under ``/usr`` and ``/usr/local``, whatever
+``LOTA_HOOK_LIB_PATH`` and ``LOTA_HOOK_LIB_ROOTS`` say, and checks that
+the socket exists and the player may read and write it: a socket no
+agent listens on passes. An agent that refuses the connection or the
+publisher leaves ``LOTA_ATTESTED=0`` with ``LOTA_OFFLINE=0`` in the
+status file. An agent that refuses a token leaves the flags of its status
+there, ``LOTA_ATTESTED=1`` on an attested host, and the hook removes the
+token files: the refusal shows as a missing ``lota-token.bin`` and in the
+log of the hook.
 
-.. code:: sh
+Scenarios
+=========
 
-   # in Steam launch options, swap LOG_LEVEL=info -> LOG_LEVEL=debug
-   tail -F ~/.local/share/Steam/logs/console-linux.txt | grep -aE "lota-hook|lota-proton-hook"
+`scenarios/ <scenarios/README.rst>`_ holds three checks against a running
+CS2:
 
-Every hook line is tagged ``lota-hook:`` so the relevant entries are trivial to
-grep out of the surrounding Proton noise.
+* ``verify-attested.sh`` follows ``lota-status`` and prints each change
+  of state.
+* `agent-down <scenarios/agent-down.rst>`_ stops ``lota-agent
+  --test-signed`` under a running title and brings it back.
+* `lib-block <scenarios/lib-block.rst>`_ preloads a library the agent does
+  not allow into the title and shows the refusal.
 
-To check the in-container view of the socket directory (helps diagnose
-``PRESSURE_VESSEL_FILESYSTEMS_RW`` issues without rebooting the game):
+Other anti-cheat
+================
 
-.. code:: sh
-
-   cs2_pid=$(pgrep -f "linuxsteamrt64/cs2" | head -n1)
-   ls -l "/proc/$cs2_pid/root/run/user/$(id -u)/lota/"
-
-A healthy container view lists ``lota.sock``; a tmpfs-only view (empty
-directory or only the placeholder files the hook itself created) means the
-bind-mount did not happen.
+The hook is a library preloaded into the process of the title, and an
+anti-cheat that does not expect it may treat it as an injected library.
+VAC is such an anti-cheat, so the walk-through is meant for a match
+against bots or a server that does not enforce VAC. The hook sends
+nothing to the game server: its output stays in the files above.

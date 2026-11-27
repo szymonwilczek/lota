@@ -1,190 +1,116 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-Runtime re-measurement demo
-===========================
+=================
+runtime_remeasure
+=================
 
-   **Trust model note.** The measurement this demo computes runs **inside the
-   game process** and is therefore forgeable by an attacker with code in that
-   process. It is now **advisory only**: the heartbeat still carries it for
-   tamper-evidence, but it no longer gates trust. The **authoritative** runtime
-   measurement is taken by the agent from the **kernel side** and bound into
-   the TPM-signed token; see *Kernel-side measurement (authoritative)* below.
-   This demo remains useful for understanding what a per-object image
-   measurement is and why an in-process one is insufficient.
+``runtime_remeasure`` computes the runtime measure of the anti-cheat
+heartbeat for its own process, with no agent, verifier or TPM. It shows
+that the measure of the mapped image equals the one a backend computes
+from the files, that a one-byte change to code changes it, and that it
+stays the same while the process does not change.
 
-``runtime_remeasure`` is a TPM-free reference for the runtime measurement that
-the LOTA anti-cheat heartbeat binds into every beat. The session-start
-game-binding hash only pins the main executable **on disk**; nothing in it
-reflects the code pages that are actually mapped and running, and it says
-nothing about the shared libraries the process loads. This closes that gap by
-re-measuring the live image - the main executable plus every loaded shared
-object - and binding the digest into the TPM-signed heartbeat nonce, so a
-verifier can tell when the running code of any module no longer matches the
-registered binaries.
+The runtime measure, its layout and the functions that compute it are
+described in
+`the anti-cheat SDK <../../Documentation/userspace-api/anticheat.rst>`_.
+It is computed inside the measured process, which controls the result;
+what the agent measures of a protected process from outside it is in
+`runtime measurement <../../Documentation/agent/runtime-measurement.rst>`_.
 
-The canonical digest (see `include/lota_anticheat.h <../../include/lota_anticheat.h>`_) measures every
-file-backed object, excluding the kernel vDSO. Each object yields a
-content-only digest over its executable segments:
+Building
+========
 
-::
+``make examples`` builds ``build/examples/runtime_remeasure`` against
+``lota-anticheat`` from the staged SDK (see `Building <../README.rst>`__).
 
-   object_digest =
-     SHA-256("lota-ac-runtime-object:v1\0" || seg_count_LE32 ||
-             for each executable (PF_X) PT_LOAD segment, ascending p_vaddr:
-                 p_vaddr_LE64 || p_offset_LE64 || p_filesz_LE64 ||
-                 segment_bytes)
+Running
+=======
 
-and the combined image digest folds the objects, keyed by soname (file
-basename) and sorted, so neither load order nor library search path matters:
+.. code-block:: console
 
-::
+   $ build/examples/runtime_remeasure --list-objects > manifest.txt
+   $ build/examples/runtime_remeasure --manifest manifest.txt
+   live (mapped image):   <64 hex digits>
+   set (manifest files):  <64 hex digits>
+   RESULT: MATCH - live image matches the manifest
 
-   SHA-256("lota-ac-runtime-measure:v1\0" || object_count_LE32 ||
-           for each object: soname_len_LE32 || soname_bytes || object_digest)
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
 
-For position-independent x86-64 code with full RELRO the executable segments
-carry no load-time relocations (the GOT/PLT data, not code, is what the loader
-mutates), so each live object mapping is byte-identical to its on-disk segment
-content. This demo needs no agent, no verifier and no TPM, so it runs
-unmodified inside a plain VM.
+   * - Option
+     - Mode
+   * - none
+     - Compare the measure of the mapped image with the measure computed
+       from the files of the objects ``lota_ac_list_runtime_objects()``
+       lists.
+   * - ``--list-objects``
+     - Print those files, one path per line.
+   * - ``--manifest FILE``
+     - Compare the measure of the mapped image with the measure computed
+       from the files ``FILE`` lists.
+   * - ``--patch-demo``
+     - Measure a copy of an executable, change one byte of its code and
+       measure it again.
+   * - ``--exe PATH``
+     - The executable ``--patch-demo`` copies, default
+       ``/proc/self/exe``.
+   * - ``--watch SEC``
+     - Measure the mapped image, then again every ``SEC`` seconds.
+   * - ``--count N``
+     - Number of ``--watch`` measurements after the first, default 5.
+   * - ``-h``, ``--help``
+     - Print the usage to stderr and exit 0.
 
-Build
------
+Given several modes, the first of ``--list-objects``, ``--manifest``,
+``--patch-demo`` and ``--watch`` in that order runs.
 
-.. code:: sh
+The modes
+=========
 
-   make BUILD_DIR=/var/tmp/lota-build all
-   make BUILD_DIR=/var/tmp/lota-build examples
+The default mode prints the number of objects and both digests, then
+``RESULT: MATCH - live image matches its on-disk objects`` or
+``RESULT: MISMATCH - live image differs from on-disk objects``. The
+objects are the main executable and each shared library the process has
+mapped; the vDSO is left out.
 
-The binary lands at ``/var/tmp/lota-build/examples/runtime_remeasure``.
+``--manifest`` reads one path per line, skipping blank lines and lines
+starting with ``#``, and trimming spaces and tabs around each path. It
+refuses an empty manifest, more than 512 paths and a line of 4095
+characters or more. The output of ``--list-objects``, or of
+``demo_anticheat --print-runtime-objects`` for that program, is such a
+manifest, and ``demo_server -anticheat-runtime-manifest`` takes the same
+format (see `demo_server <../demo_server/README.rst>`_).
 
-Modes
------
+``--patch-demo`` copies the executable to ``/tmp/lota_remeasure_XXXXXX``,
+measures the copy, inverts the last byte of its first executable segment
+and measures it again. It prints both digests and
+``RESULT: DETECTED - code patch flipped the runtime digest``, or
+``RESULT: UNDETECTED - patch did not change the digest``, and removes
+the copy.
 
-+---------------------------------------+--------------------------------------+
-| Invocation                            | What it shows                        |
-+=======================================+======================================+
-| ``runtime_remeasure``                 | the live mapped image (all loaded    |
-|                                       | objects) equals the set measure of   |
-|                                       | its on-disk files                    |
-+---------------------------------------+--------------------------------------+
-| ``runtime_remeasure --list-objects``  | the trusted runtime manifest: one    |
-|                                       | object path per line                 |
-+---------------------------------------+--------------------------------------+
-| ``runtime_remeasure --manifest FILE`` | reproduce the set measure from a     |
-|                                       | manifest and compare to the live     |
-|                                       | image (verifier side)                |
-+---------------------------------------+--------------------------------------+
-| ``runtime_remeasure --patch-demo``    | a 1-byte code patch flips an object  |
-|                                       | digest (the closed TOCTOU)           |
-+---------------------------------------+--------------------------------------+
-| ``runtime_remeasure --watch SEC``     | repeated re-measurements of a steady |
-|                                       | process stay stable                  |
-+---------------------------------------+--------------------------------------+
-| ``runtime_remeasure --count N``       | number of ``--watch`` ticks (default |
-|                                       | 5)                                   |
-+---------------------------------------+--------------------------------------+
-| ``runtime_remeasure --exe PATH``      | ELF copied for ``--patch-demo``      |
-|                                       | (default ``/proc/self/exe``)         |
-+---------------------------------------+--------------------------------------+
+``--watch`` prints the first digest as ``baseline:`` and then
+``tick <i>: stable`` for each later measurement that equals it, ending
+with ``RESULT: STABLE - <n> re-measurements matched the baseline``. The
+first measurement that differs prints ``tick <i>: CHANGED - live code
+pages drifted`` and its digest, and ends the run.
 
-The default and ``--manifest`` modes print the digests they computed and a
-final ``RESULT:`` line, and exit non-zero on a mismatch (or on drift during
-``--watch``), so they are safe to wire into a script.
+Exit codes
+----------
 
-A quick round-trip - capture the manifest, then verify against it:
+.. list-table::
+   :header-rows: 1
+   :widths: 10 90
 
-.. code:: sh
-
-   runtime_remeasure --list-objects > manifest.txt
-   runtime_remeasure --manifest manifest.txt   # RESULT: MATCH
-
-Relationship to the heartbeat
------------------------------
-
-``runtime_remeasure`` (no flags) is the producer side of runtime re-measurement
-in isolation: ``lota_ac_compute_runtime_measure()`` is exactly what
-``lota_ac_heartbeat()`` calls every beat. ``--manifest`` shows the verifier
-side, ``lota_ac_compute_expected_runtime_measure_set()``, which the demo server
-runs over the trusted runtime manifest (captured with
-``demo_anticheat --print-runtime-objects``) to obtain the value an honest
-producer must report.
-
-Kernel-side measurement (authoritative)
----------------------------------------
-
-The in-process measurement above can be forged: a process can report any digest
-about itself. The authoritative measurement is therefore taken by the
-**agent**, on the far side of the IPC boundary, and bound under the TPM quote
-so the measured process cannot influence it:
-
-1. When a protected process requests a token, the agent enumerates that
-   process's file-backed executable mappings from ``/proc/<pid>/maps``
-   (kernel-maintained, so the process cannot forge the list) and opens the
-   exact backing inode of each through ``/proc/<pid>/map_files/<range>`` (a
-   kernel magic symlink, so no path swap can redirect it).
-2. For each backing object the agent reads the kernel-computed **fs-verity**
-   digest (``FS_IOC_MEASURE_VERITY``). No process memory is hashed; under W^X a
-   file-backed executable mapping equals its on-disk file, which the kernel has
-   already measured.
-3. The per-object digests are folded into a per-process registry digest, and the
-   per-PID registry digests are folded into the token's ``runtime_protect_digest``,
-   which is bound into the TPM quote. A verifier recomputes that
-   digest from the PID list and the per-PID registry digests carried in the token
-   and checks it against the quote-bound value.
-
-If any protected process's objects cannot be measured (for example they are not
-fs-verity protected) the token **fails closed** instead of being issued without
-a measurement.
-
-Trust argument across an untrusted root
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Measured boot -> ``lockdown=integrity`` -> ``module.sig_enforce`` -> the signed
-BPF LSM loaded -> the BPF LSM constrains what a protected process may map ->
-the agent's kernel-side measurement bound under the AIK quote. LOTA already
-gates every one of those rungs, so root cannot silently swap the measuring code
-without breaking a signature, lockdown, or the measured-boot chain.
-
-Per-module known-good set
--------------------------
-
-Robustness across lazy ``dlopen`` and cross-distribution library drift comes
-from a **per-module** known-good set, not a single combined digest: the BPF
-LSM's fs-verity allow-list (``allow_verity``, loaded from the game's module
-manifest via ``--allow-verity``) admits an executable mapping only if its
-backing file's fs-verity digest is known-good. Any allowed module may load in
-any order; an unknown module is refused at ``mmap`` time. The combined image
-digest is bound for attestation, but per-module trust is enforced in the
-kernel.
-
-Event-driven re-measurement
----------------------------
-
-Measurement is not limited to periodic beats. The BPF LSM flags executable
-``mmap``/``mprotect`` events from a protected process, and the agent
-re-measures that process's image on such an event, narrowing the window in
-which image drift between heartbeats goes unobserved. A burst of events from
-one process (lazy ``dlopen`` at startup emits one per object) is coalesced
-behind a short per-process cooldown, so a re-measure stays O(objects) rather
-than O(objects squared). In enforce mode an untrusted mapping is already
-blocked at the source, so this is the monitor-mode and forensic complement to
-that enforcement.
-
-Scope and honest limits
------------------------
-
-- **JIT / self-modifying code is out of scope.** Engines that generate
-  executable code at runtime (.NET, V8, some anti-cheats) produce anonymous or
-  ``RWX`` executable pages that have no file-backed, fs-verity-measurable
-  origin. The kernel-side measurement deliberately covers only file-backed
-  executable mappings; anonymous executable mappings are reported (and, in
-  enforce mode with the anonymous-exec gate, blocked) but not measured. A game
-  that relies on JIT must either run it under a measured AOT image or accept
-  that its JIT regions are outside the measured set.
-- **Completeness is bounded by W^X.** The equivalence "file-backed executable
-  mapping == on-disk file" holds only while write and execute are kept
-  separate. A determined ``RWX``/self-modifying mapping is not fully covered,
-  which is why this measurement is complementary to W^X enforcement and the
-  anonymous-exec gate rather than a replacement.
+   * - Code
+     - Meaning
+   * - 0
+     - ``MATCH``, ``DETECTED`` or ``STABLE``; ``--list-objects`` done;
+       ``--help``.
+   * - 1
+     - ``MISMATCH``, ``UNDETECTED`` or ``CHANGED``, or a step failed with
+       a line on stderr.
+   * - 2
+     - An unknown option, an option without its value, a negative
+       ``--watch`` or a ``--count`` below 1. The usage follows on stderr.

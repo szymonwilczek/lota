@@ -1,252 +1,256 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
+===========
 demo_server
 ===========
 
-Reference game server for the LOTA end-to-end demo. The process is a single Go
-binary that:
+``demo_server`` is the game server of the demo. It issues session ids and
+nonces to game clients, verifies the heartbeats of
+`demo_anticheat <../demo_anticheat/README.rst>`_ against the AIK of the
+host and keeps the latest verdict of each game for
+`trust_pong <../demo_game/README.rst>`_ to poll.
+`setup.sh <../demo/README.rst>`_ starts it with the AIK it exports from
+the software TPM.
 
-1. mints attestation nonces and per-session ids,
-2. decodes anti-cheat heartbeats off the wire (``LACH`` framing),
-3. verifies the embedded LOTA token against a configured AIK public key, and
-4. surfaces the most recent verdict so the SDL2 demo (``trust_pong``) can
-   mirror it without owning a heartbeat channel of its own.
+Building
+========
 
-Build with ``make examples`` from the repository root; the binary lands at
-``build/examples/demo_server``.
+``make examples`` builds ``build/examples/demo_server`` with ``go build``
+when ``go`` is installed, and prints
+``SKIP: demo_server (go not installed or stub absent)`` otherwise. The
+tests run from the module directory:
 
-Flags
------
+.. code-block:: console
 
-+----------------------------------+------------------------------------+-------------------------+
-| Flag                             | Default                            | Meaning                 |
-+==================================+====================================+=========================+
-| ``--listen``                     | ``127.0.0.1:7443``                 | host:port to listen on  |
-|                                  |                                    | (loopback only by       |
-|                                  |                                    | design)                 |
-+----------------------------------+------------------------------------+-------------------------+
-| ``--aik-pub``                    | (none)                             | path to the AIK public  |
-|                                  |                                    | key (DER or PEM);       |
-|                                  |                                    | required outside tests  |
-+----------------------------------+------------------------------------+-------------------------+
-| ``--expected-games``             | ``trust-pong=lota-demo-CS2-clone`` | comma-separated         |
-|                                  |                                    | ``game_id=license``     |
-|                                  |                                    | entries the server      |
-|                                  |                                    | accepts                 |
-+----------------------------------+------------------------------------+-------------------------+
-| ``--max-age``                    | ``300``                            | maximum heartbeat age   |
-|                                  |                                    | in seconds before       |
-|                                  |                                    | UNTRUSTED               |
-+----------------------------------+------------------------------------+-------------------------+
-| ``--anticheat-binary``           | (none)                             | producer binary; its    |
-|                                  |                                    | SHA-256 feeds the       |
-|                                  |                                    | expected game-binding   |
-|                                  |                                    | hash                    |
-+----------------------------------+------------------------------------+-------------------------+
-| ``--anticheat-runtime-manifest`` | (none)                             | trusted runtime         |
-|                                  |                                    | manifest (one ELF path  |
-|                                  |                                    | per line) for the       |
-|                                  |                                    | runtime measurement     |
-+----------------------------------+------------------------------------+-------------------------+
-| ``--require-full-image``         | off                                | refuse a token without  |
-|                                  |                                    | the full-coverage flag  |
-|                                  |                                    | (see below)             |
-+----------------------------------+------------------------------------+-------------------------+
-| ``--require-kernel-appraisal``   | off                                | refuse a token without  |
-|                                  |                                    | the kernel-appraisal    |
-|                                  |                                    | flag (see below)        |
-+----------------------------------+------------------------------------+-------------------------+
-| ``--tls-cert`` / ``--tls-key``   | (none)                             | PEM server keypair;     |
-|                                  |                                    | enables HTTPS           |
-+----------------------------------+------------------------------------+-------------------------+
-| ``--client-ca``                  | (none)                             | PEM provisioning CA;    |
-|                                  |                                    | require and verify an   |
-|                                  |                                    | mTLS producer           |
-|                                  |                                    | certificate             |
-+----------------------------------+------------------------------------+-------------------------+
+   $ cd examples/demo_server && go test ./...
 
-Runtime measurement
-~~~~~~~~~~~~~~~~~~~
+The tests sign their tokens with a key of their own, built with
+``SerializeToken()``, ``ComputeRuntimeProtectDigest()`` and
+``ComputeTokenQuoteNonce()`` of the Go SDK; a relying party's tests can
+do the same (see `Building tokens
+<../../Documentation/userspace-api/go-sdk.rst>`_).
 
-The heartbeat carries a runtime measurement of the producer's live image
+Running
+=======
 
-- the main binary plus every shared library it loads. The server reproduces the
-  expected value from a **trusted runtime manifest**: the set of ELF files that
-  make up the producer's runtime. Capture it from the producer once and pass it
-  in:
+.. code-block:: console
 
-.. code:: sh
+   $ demo_anticheat --print-runtime-objects > runtime-manifest.txt
+   $ demo_server -aik-pub aik.pem \
+         -anticheat-binary build/examples/demo_anticheat \
+         -anticheat-runtime-manifest runtime-manifest.txt
 
-   demo_anticheat --print-runtime-objects > runtime-manifest.txt
-   demo_server --aik-pub aik.der \
-               --anticheat-binary ./demo_anticheat \
-               --anticheat-runtime-manifest runtime-manifest.txt
+Options take one dash or two:
 
-A heartbeat whose live measurement does not match the manifest is answered
-``UNTRUSTED`` with reason ``runtime measurement mismatch``. When the manifest
-is omitted, the runtime measurement falls back to ``--anticheat-binary`` alone,
-which only matches a statically linked producer.
+.. list-table::
+   :header-rows: 1
+   :widths: 32 68
 
-Minting tokens in your own tests
---------------------------------
+   * - Option
+     - Meaning
+   * - ``-listen HOST:PORT``
+     - Listen address, default ``127.0.0.1:7443``.
+   * - ``-aik-pub PATH``
+     - AIK public key, PKIX in DER or PEM, RSA of at least 2048 bits.
+       Without it every heartbeat that reaches the signature check is
+       answered ``REJECT``.
+   * - ``-expected-games LIST``
+     - Comma-separated ``game_id=license`` entries, default
+       ``trust-pong=lota-demo-CS2-clone``.
+   * - ``-anticheat-binary PATH``
+     - The producer binary, whose SHA-256 goes into the game binding
+       hash.
+   * - ``-anticheat-runtime-manifest PATH``
+     - One ELF path per line, blank lines and ``#`` comments skipped,
+       for the expected runtime measurement.
+   * - ``-max-age SEC``
+     - Oldest heartbeat timestamp accepted, in seconds, default 300. 0
+       selects 300; above 86400 the server does not start.
+   * - ``-require-full-image``
+     - Answer ``UNTRUSTED`` to a token without
+       ``LOTA_FLAG_IMAGE_FULLY_MEASURED``.
+   * - ``-require-kernel-appraisal``
+     - Answer ``UNTRUSTED`` to a token without
+       ``LOTA_FLAG_KERNEL_APPRAISAL``.
+   * - ``-tls-cert PATH``, ``-tls-key PATH``
+     - PEM server certificate and key, together; the server then serves
+       HTTPS with TLS 1.2 or later.
+   * - ``-client-ca PATH``
+     - PEM CA; every connection must present a client certificate it
+       signed. Needs ``-tls-cert`` and ``-tls-key``.
 
-A relying party's test suite has to build tokens the way an agent would, and
-the fields a token binds under its quote are computed, not guessed. The server
-SDK exports each of those folds, so nothing downstream re-derives one by hand:
+The two ``-require`` options are a policy of the server over flags the
+agent signs into the token; the flags are described in
+`the gaming SDK <../../Documentation/userspace-api/gaming.rst>`_. On a
+host where an object of a protected process could not be measured, or
+nothing is protected, ``LOTA_FLAG_IMAGE_FULLY_MEASURED`` is clear and
+``-require-full-image`` refuses every heartbeat. On a host whose IMA does
+not appraise executables in a blocking mode,
+``LOTA_FLAG_KERNEL_APPRAISAL`` is clear and ``-require-kernel-appraisal``
+refuses every heartbeat.
 
-* ``server.ComputeRuntimeProtectDigest(pids, registryDigests)`` for a token built
-  with ``SerializeToken``,
-* ``server.ComputeTokenQuoteNonce(...)`` for the value the quote's extra data
-  has to carry.
+At start the server logs
+``demo_server listening on <addr> (games=<ids>, transport=<t>)`` to
+stderr, with ``http``, ``https`` or ``https+mtls`` as the transport. It
+exits 2 when an option or a file it names cannot be used, 1 when the
+listener fails, and 0 after SIGINT or SIGTERM, giving open requests 3
+seconds to finish.
 
-Each is domain-separated and has to agree byte for byte with the agent's C
-implementation; both sides carry the same known-answer vectors
-(``TestRuntimeProtectDigest_KAT`` here, ``test_runtime_protect_digest`` there).
-A second copy of one of these folds in a relying party's own tree is the drift
-those domain strings exist to prevent, which is why they are exported rather
-than reimplemented.
+Game binding
+------------
 
-Transport security
-~~~~~~~~~~~~~~~~~~
+Each entry of ``-expected-games`` is bound to the hash the producer puts
+into every heartbeat header::
 
-By default the demo serves plain HTTP on loopback so the operator can curl
-every endpoint without bringing in a CA. Pass ``--tls-cert``/``--tls-key`` to
-serve HTTPS, and add ``--client-ca`` to require the anti-cheat producer to
-present a provisioned certificate (mutual TLS): a heartbeat from anything but a
-provisioned producer is then refused at the TLS layer before any token is
-parsed. ``examples/mtls/gen-certs.sh`` provisions the keypairs and
-```examples/mtls/README.rst`` <../mtls/README.rst>`__ documents the flow.
+   SHA-256("lota-ac-game-binding:v1" || 0x00 || game_id || SHA-256(binary))
 
-.. code:: sh
+The binary is the one ``-anticheat-binary`` names. Without that option
+the server hashes 32 zero bytes in its place, no producer matches, and
+every heartbeat is answered ``UNTRUSTED`` with ``unknown game_id_hash``.
 
-   demo_server --aik-pub aik.der \
-               --tls-cert mtls/server.crt --tls-key mtls/server.key \
-               --client-ca mtls/ca.crt
-
-The production guidance is otherwise "put the verifier behind your existing
-game auth gateway"; that gateway already owns TLS termination.
+The server also computes the runtime measurement a matching producer
+reports, over the objects of ``-anticheat-runtime-manifest`` or over the
+producer binary alone. The producer computes the measurement in its own
+process, so a heartbeat whose measurement differs is logged with
+``advisory="producer runtime measurement differs from registered
+baseline"`` and verified as any other. The measurement the agent signs
+is described in
+`runtime measurement <../../Documentation/agent/runtime-measurement.rst>`_.
 
 Endpoints
----------
+=========
 
-``POST /nonce``
-~~~~~~~~~~~~~~~
+The server answers JSON, except for a wrong method (405) and the errors
+of ``/nonce`` and ``/state``, which are plain text.
 
-Body: ``{"game_id": "trust-pong"}``.
+POST /nonce
+-----------
 
-Mints a per-session UUID and 32 random nonce bytes. The client uses the nonce
-as input to ``lota_get_token()`` so the server can bind a given attestation to
-a specific challenge.
+.. code-block:: console
 
-.. code:: sh
+   $ curl -s http://127.0.0.1:7443/nonce -d '{"game_id":"trust-pong"}'
+   {"session_id":"<uuid>","nonce":"<base64>","license":"lota-demo-CS2-clone"}
 
-   curl -s http://127.0.0.1:7443/nonce \
-        -d '{"game_id":"trust-pong"}' | jq
+The body may be empty; an empty ``game_id`` selects ``trust-pong``. The
+answer carries a new UUID, 32 random bytes in base64 and the licence of
+the game. An unknown game is answered 403 ``unknown game_id`` and a body
+that is not JSON 400 ``bad json``. The server keeps neither value: a
+heartbeat is checked against a nonce computed from its own header.
 
-Response:
+POST /heartbeat
+---------------
 
-.. code:: json
+The body is one LACH packet as ``lota_ac_heartbeat()`` writes it: a
+110-byte header and a token. The answer is ``{"state": ...}`` with a
+``license`` on ``TRUSTED`` and a ``reason`` otherwise. The checks run in
+this order and the first that fails gives the answer:
 
+.. list-table::
+   :header-rows: 1
+   :widths: 40 20 40
+
+   * - Check
+     - Answer
+     - ``reason``
+   * - The body can be read.
+     - 400 ``REJECT``
+     - ``read body``
+   * - The header parses: length, magic ``LACH``, version 1,
+       ``total_size``, ``domain_version`` 1, ``token_size``.
+     - 400 ``REJECT``
+     - ``reject: `` and the field, e.g.
+       ``reject: bad magic 0x00000000``
+   * - The game binding hash is one of the configured games.
+     - 200 ``UNTRUSTED``
+     - ``unknown game_id_hash``
+   * - The timestamp is at most 60 seconds ahead and at most
+       ``-max-age`` behind; within a session the sequence grows and the
+       timestamp does not go back.
+     - 200 ``UNTRUSTED``
+     - ``timestamp in the future``, ``heartbeat too old``,
+       ``sequence not monotonic``, ``timestamp regressed``
+   * - An AIK is configured.
+     - 503 ``REJECT``
+     - ``no AIK configured``
+   * - The token verifies against the AIK with the nonce computed from
+       the header.
+     - 200 ``UNTRUSTED``
+     - the error of ``VerifyToken()``
+   * - The flags of the header equal those of the token.
+     - 200 ``UNTRUSTED``
+     - ``header flags do not match signed token``
+   * - The token carries the flags the ``-require`` options demand.
+     - 200 ``UNTRUSTED``
+     - ``token is missing required attestation flags 0x<mask>``
+   * - All of the above.
+     - 200 ``TRUSTED``
+     - none; ``license`` is the licence of the game
+
+The nonce is SHA-256 over ``lota-ac-heartbeat:v1`` and a zero byte, the
+session id, provider, sequence, timestamp, game binding hash,
+``domain_version`` and runtime measurement of the header, as
+``lota_ac_heartbeat()`` computes it. ``VerifyToken()`` and its errors are
+described in `the Go SDK <../../Documentation/userspace-api/go-sdk.rst>`_.
+
+Every answer from the game binding check onwards is recorded as the
+verdict of the session and under the game binding hash of the packet.
+``/state`` shows the last verdict recorded under the hash of the game it
+is asked for, so the answer to a hash of no configured game shows in the
+log only. A verdict from the AIK check onwards also records the sequence
+and timestamp of the session, so a replayed packet fails the freshness
+check. A ``REJECT`` for a body or header that does not parse is not
+recorded.
+
+GET /state
+----------
+
+.. code-block:: console
+
+   $ curl -s 'http://127.0.0.1:7443/state?game_id=trust-pong' | \
+         python3 -m json.tool
    {
-     "session_id": "0e7e9f5b-3e3d-4f57-9d80-58dcb6c2d8d4",
-     "nonce": "<base64 of 32 bytes>",
-     "license": "lota-demo-CS2-clone"
+       "game_id": "trust-pong",
+       "state": "UNTRUSTED",
+       "license": "lota-demo-CS2-clone",
+       "reason": "token is missing required attestation flags 0x00000200",
+       "updated_at_unix": 1750000000,
+       "verdict_seq": 7
    }
 
-``POST /heartbeat``
-~~~~~~~~~~~~~~~~~~~
+The answer is the latest verdict recorded for the game, from any session:
+its ``state``, ``license`` and ``reason`` when set, the time in
+``updated_at_unix`` and ``verdict_seq``, which counts the verdicts of the
+game from 1. Before the first verdict ``state`` is ``PENDING`` and both
+numbers are 0. Without ``game_id`` the server answers for
+``trust-pong``; an unknown game is answered 404 ``unknown game_id``.
 
-Body: raw LACH bytes (binary, ``Content-Type: application/octet-stream``). The
-handler:
+All state is held in memory: a restarted server answers ``PENDING`` and
+counts ``verdict_seq`` from 1 again.
 
-1. parses the 110-byte header documented in ``include/lota_anticheat.h``,
-2. rejects on bad magic / version / size / unsupported ``domain_version``
-   (verdict ``REJECT``, HTTP 400),
-3. fails closed on an unknown ``game_id_hash``, a runtime-measurement mismatch
-   against the registered binary, a replayed / stale sequence, a future
-   timestamp, or a signature/nonce mismatch (verdict ``UNTRUSTED``, HTTP 200),
-4. returns ``{"state":"TRUSTED","license":"lota-demo-CS2-clone"}`` only when
-   the embedded LOTA token verifies against the configured AIK and every
-   freshness check passes.
+Transport
+=========
 
-.. code:: sh
+Without ``-tls-cert`` the server speaks plain HTTP. With ``-tls-cert``
+and ``-tls-key`` it serves HTTPS on all three endpoints, and with
+``-client-ca`` it refuses any connection without a client certificate
+from that CA before reading a request. ``trust_pong`` has no client
+certificate, so it cannot reach a server started with ``-client-ca``.
+`mtls/ <../mtls/README.rst>`_ creates the certificates and runs the
+producer over mutual TLS.
 
-   curl -s --data-binary @heartbeat.bin \
-        -H 'Content-Type: application/octet-stream' \
-        http://127.0.0.1:7443/heartbeat
+Log
+===
 
-``GET /state?game_id=trust-pong``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Each nonce and each heartbeat verdict writes one line to stdout, prefixed
+with the UTC time in RFC 3339 with nanoseconds. A body that cannot be
+read is answered ``REJECT`` without a line, and a runtime measurement
+that differs from the registered one adds a line with ``advisory=`` in
+place of ``state=``:
 
-Returns the most recent verdict the server saw for a given game id, or
-``PENDING`` when no heartbeat has arrived yet. ``trust_pong`` polls this
-endpoint to drive its banner so the SDL2 client itself never has to parse LACH
-packets.
+.. code-block:: text
 
-::
-
-   {"game_id":"trust-pong","state":"UNTRUSTED",
-    "license":"lota-demo-CS2-clone",
-    "reason":"token is missing required attestation flags 0x00000200",
-    "updated_at_unix":1750000000,"verdict_seq":7}
-
-``reason`` is the sentence the producer was answered with, so the polling
-client can explain the verdict; it is absent from a trusted one.
-``verdict_seq`` counts the verdicts recorded for the game id, so a client
-tells two verdicts in one second apart; it is 0 while ``PENDING`` and starts
-again from 1 when the server restarts.
-
-Logging
--------
-
-Every state transition writes one line to stdout in
-``[RFC3339Nano] session=<uuid|hex> seq=<n> state=<verdict> reason=<...>`` form,
-so the demo operator can follow the entire run by ``tail -f``-ing the server.
-
-Tests
------
-
-``go test ./...`` covers each verdict branch with a fabricated heartbeat:
-TRUSTED, UNTRUSTED-on-bad-signature, UNTRUSTED-on-unknown-game,
-UNTRUSTED-on-tampered-header, UNTRUSTED-on-flag-mismatch, UNTRUSTED-on-replay,
-REJECT-on-bad-magic, REJECT-on-unsupported-domain, REJECT-on-truncated-token,
-plus ``/nonce`` and ``/state`` happy paths and failure modes.
-
-Runtime coverage as a policy
-----------------------------
-
-A token states whether the agent's runtime measurement covered every object
-the producer maps (``LOTA_FLAG_IMAGE_FULLY_MEASURED``) or only those the
-kernel holds an fs-verity digest for. The bit is inside the signed token, so
-it cannot be claimed by a client that did not earn it, and a host that
-measured nothing does not carry it: an empty protected set is a round that
-measured no object, which is not a round that measured every object.
-
-``--require-full-image`` makes this server demand it: a heartbeat without the
-bit is ``UNTRUSTED`` with the missing flags named. On a host whose
-distribution ships libraries without fs-verity that refuses every heartbeat,
-and so does a host that protects no process at all, which is the point -- the
-choice belongs to the publisher, and this is what choosing it looks like. Left off, partial coverage is accepted and the bit is
-still reported, so a backend can log or score it instead.
-
-What the kernel appraises
--------------------------
-
-``LOTA_FLAG_KERNEL_APPRAISAL`` says the host's kernel appraises the
-executables it runs: IMA in a blocking mode over a loaded policy that reaches
-an exec, so a file whose content does not match its signature is refused
-before it runs. That is a property of the whole machine and it arrives with
-the signatures -- IMA-signed distribution packages, or an operator image
-pipeline -- which a player cannot supply, so a stock host does not carry it.
-
-Clear does not mean the agent is unbound. Its binary carries fs-verity, so
-the kernel refuses a modified read of it, and PCR 14 commits the build that
-is running; what the bit adds is the same guarantee over everything else the
-machine executes.
-
-``--require-kernel-appraisal`` refuses a heartbeat without it, which refuses
-every stock host and admits a fleet whose images are signed. That is the same
-shape of decision as ``--require-full-image``: the flag is inside the signed
-token, the server states its policy, and a publisher who wants the host as it
-comes leaves it off and reads the bit.
+   [<time>] session=<uuid> game=trust-pong state=NONCE_ISSUED
+   [<time>] session=<hex> seq=7 state=TRUSTED license=lota-demo-CS2-clone
+   [<time>] session=<hex> seq=8 state=UNTRUSTED reason="heartbeat too old"
+   [<time>] session=? state=REJECT reason="reject: bad magic 0x00000000"

@@ -1,172 +1,116 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-Scenario: hook reacts when the agent goes down
-==============================================
+==========
+agent-down
+==========
 
-This walk-through exercises the LOTA hook's "graceful degradation" contract.
-The hook is designed to never wedge the game, and the agent is allowed to
-disappear out from under a live session without taking the game with it. The
-visible signal is the ``lota-status`` file under
-``$XDG_RUNTIME_DIR/lota-hook/``:
-the hook keeps the file in sync with the agent's last known attestation state
-and unlinks it on a clean detach.
+An agent goes away under a running Counter-Strike 2. The daemon takes
+the title with it. Under ``lota-agent --test-signed``, which protects
+nothing, the title keeps running, the hook marks the host offline and
+removes its token files, and it connects again when an agent answers on
+the socket.
 
-The scenario is operator-driven and runs against the ``--test-signed`` agent
-the main `examples/cs2/README.rst <../README.rst>`__ walk-through uses for the
-end-to-end integration test. No game state is destroyed and the hook will
-recover on its own when the agent comes back up.
+How the agent goes away
+=======================
 
-Prerequisites
--------------
+The daemon refuses every signal but 0 and ``SIGHUP``, from root too, so
+``kill`` and ``pkill`` do not end it; ``pkill lota-agent`` ends
+``lota-attest.service``, a ``lota-agent --attest`` that does not refuse
+them. The daemon stops with ``sudo systemctl stop
+lota-agent.socket lota-agent``, which spends the boot commitment in PCR
+14: every later start of the daemon in that boot exits 78, and it attests
+again after a reboot (see `the agent lifecycle
+<../../../Documentation/agent/lifecycle.rst>`_).
 
-- The agent is running with the operator's ``XDG_RUNTIME_DIR`` in scope
-  (TPM-signed token path, fixture policy digest applied):
-  .. code:: sh
+A daemon that exits sends ``SIGKILL`` to every protected process (see
+`protection <../../../Documentation/agent/protection.rst>`_), and
+``lota-protect`` put the title in the protected set. The title ends with
+the daemon, before its hook marks the host offline, and the status file
+keeps the last verdict.
 
-     sudo env XDG_RUNTIME_DIR=/run/user/"$(id -u)" \
-         /usr/bin/lota-agent --test-signed
+The scenario therefore runs against ``lota-agent --test-signed``, which
+signs tokens with the TPM, loads no BPF and so protects nothing, reports
+the host attested and stops on ``SIGINT``. It takes the sockets only
+while no other agent holds them, so it runs while the daemon and its
+socket unit are stopped. Like the daemon it opens the socket of each
+``container_listener_uid`` and of the user its ``XDG_RUNTIME_DIR`` names:
 
-- Counter-Strike 2 launches cleanly with the LOTA launch options set (see the
-  main CS2 README). At a minimum the launch line must include
-  ``lota-proton-hook %command%`` plus ``PRESSURE_VESSEL_FILESYSTEMS_RW`` and
-  ``LOTA_HOOK_SOCKET`` pointing at the user-runtime listener.
-- The operator account is in the ``lota`` group and the Steam process inherited
-  that group.
+.. code-block:: console
 
-Walk-through
-------------
+   $ sudo env XDG_RUNTIME_DIR=/run/user/$(id -u) lota-agent --test-signed
 
-Open three terminals on the host. The first two attach to LOTA state; the third
-is the operator's control surface.
+Running it
+==========
 
-Terminal 1: watch the verdict
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Start ``--test-signed`` as above and launch CS2 with the launch option of
+`Counter-Strike 2 under Proton <../README.rst>`_. Once the title runs,
+follow the verdict in a terminal with
+`verify-attested.sh <README.rst>`_. The watcher picks the status file
+when it starts: started before the hook has written the file, it watches
+``/tmp/lota-<uid>/lota-status`` and stays at ``OFFLINE``.
 
-.. code:: sh
+.. code-block:: console
 
-   examples/cs2/scenarios/verify-attested.sh --interval 1
+   $ examples/cs2/scenarios/verify-attested.sh
+   watching /run/user/<uid>/lota-hook/lota-status, polling every 1s
+       (Ctrl-C to stop)
+   <two lines on the refresh of the hook>
+   <time> TRUSTED
 
-The watcher prints one line per transition. With the agent up and the hook
-attached it stays at ``TRUSTED``.
+The first line is wrapped here.
 
-Terminal 2: tail the hook log
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1. Stop the agent: ``Ctrl-C`` in the terminal of ``--test-signed``. The
+   hook logs
+   ``lota-hook: connection lost (<error>), reconnecting...``, waits one
+   second and tries again. The first attempt that fails logs
+   ``lota-hook: cannot reach the agent at <socket>: <error> -- <hint>``,
+   once for each reason, and rewrites the status file; the watcher prints
+   ``OFFLINE``. The file then reads:
 
-.. code:: sh
+   .. code-block:: console
 
-   tail -F ~/.local/share/Steam/logs/console-linux.txt | grep -aE \
-       "lota-hook|lota-proton-hook"
-
-Healthy steady state shows the constructor lines from the game process (and the
-Steam reaper) plus periodic ``refresh`` / ``connected to agent`` messages.
-
-Terminal 3: drive the scenario
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-1. Launch CS2 from Steam. Confirm Terminal 1 prints ``TRUSTED`` within a
-   heartbeat or two of the game opening:
-
-   ::
-
-      21:55:34 TRUSTED
-
-2. Kill the agent:
-
-   .. code:: sh
-
-      sudo pkill -INT lota-agent
-
-   The hook loses the subscribe channel at once, and the first reconnect it
-   cannot complete publishes the transition -- one refresh interval after the
-   kill on the event-driven path, ``LOTA_HOOK_REFRESH_SEC`` (default 60) on the
-   polling fallback. The watcher flips:
-
-   ::
-
-      21:56:34 OFFLINE
-
-   The hook log (Terminal 2) prints the matching ``connection lost (...)`` line
-   followed by ``agent not available, retrying in Ns``, which repeats for as
-   long as the agent stays down. The sink is written once per disconnect, not
-   once per retry.
-
-   Assert it on the sink itself rather than on the watcher's verdict, so a
-   regression in either one is visible:
-
-   .. code:: sh
-
-      SINK="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/lota-hook"
-      grep -E '^LOTA_(OFFLINE|ATTESTED)=' "$SINK/lota-status"
-      ls "$SINK/lota-token.bin" 2>&1
-
-   ::
-
+      $ grep -E '^LOTA_(ATTESTED|OFFLINE)=' \
+            $XDG_RUNTIME_DIR/lota-hook/lota-status
       LOTA_ATTESTED=0
       LOTA_OFFLINE=1
-      ls: cannot access '.../lota-token.bin': No such file or directory
+      $ ls $XDG_RUNTIME_DIR/lota-hook/
+      lota-status
 
-   The token and the attestation snapshot are unlinked because neither can be
-   trusted past the disconnect; ``LOTA_ATTESTED=1`` surviving the kill, or a
-   token still on disk, is the defect this step exists to catch.
+   ``lota-token.bin``, ``lota-attestation.bin`` and
+   ``lota-boot-evidence.bin`` are removed with the connection. The title
+   keeps running.
 
-3. Restart the agent in the same shape:
+2. Start ``--test-signed``. The hook tries every
+   ``LOTA_HOOK_REFRESH_SEC`` (60 by default), so within that time it logs
+   ``lota-hook: connected to agent``, writes the status and the token
+   files again, and the watcher prints ``TRUSTED``.
 
-   .. code:: sh
+3. Quit the title. The hook leaves the status file and the token files in
+   place, so the watcher keeps the last verdict.
 
-      sudo env XDG_RUNTIME_DIR=/run/user/"$(id -u)" \
-          /usr/bin/lota-agent --test-signed
+What it shows
+=============
 
-   On the next refresh tick the hook reconnects, rewrites ``lota-status``, and
-   the watcher returns to ``TRUSTED``:
+* The hook does not end or hold the title when the agent goes away; the
+  daemon ends the processes it protects.
+* ``LOTA_OFFLINE`` tells a host whose agent is gone from one whose agent
+  refuses: a reader of ``LOTA_ATTESTED`` alone sees both as 0.
+* A hook that outlives the agent leaves no token on disk past the
+  connection it was read on.
+* The hook reconnects by itself, without launching the title again.
 
-   ::
+When it stays offline
+=====================
 
-      21:57:35 TRUSTED
+The ``cannot reach the agent`` line names the socket and the cause:
 
-4. Quit CS2 from inside the game. The hook destructor leaves the artefacts in
-   place (the next session overwrites them); if you want to verify the OFFLINE
-   path independently you can kill the agent before quitting CS2 and confirm
-   the watcher flips. CS2's shutdown is unaffected.
-
-What this proves
-----------------
-
-- The hook does not block the game on an agent disconnect; CS2 keeps running
-  through Terminal 3 step 2 and the operator can finish a round of bot play
-  with the agent down.
-- The hook re-establishes the attestation channel on its own cadence; no game
-  restart, no LD_PRELOAD reload.
-- The verdict surface (``lota-status``) is the single source of truth a
-  server-side or game-side integrator polls. The hook writes ``LOTA_OFFLINE=1``
-  on disconnect so the watcher can distinguish OFFLINE (no agent) from
-  UNTRUSTED (agent says no); the watcher in ``verify-attested.sh`` is the
-  minimal possible consumer of both signals and ships with the demo so an
-  integrator does not have to invent it. A consumer that reads
-  ``LOTA_ATTESTED`` alone is told the machine is attested for as long as the
-  game runs, which is why the marker is read first.
-- Per-state log lines in ``console-linux.txt`` are stable enough to drive a
-  runtime monitor (``grep -E 'connection lost|connected to agent'``); the
-  contract is documented in
-  ```src/sdk/lota_wine_hook.c`` <../../../src/sdk/lota_wine_hook.c>`__.
-
-Failure-mode notes
-------------------
-
-If the watcher stays at ``OFFLINE`` after step 3, read the hook's ``warn``
-line (shown by default, repeated only when the reason changes). It names the
-socket and why it could not be opened: ``the agent is not running, or its
-per-session listener is not configured for this session`` when no socket
-exists, ``the session is usually missing the lota group`` when it may not be
-opened. Then check:
-
-- Confirm the agent banner prints
-  ``IPC extra listener on /run/user/<uid>/lota/lota.sock``. If only the
-  ``/run/lota/lota.sock`` listener appears, the ``XDG_RUNTIME_DIR=...``
-  environment did not reach the agent.
-- Confirm ``PRESSURE_VESSEL_FILESYSTEMS_RW`` is still set in CS2's launch
-  options; pressure-vessel re-creates the container's /run/user/ tmpfs on every
-  launch and the bind-mount is needed every time.
-- Confirm the operator user is still in the ``lota`` group
-  (``id | grep lota``); a Steam restart from a non-``lota`` shell rebuilds the
-  supplementary group set without ``lota``.
+* ``the agent is not running, or its per-session listener is not
+  configured for this session``: the socket is missing. The agent logs
+  ``IPC extra listener on <socket>`` for each per-session socket it
+  opens; without that line, the user is not a ``container_listener_uid``
+  and ``XDG_RUNTIME_DIR`` did not reach the agent.
+* ``the session is usually missing the lota group``: the socket exists
+  and the session may not open it. ``id`` shows whether the session
+  carries ``lota``; Steam started from a session without it passes none to
+  the title.
