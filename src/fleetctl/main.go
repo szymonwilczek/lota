@@ -135,6 +135,11 @@ func run(argv []string, stdout, stderr io.Writer, getenv func(string) string) in
 			fmt.Fprintf(stderr, "lota-fleet: reading TLS CA file: %v\n", err)
 			return exitError
 		}
+		if len(raw) == 0 {
+			fmt.Fprintf(stderr,
+				"lota-fleet: TLS CA file %s is empty\n", *tlsCA)
+			return exitError
+		}
 		caPEM = raw
 	}
 

@@ -185,6 +185,24 @@ func TestMissingKeyFileFails(t *testing.T) {
 	}
 }
 
+func TestEmptyCAFileFails(t *testing.T) {
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	servers := []string{"http://127.0.0.1:1", "https://127.0.0.1:1"}
+	for _, server := range servers {
+		code, _, errOut := runCLI(t, noEnv,
+			"-server", server, "-tls-ca", ca, "health")
+		if code != exitError {
+			t.Fatalf("%s: exit = %d, want 1", server, code)
+		}
+		if !strings.Contains(errOut, "is empty") {
+			t.Fatalf("%s: stderr = %q", server, errOut)
+		}
+	}
+}
+
 func TestHealthDegradedExitsNonzero(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
