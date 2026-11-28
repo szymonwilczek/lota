@@ -1209,7 +1209,7 @@ $(BUILD_DIR)/test_status_cmd: $(AGENT_DIR)/status_cmd.c $(AGENT_DIR)/io_utils.c
 
 $(BUILD_DIR)/test_agent_bench_snapshot: $(AGENT_DIR)/bench_snapshot.c \
 	$(AGENT_DIR)/bench_proc.c $(AGENT_DIR)/bench_protected.c \
-	$(AGENT_DIR)/bench.c $(AGENT_DIR)/io_utils.c
+	$(AGENT_DIR)/bench.c $(AGENT_DIR)/bench_bpf.c $(AGENT_DIR)/io_utils.c
 
 TEST_ATTEST := $(addprefix $(BUILD_DIR)/test_, \
 	attest_aggregate \

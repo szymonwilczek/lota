@@ -34,7 +34,7 @@ struct bench_bpf {
 	bool memlock_ok;
 	uint64_t memlock; /* bytes, summed over the maps */
 	size_t prog_count;
-	size_t prog_dropped; /* loaded past LOTA_BENCH_MAX_PROGS */
+	size_t prog_dropped; /* past LOTA_BENCH_MAX_PROGS, or info unread */
 	struct bench_prog progs[LOTA_BENCH_MAX_PROGS];
 };
 

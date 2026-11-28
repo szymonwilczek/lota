@@ -47,8 +47,10 @@ bool bench_bpf_sample(const struct bpf_loader_ctx *ctx, bool run_stats,
 			continue;
 		}
 		memset(&info, 0, sizeof(info));
-		if (bpf_prog_get_info_by_fd(fd, &info, &len) < 0)
+		if (bpf_prog_get_info_by_fd(fd, &info, &len) < 0) {
+			out->prog_dropped++;
 			continue;
+		}
 
 		p = &out->progs[out->prog_count++];
 		bench_sanitize_name(p->name, sizeof(p->name),
