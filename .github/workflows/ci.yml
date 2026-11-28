@@ -409,10 +409,7 @@ jobs:
 
       - name: Lint production shell scripts
         # operator-facing scripts (scripts/, examples/, tests/integration/,
-        # src/initramfs/) are gated at severity=error. The fuzzing /
-        # automation helpers under helper/ have their own quality tier
-        # and are not part of the production install set; they stay out
-        # of this gate on purpose
+        # src/initramfs/) are gated at severity=error
         run: |
           set -eu
           shellcheck -s bash -S error \
