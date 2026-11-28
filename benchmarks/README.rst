@@ -47,9 +47,9 @@ The output goes to the terminal and to ``benchmarks/results/``:
    * - ``c-sdk.json``
      - one JSON object per C benchmark
 
-Each run replaces the files. A target exits with the status of the runner
-it started; a runner that fails leaves its file behind, and the target
-reports that the file is not a measurement.
+Each run replaces the files. A runner that exits non-zero leaves its file
+behind, the target reports that the file is not a measurement, and
+``make`` fails.
 
 ``benchmarks/scripts/run_all.sh`` prints the kernel, the CPU model and the
 Go version, runs ``make bench-c`` and ``make bench-go`` with
@@ -101,7 +101,8 @@ C benchmarks
 ``game_binding_hash``
    ``lota_ac_compute_game_binding_hash()`` over a file of
    ``BENCH_EXE_KIB`` KiB (default 1024), written under ``/tmp`` at start
-   and removed at exit.
+   and removed at exit. A size that does not fit in the free space of
+   ``/tmp`` is refused, and the runner exits with 1.
 
 ``token_serialize``
    ``lota_token_serialize()`` of a token with a 120-byte quote and a
@@ -144,8 +145,10 @@ the calls per second at the median.
      - 1024
      - the size of the hashed file, in KiB
 
-For the four numeric variables, an empty value, a value of zero, or one
-that ``strtoull(3)`` does not read to its end leaves the default.
+For the four numeric variables, a value that does not start with a digit,
+has characters after the number, or is zero leaves the default. When the
+samples of a benchmark cannot be allocated, the harness prints ``cbench:
+OOM`` and skips it, and the runner exits with 1.
 ``make bench-c`` removes ``c-sdk.json`` and sets ``BENCH_JSON`` to it. An
 object carries ``suite``, ``name``, ``median_ns``, ``p99_ns``, ``min_ns``,
 ``stddev_ns``, ``ops_per_sec``, ``samples`` and ``batch``.
@@ -161,8 +164,8 @@ In CI
 The ``benchmarks`` job of ``.github/workflows/ci.yml`` runs ``make
 bench-c`` with ``BENCH_REPS=3``, ``BENCH_TARGET_MS=1`` and
 ``BENCH_EXE_KIB=64``, and ``make bench-go BENCH_COUNT=1 BENCH_TIME=1x``. It
-fails when a benchmark does not build or does not run. The runners are
-shared, so their timings are not figures.
+fails when a benchmark does not build or its runner exits non-zero. The
+runners are shared, so their timings are not figures.
 
 Taking figures
 ==============

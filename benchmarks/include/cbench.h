@@ -5,9 +5,8 @@
  *
  * Auto-calibrates a batch size so each measured run lasts ~BENCH_TARGET_MS,
  * amortizing clock_gettime() overhead, then collects BENCH_REPS ns/op
- * samples and reports min / median / p90 / p99 / mean / stddev and ops/sec.
- * This mirrors how Go's testing.B and kernel userspace microbenchmarks pick
- * an iteration count and report a distribution rather than a single timing.
+ * samples and reports the median, p99, min and stddev, and ops/sec at the
+ * median.
  *
  * Tunables (environment):
  *   BENCH_REPS       measured samples per benchmark   (default 50)
@@ -19,7 +18,10 @@
  *   static void my_op(void *ctx, size_t iters);
  *   cbench_run("suite", "my_op", my_op, ctx);
  *
- * Write into cbench_sink to defeat dead-code elimination.
+ * Write into cbench_sink to defeat dead-code elimination. Set cbench_failed
+ * when the measured call fails: the figures then time the error path, and
+ * the runner exits non-zero. cbench_run() sets it when it cannot allocate
+ * the samples.
  */
 #ifndef LOTA_CBENCH_H
 #define LOTA_CBENCH_H
@@ -39,6 +41,8 @@
 /* Sink to prevent the compiler from optimizing the measured work away. */
 static volatile uint64_t cbench_sink;
 
+static int cbench_failed;
+
 typedef void (*cbench_fn)(void *ctx, size_t iters);
 
 static inline uint64_t cbench_now_ns(void)
@@ -51,7 +55,7 @@ static inline uint64_t cbench_now_ns(void)
 static inline size_t cbench_envu(const char *name, size_t dflt)
 {
 	const char *v = getenv(name);
-	if (!v || !*v)
+	if (!v || *v < '0' || *v > '9')
 		return dflt;
 	char *end = NULL;
 	unsigned long long n = strtoull(v, &end, 10);
@@ -114,6 +118,7 @@ static inline void cbench_run(const char *suite, const char *name, cbench_fn fn,
 	double *samples = (double *)malloc(reps * sizeof(double));
 	if (!samples) {
 		fprintf(stderr, "cbench: OOM\n");
+		cbench_failed = 1;
 		return;
 	}
 	for (size_t r = 0; r < reps; r++) {

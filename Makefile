@@ -2271,7 +2271,6 @@ BENCH_TIME ?= 1s
 
 bench: bench-c bench-go
 	@echo "Benchmarks complete. Raw output under $(BENCH_RESULTS)/"
-	@echo "Render Documentation/performance/evaluation.rst with: benchmarks/scripts/run_all.sh"
 
 # /bin/sh has no pipefail: a pipe into tee reports tee's status,
 # so the runner's own status goes through a file.

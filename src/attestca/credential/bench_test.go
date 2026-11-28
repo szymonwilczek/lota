@@ -2,8 +2,7 @@
 // Copyright (C) 2026 Szymon Wilczek
 // Benchmarks for the credential-activation primitives. GenerateChallenge is
 // the per-enrollment RSA MakeCredential cost that the server-side Begin rate
-// limit (T-MED-1) is designed to bound; ValidateAIK is the template parse on
-// the same path.
+// limit bounds; ValidateAIK is the template parse on the same path.
 
 package credential
 

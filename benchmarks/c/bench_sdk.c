@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 
 #include "cbench.h"
@@ -43,6 +44,8 @@ static void bench_game_binding_hash(void *c, size_t iters)
 		if (lota_ac_compute_game_binding_hash("lota-demo-CS2-clone",
 						      x->exe_path, out) == 0)
 			cbench_sink += out[0];
+		else
+			cbench_failed = 1;
 	}
 }
 
@@ -55,6 +58,8 @@ static void bench_token_serialize(void *c, size_t iters)
 		if (lota_token_serialize(&x->tok, buf, sizeof(buf), &written) ==
 		    LOTA_OK)
 			cbench_sink += buf[0] + written;
+		else
+			cbench_failed = 1;
 	}
 }
 
@@ -66,6 +71,8 @@ static void bench_token_parse(void *c, size_t iters)
 		if (lota_server_parse_token(x->ser, x->ser_len, &claims) ==
 		    LOTA_SERVER_OK)
 			cbench_sink += claims.flags;
+		else
+			cbench_failed = 1;
 	}
 }
 
@@ -73,13 +80,33 @@ static void bench_token_parse(void *c, size_t iters)
 static int make_exe_file(struct sdk_ctx *x)
 {
 	size_t kib = cbench_envu("BENCH_EXE_KIB", 1024); /* 1 MiB default */
+
+	if (kib > SIZE_MAX / 1024) {
+		fprintf(stderr, "bench_sdk: BENCH_EXE_KIB %zu is too large\n",
+			kib);
+		return -1;
+	}
 	x->exe_bytes = kib * 1024;
 
 	snprintf(x->exe_path, sizeof(x->exe_path),
 		 "/tmp/lota_bench_exe.XXXXXX");
 	int fd = mkstemp(x->exe_path);
-	if (fd < 0)
+	if (fd < 0) {
+		fprintf(stderr, "bench_sdk: cannot create a file in /tmp\n");
 		return -1;
+	}
+
+	struct statvfs st;
+	if (fstatvfs(fd, &st) == 0 && st.f_frsize &&
+	    x->exe_bytes / st.f_frsize + !!(x->exe_bytes % st.f_frsize) >
+		    st.f_bavail) {
+		fprintf(stderr,
+			"bench_sdk: a %zu KiB file does not fit in /tmp\n",
+			kib);
+		close(fd);
+		unlink(x->exe_path);
+		return -1;
+	}
 
 	uint8_t chunk[4096];
 	for (size_t i = 0; i < sizeof(chunk); i++)
@@ -90,7 +117,10 @@ static int make_exe_file(struct sdk_ctx *x)
 		size_t n = remaining < sizeof(chunk) ? remaining :
 						       sizeof(chunk);
 		if (write(fd, chunk, n) != (ssize_t)n) {
+			fprintf(stderr, "bench_sdk: cannot write %s\n",
+				x->exe_path);
 			close(fd);
+			unlink(x->exe_path);
 			return -1;
 		}
 		remaining -= n;
@@ -146,10 +176,8 @@ int main(void)
 	struct sdk_ctx x;
 	memset(&x, 0, sizeof(x));
 
-	if (make_exe_file(&x) != 0) {
-		fprintf(stderr, "bench_sdk: failed to stage exe file\n");
+	if (make_exe_file(&x) != 0)
 		return 1;
-	}
 	if (build_token(&x) != 0) {
 		fprintf(stderr, "bench_sdk: failed to build token\n");
 		unlink(x.exe_path);
@@ -166,5 +194,11 @@ int main(void)
 	free(x.tok.attest_data);
 	free(x.tok.signature);
 	unlink(x.exe_path);
+	if (cbench_failed) {
+		fprintf(stderr,
+			"bench_sdk: a benchmark failed, the figures are "
+			"not a measurement\n");
+		return 1;
+	}
 	return 0;
 }
