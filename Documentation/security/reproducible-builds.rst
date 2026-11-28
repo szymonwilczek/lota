@@ -9,7 +9,9 @@ A release is built so that a checkout of its tag, built again with the same
 toolchain, gives the same bytes. The release workflow
 (:ghsrc:`.github/workflows/release.yml`) hashes the artifacts into a
 ``SHA256SUMS`` manifest and signs the manifest with cosign, so a user can
-check that the artifacts came from the tag and from that workflow.
+check that the artifacts came from the tag and from that workflow. The
+RPMs get a second manifest, ``SHA256SUMS-fedora``, signed the same way
+(`The packages`_).
 
 The build
 =========
@@ -120,7 +122,9 @@ hook cannot be checked.
 CI builds every pull request and every push to ``main`` and ``lota-next``
 twice into ``build/``, from two paths and in two time zones, hashes the
 files of the manifest in both and compares the hashes. A Go binary not
-stamped ``vcs.modified=false`` fails the job
+stamped ``vcs.modified=false`` fails the job. A second job builds the RPMs
+twice the same way in the builder image and compares their
+``SHA256SUMS-fedora``
 (:ghsrc:`.github/workflows/reproducible-builds.yml`, :doc:`../dev-tools/ci`).
 
 Reproducing a release
@@ -183,19 +187,85 @@ A valid signature says that the release workflow, run for a ``v`` tag,
 produced the manifest. Verify it before checking the artifacts against the
 manifest.
 
+The packages
+============
+
+The release workflow builds the RPMs in
+``ghcr.io/szymonwilczek/lota/rpm-builder:VERSION``, an image it builds from
+:ghsrc:`packaging/rpm/builder/Containerfile`, pushes and signs with cosign
+under the same identity. The image is Fedora 44 at a fixed digest, with
+each package at the version :ghsrc:`packaging/rpm/builder/packages.lock`
+names; its build stops when they differ. ``make rpm-builder`` builds it
+(``CONTAINER_ENGINE``, default ``podman``). ``make rpm-builder-lock``
+upgrades the base image, installs the names in
+:ghsrc:`packaging/rpm/builder/packages` and writes every package then
+installed to the lock.
+
+The job runs ``make reproducible-build``, ``make sign-bpf`` with its
+enforcement key, ``make packages`` and ``make release-manifest-fedora`` in
+that image. Fedora's toolchain builds the binaries, so they are not the
+files of ``SHA256SUMS``.
+
+``make release-manifest-fedora`` unpacks each RPM of ``build/packages`` into
+``build/release-fedora/NAME/``, ``NAME`` being the RPM file name without
+``.rpm``, writes its header fields to ``NAME.header`` beside it and hashes
+both into ``build/SHA256SUMS-fedora``
+(:ghsrc:`scripts/verify-rpm-release.sh`). The header fields are the name,
+version and architecture; the mode, owner, group, flags and link target of
+each file; the scriptlets, triggers and dependencies. Build time and host,
+file times and signatures are not covered, so the GPG signature the job
+adds afterwards (:doc:`../admin-guide/dnf-repo`) leaves the manifest
+valid. The job signs it into ``SHA256SUMS-fedora.cosign.bundle``.
+
+Checking a package
+------------------
+
+Verify the manifest as above, with ``SHA256SUMS-fedora`` and its bundle,
+then check the RPMs against it:
+
+.. code-block:: console
+
+   $ make verify-rpm-release RPM_MANIFEST=SHA256SUMS-fedora RPM_DIR=rpms
+   PASS: lota-agent-.../usr/lib/lota/lota_lsm.bpf.o.sig verifies against enforcement.pub
+   PASS: the RPMs in rpms match SHA256SUMS-fedora
+
+It needs ``rpm``, ``rpm2archive``, ``tar`` and ``openssl``, and installs
+nothing. ``RPM_DIR`` can hold some of the packages. A file that differs or
+a package the manifest does not name fails with a diff of the manifest
+lines, an RPM that does not unpack fails without one, and the enforcement
+object must verify against the key the agent package ships beside it.
+
+Rebuilding the packages
+-----------------------
+
+Verify the builder image of the release:
+
+.. code-block:: console
+
+   $ cosign verify \
+         --certificate-identity-regexp \
+           '^https://github\.com/szymonwilczek/lota/\.github/workflows/release\.yml@refs/tags/v' \
+         --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+         ghcr.io/szymonwilczek/lota/rpm-builder:VERSION
+
+and rebuild the tag in it, from a checkout of the tag:
+
+.. code-block:: console
+
+   $ make rebuild-rpm-release RPM_MANIFEST=SHA256SUMS-fedora \
+         RPM_BUILDER_IMAGE=ghcr.io/szymonwilczek/lota/rpm-builder@sha256:...
+
+It clones ``HEAD`` under ``TMPDIR`` (default ``/var/tmp``), runs the
+job's build in the image with an enforcement key of its own and compares
+the manifests. The lines of the object's signature and key cannot match
+and are skipped, whatever they hold; every other line must match.
+
 Scope
 =====
 
-The manifest covers the twelve files above. Other jobs of the same
-workflow attach the packages and the Helm chart to the release, and push
-the container images to ``ghcr.io``:
-
-Packages
-  Built in a ``fedora:44`` container with ``make all``, not
-  ``reproducible-build``, so their binaries are not the ones the manifest
-  lists. The job signs the BPF object with the project's enforcement key
-  (``make sign-bpf``) and the packages and repository with its GPG key
-  (:doc:`../admin-guide/dnf-repo`).
+``SHA256SUMS`` covers the twelve files above, and ``SHA256SUMS-fedora``
+the packages. Other jobs of the same workflow attach the Helm chart to the
+release, and push the container images to ``ghcr.io``:
 
 Container images
   Built with ko and signed with cosign under the same identity, and not
@@ -207,7 +277,9 @@ Helm chart
   Packaged, pushed to ``ghcr.io`` and attached to the release, unsigned
   (:doc:`../admin-guide/helm-chart`).
 
-The release has no ``lota_lsm.bpf.o.sig``. The agent loads the BPF object
-only with a signature its enforcement key verifies (:doc:`../bpf/index`), so
-a deployment that installs the manifest's object signs it with its own key,
-``make sign-bpf`` (:doc:`../admin-guide/packages`).
+``SHA256SUMS`` has no ``lota_lsm.bpf.o.sig``. The agent loads the BPF
+object only with a signature its enforcement key verifies
+(:doc:`../bpf/index`), so a deployment that installs the manifest's object
+signs it with its own key, ``make sign-bpf``
+(:doc:`../admin-guide/packages`). The ``lota-agent`` package ships the
+object with the signature and key of the release.

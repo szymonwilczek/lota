@@ -126,3 +126,63 @@ jobs:
           name: reproducibility-report
           path: repro-report
           if-no-files-found: ignore
+
+  rpm-reproducible:
+    name: reproducible RPMs
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install diffoscope
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends diffoscope
+
+      - name: Build the builder image
+        run: make rpm-builder CONTAINER_ENGINE=docker
+
+      - name: Build the RPMs twice under different environments
+        run: |
+          set -eu
+          build() {
+            cp -a "$GITHUB_WORKSPACE" "$1"
+            docker run --rm -v "$1:$2" -w "$2" -e TZ="$3" lota-rpm-builder \
+              bash -c '
+                set -eu
+                git config --global --add safe.directory "$PWD"
+                openssl genpkey -algorithm ed25519 -out /tmp/ci.key
+                openssl pkey -in /tmp/ci.key -pubout -out /tmp/ci.pub
+                make reproducible-build
+                make sign-bpf SIGNING_KEY=/tmp/ci.key SIGNING_PUBKEY=/tmp/ci.pub
+                make packages SIGNING_KEY=/tmp/ci.key SIGNING_PUBKEY=/tmp/ci.pub
+                make release-manifest-fedora'
+          }
+          build /tmp/rpm-a /build/a UTC
+          build /tmp/rpm-b /build/deep/er/b Asia/Tokyo
+
+      - name: Compare the packages
+        run: |
+          set -u
+          mkdir -p repro-report
+          a=/tmp/rpm-a/build
+          b=/tmp/rpm-b/build
+          if scripts/verify-rpm-release.sh compare \
+            "$a/SHA256SUMS-fedora" "$b/SHA256SUMS-fedora"; then
+            exit 0
+          fi
+          sudo diffoscope --text repro-report/release-fedora.txt \
+            "$a/release-fedora" "$b/release-fedora" || true
+          echo "::error::the RPMs are not bit-for-bit reproducible;" \
+            "see the rpm-reproducibility-report artifact"
+          exit 1
+
+      - name: Upload reproducibility report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-reproducibility-report
+          path: repro-report
+          if-no-files-found: ignore

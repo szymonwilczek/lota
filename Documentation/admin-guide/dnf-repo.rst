@@ -45,7 +45,9 @@ packages: ``make packages`` comes first.
 
 The release workflow publishes the tree as ``lota-dnf-repo-VERSION.tar.gz``
 beside the RPMs, and the documentation deploy unpacks the newest release's
-tarball under ``/rpm``.
+tarball under ``/rpm``. ``SHA256SUMS-fedora``, attached to the same
+release, hashes the files of each RPM
+(:doc:`../security/reproducible-builds`).
 
 Mirroring
 =========

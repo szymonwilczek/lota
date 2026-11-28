@@ -216,8 +216,12 @@ Reproducibility and units
 and one with ``TZ=Asia/Tokyo``, and compares the two manifests. The job
 fails when a file of the manifest is missing, when the manifests differ,
 and when a Go binary in either copy is not stamped ``vcs.modified=false``;
-diffoscope reports for the differing files are uploaded.
-:doc:`../security/reproducible-builds` covers verifying a release.
+diffoscope reports for the differing files are uploaded. The second job,
+``rpm-reproducible``, builds the RPM builder image, builds the RPMs in it
+twice the same way, and compares the two ``SHA256SUMS-fedora`` but for the
+signature of the enforcement object and its key, which each copy makes
+with its own key. :doc:`../security/reproducible-builds` covers verifying a
+release.
 
 ``systemd-validate.yml`` runs ``systemd-analyze verify`` on the agent's
 service and socket units, against a stub ``/usr/bin/lota-agent``, and

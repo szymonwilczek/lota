@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
+#
+# The toolchain the release RPMs are built with. Every installed package is
+# pinned by version in packages.lock, which make rpm-builder-lock writes.
+FROM docker.io/library/fedora:44@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898
+
+LABEL org.opencontainers.image.source=https://github.com/szymonwilczek/lota
+LABEL org.opencontainers.image.licenses=MIT
+
+COPY packages.lock /tmp/packages.lock
+
+# the install from the lock moves every package to its locked version; the
+# build stops when the result differs from the lock
+RUN grep -v '^#' /tmp/packages.lock >/tmp/lock && \
+    dnf -y upgrade && \
+    dnf -y install fedora-repos-archive && \
+    xargs dnf -y install --allowerasing </tmp/lock && \
+    rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' | \
+        grep -v '^gpg-pubkey-' | LC_ALL=C sort >/tmp/installed && \
+    diff -u /tmp/lock /tmp/installed && \
+    dnf clean all && rm /tmp/packages.lock /tmp/lock /tmp/installed
+
+ENV GOTOOLCHAIN=local GOPATH=/opt/go
+ENV PATH=/opt/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+
+RUN go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0 && \
+    go install github.com/sigstore/cosign/v2/cmd/cosign@v2.6.1 && \
+    rm -rf /root/.cache /opt/go/pkg

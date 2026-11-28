@@ -416,6 +416,7 @@ jobs:
             scripts/check-abi.sh \
             scripts/check-package-manifests.sh \
             scripts/check-test-build-dir.sh \
+            scripts/verify-rpm-release.sh \
             examples/demo/setup.sh \
             examples/ci-gate/run.sh \
             examples/demo_anticheat/run.sh \
@@ -438,6 +439,7 @@ jobs:
             tests/integration/test_fuzz_leak_detection.sh \
             tests/integration/test_veristat_gate.sh \
             tests/integration/test_hsm_ca_example.sh \
+            tests/integration/test_verify_rpm_release.sh \
             src/initramfs/90lota/module-setup.sh
           shellcheck -s sh -S error \
             scripts/check-player-build.sh \
@@ -752,7 +754,7 @@ jobs:
             openssl-devel systemd-devel libseccomp-devel \
             dbus-devel \
             glibc-devel.i686 libatomic.i686 \
-            golang
+            golang rpm-build openssl
 
       - name: Checkout
         uses: actions/checkout@v4

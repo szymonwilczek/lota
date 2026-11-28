@@ -618,6 +618,58 @@ release-manifest: release-stage
 	$(Q)cd '$(RELEASE_DIR)' && \
 		sha256sum -- $(RELEASE_NAMES) >'$(abspath $(RELEASE_MANIFEST))'
 
+RPM_RELEASE := scripts/verify-rpm-release.sh
+RELEASE_FEDORA_DIR ?= $(BUILD_DIR)/release-fedora
+RELEASE_FEDORA_MANIFEST ?= $(BUILD_DIR)/SHA256SUMS-fedora
+
+.PHONY: release-manifest-fedora
+release-manifest-fedora:
+	$(Q)$(RPM_RELEASE) stage '$(PKG_DIR)' '$(RELEASE_FEDORA_DIR)'
+	$(Q)$(RPM_RELEASE) manifest '$(RELEASE_FEDORA_DIR)' \
+		'$(RELEASE_FEDORA_MANIFEST)'
+
+.PHONY: verify-rpm-release
+verify-rpm-release:
+	@test -n "$(RPM_MANIFEST)" -a -n "$(RPM_DIR)" || { \
+		echo "$@: pass RPM_MANIFEST and RPM_DIR" >&2; \
+		exit 1; \
+	}
+	$(Q)$(RPM_RELEASE) check '$(RPM_MANIFEST)' '$(RPM_DIR)'
+
+.PHONY: rebuild-rpm-release
+rebuild-rpm-release:
+	@test -n "$(RPM_MANIFEST)" -a -n "$(RPM_BUILDER_IMAGE)" || { \
+		echo "$@: pass RPM_MANIFEST and RPM_BUILDER_IMAGE" >&2; \
+		exit 1; \
+	}
+	$(Q)CONTAINER_ENGINE=$(CONTAINER_ENGINE) \
+		$(RPM_RELEASE) rebuild '$(RPM_BUILDER_IMAGE)' '$(RPM_MANIFEST)'
+
+CONTAINER_ENGINE ?= podman
+RPM_BUILDER_DIR := packaging/rpm/builder
+RPM_BUILDER_TAG ?= lota-rpm-builder
+RPM_BUILDER_NEVRA := %{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n
+
+.PHONY: rpm-builder
+rpm-builder:
+	$(CONTAINER_ENGINE) build -t '$(RPM_BUILDER_TAG)' \
+		-f $(RPM_BUILDER_DIR)/Containerfile $(RPM_BUILDER_DIR)
+
+.PHONY: rpm-builder-lock
+rpm-builder-lock:
+	$(Q)cd $(RPM_BUILDER_DIR) && \
+	base=$$(sed -n 's/^FROM //p' Containerfile) && \
+	grep -v '^#' packages | \
+	$(CONTAINER_ENGINE) run --rm -i "$$base" bash -c ' \
+		set -eo pipefail; \
+		echo "# Written by make rpm-builder-lock from packages."; \
+		dnf -y -q upgrade >/dev/null; \
+		xargs dnf -y -q install >/dev/null; \
+		rpm -qa --qf "$(RPM_BUILDER_NEVRA)" | \
+			grep -v "^gpg-pubkey-" | LC_ALL=C sort' \
+		>packages.lock.new || { $(RM) packages.lock.new; exit 1; }
+	$(Q)cd $(RPM_BUILDER_DIR) && mv packages.lock.new packages.lock
+
 NFPM ?= nfpm
 RPMLINT ?= rpmlint
 # rpm spelling of the version (- as ~); exact sibling depends need it
@@ -1645,6 +1697,7 @@ test-unit: all $(TEST_BINS)
 	@tests/integration/test_demo_setup.sh
 	@tests/integration/test_installer_status_stages.sh
 	@tests/integration/test_package_manifest_lists.sh
+	@tests/integration/test_verify_rpm_release.sh
 	@tests/integration/test_pr_quality_skipped_range.sh
 	@if command -v python3 >/dev/null 2>&1; then \
 		tests/integration/test_license_boundary_scripts.sh; \
@@ -2263,6 +2316,11 @@ help:
 	@$(HELP_ROW) reproducible-build "Build all with pinned timestamp/TZ/locale"
 	@$(HELP_ROW) release-stage "Copy the manifest's files into RELEASE_DIR"
 	@$(HELP_ROW) release-manifest "Stage and hash into RELEASE_MANIFEST"
+	@$(HELP_ROW) release-manifest-fedora "Hash the RPMs of PKG_DIR"
+	@$(HELP_ROW) verify-rpm-release "Check RPM_DIR against RPM_MANIFEST"
+	@$(HELP_ROW) rebuild-rpm-release "Rebuild HEAD, compare to RPM_MANIFEST"
+	@$(HELP_ROW) rpm-builder "Build the RPM builder image"
+	@$(HELP_ROW) rpm-builder-lock "Rewrite the builder's packages.lock"
 	@echo ""
 	@echo "Documentation targets (Sphinx, see Documentation/conf.py):"
 	@$(HELP_ROW) htmldocs "Build HTML docs (-W) into Documentation/_build"
