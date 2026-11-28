@@ -89,8 +89,9 @@ The rig holds:
      - 0644
      - The fleet size, the pool size and the tenant.
 
-``setup`` creates the directory and the files with these modes, less the
-umask; a directory or file that already exists keeps its own.
+``setup`` gives the directory and the files these modes, also when they
+already exist. Each file is written anew and renamed into place, so a
+descriptor opened on an earlier file keeps reading the earlier data.
 
 A verifier for the rig, with a self-signed TLS certificate and a state
 file:
