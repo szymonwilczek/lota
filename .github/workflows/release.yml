@@ -79,17 +79,7 @@ jobs:
       - name: Stage artifacts and hash manifest
         run: |
           set -eu
-          mkdir -p release
-          artifacts="lota-agent lota-install lota-verifier lota-attest-ca \
-            lota-pcr14-lock liblotagaming.so liblotaserver.so \
-            liblota_wine_hook.so liblota_anticheat.so lota_lsm.bpf.o"
-          for a in $artifacts; do
-            cp "build/$a" "release/$a"
-          done
-          # 32-bit hook half: same filename as the 64-bit one, so renamed
-          cp build/lib32/liblota_wine_hook.so release/liblota_wine_hook-i386.so
-          cp VERSION release/VERSION
-          (cd release && sha256sum -- * > ../SHA256SUMS)
+          make release-manifest RELEASE_DIR=release RELEASE_MANIFEST=SHA256SUMS
           cat SHA256SUMS
 
       - name: Install cosign

@@ -22,9 +22,9 @@ builds ``make all`` with three variables exported
 (:ghsrc:`Makefile`):
 
 ``SOURCE_DATE_EPOCH``
-  ``REPRO_SOURCE_DATE_EPOCH`` when it is set, in a checkout or outside
-  one; otherwise the commit time of ``HEAD``. Without either the target
-  stops::
+  ``REPRO_SOURCE_DATE_EPOCH`` when it is set to a non-empty value, in a
+  checkout or outside one; otherwise the commit time of ``HEAD``. Without
+  either the target stops::
 
      reproducible-build: no commit time to read and REPRO_SOURCE_DATE_EPOCH is unset.
 
@@ -115,15 +115,16 @@ and gives no ``build/lib32/liblota_wine_hook.so``, so the manifest's 32-bit
 hook cannot be checked.
 
 CI builds every pull request and every push to ``main`` and ``lota-next``
-twice, from two paths and in two time zones, and
-compares the files of the manifest except ``lota-install``, the 32-bit hook
-and ``VERSION`` (:ghsrc:`.github/workflows/reproducible-builds.yml`,
-:doc:`../dev-tools/ci`).
+twice into ``build/``, from two paths and in two time zones, hashes the
+files of the manifest in both and compares the hashes. A Go binary not
+stamped ``vcs.modified=false`` fails the job
+(:ghsrc:`.github/workflows/reproducible-builds.yml`, :doc:`../dev-tools/ci`).
 
 Reproducing a release
 =====================
 
-Build the tag in a fresh clone, into ``build/``:
+Build the tag in a fresh clone, into ``build/``, and copy the files of the
+manifest into ``build/release``:
 
 .. code-block:: console
 
@@ -131,6 +132,7 @@ Build the tag in a fresh clone, into ``build/``:
    $ cd lota
    $ git checkout vVERSION
    $ make reproducible-build
+   $ make release-stage
 
 The release workflow runs ``make check-version-tag`` before the build. On a
 commit with a tag, it stops when ``VERSION`` is not the tag without its
@@ -142,16 +144,20 @@ The manifest names twelve files: ``lota-agent``, ``lota-install``,
 ``lota-verifier``, ``lota-attest-ca``, ``lota-pcr14-lock``,
 ``liblotagaming.so``, ``liblotaserver.so``, ``liblota_wine_hook.so``,
 ``liblota_anticheat.so``, ``lota_lsm.bpf.o``, ``liblota_wine_hook-i386.so``
-and ``VERSION``. All but two are in ``build/`` under those names; the 32-bit
-hook is ``build/lib32/liblota_wine_hook.so``, and ``VERSION`` is at the top
-of the tree. Put them beside the others and check the hashes:
+and ``VERSION``. The release workflow stages and hashes the same list,
+``RELEASE_ARTIFACTS`` in the :ghsrc:`Makefile`. ``make release-stage``
+empties ``build/release`` and copies each file there under its manifest
+name: the 32-bit hook from ``build/lib32/liblota_wine_hook.so``, ``VERSION``
+from the top of the tree. It stops when a file is missing, and on x86_64
+when the compiler cannot link a ``-m32`` program. Check the hashes there:
 
 .. code-block:: console
 
-   $ cd build
-   $ cp lib32/liblota_wine_hook.so liblota_wine_hook-i386.so
-   $ cp ../VERSION .
+   $ cd build/release
    $ sha256sum -c /path/to/SHA256SUMS
+
+``make release-manifest`` stages the files and writes their hashes to
+``build/SHA256SUMS`` in the format of the release manifest.
 
 Verifying the signature
 =======================

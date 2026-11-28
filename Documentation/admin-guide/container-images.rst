@@ -75,8 +75,8 @@ builds the three images and pushes them to ``KO_DOCKER_REPO``
 ``KO_HSM_TAG_SUFFIX``
   Appended to each tag of the ``-hsm`` image. Default ``-hsm``.
 
-``SOURCE_DATE_EPOCH`` is the commit time of ``HEAD``, or
-``REPRO_SOURCE_DATE_EPOCH`` outside a checkout
+``SOURCE_DATE_EPOCH`` is ``REPRO_SOURCE_DATE_EPOCH`` when it is set to a
+non-empty value, otherwise the commit time of ``HEAD``
 (:doc:`../security/reproducible-builds`). Each image carries an SPDX SBOM
 and the ``org.opencontainers.image.version``, ``source`` and ``licenses``
 labels.
