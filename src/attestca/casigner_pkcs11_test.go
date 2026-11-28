@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-//go:build pkcs11
 
-// Integration test for the PKCS#11-backed CA signer.
+// Tests for the PKCS#11-backed CA signer.
 //
-// It needs a live PKCS#11 token (SoftHSM in CI, a real HSM for an operator)
-// and is skipped unless the token is provided through the environment:
+// TestPKCS11SignerIssuesAIK needs a live PKCS#11 token (SoftHSM in CI, a
+// real HSM for an operator) and is skipped unless the token is provided
+// through the environment:
 //
 //	LOTA_TEST_PKCS11_MODULE  path to the PKCS#11 module (.so)
 //	LOTA_TEST_PKCS11_TOKEN   initialised token label
@@ -29,6 +29,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -188,5 +189,24 @@ func TestPickKeyPairNamesOneKey(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), "select one with") ||
 		!strings.Contains(err.Error(), "give each its own id") {
 		t.Fatalf("two pairs by label and id: %v", err)
+	}
+}
+
+// Every build of the CA opens the module a token key names.
+func TestPKCS11SignerOpensTheNamedModule(t *testing.T) {
+	module := filepath.Join(t.TempDir(), "absent-pkcs11-module.so")
+
+	_, _, err := newPKCS11Signer(pkcs11KeyConfig{
+		module: module,
+		token:  "lota-ca",
+		label:  "lota-ca-key",
+		pin:    "1234",
+	})
+	if err == nil {
+		t.Fatal("a missing PKCS#11 module opened")
+	}
+	if !strings.Contains(err.Error(), "pkcs11: open token") ||
+		!strings.Contains(err.Error(), module) {
+		t.Fatalf("the signer did not try the named module: %v", err)
 	}
 }

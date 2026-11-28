@@ -104,6 +104,9 @@ project. A distribution's build of the same Go release is another toolchain:
 The BPF object carries no ``.comment``; its Clang is the one of the runner
 image, which the workflow run log names.
 
+``lota-attest-ca`` is built with cgo, for its PKCS#11 signer, and links the
+build host's C library dynamically.
+
 On x86_64, ``make all`` builds the 32-bit half of the Wine hook when the
 compiler links a ``-m32`` program. That needs a 32-bit C library and
 ``libatomic``: on Ubuntu ``gcc-multilib``, on Fedora ``glibc-devel.i686``
@@ -197,9 +200,8 @@ Packages
 Container images
   Built with ko and signed with cosign under the same identity, and not
   attached to the release (:doc:`../admin-guide/container-images`). The
-  ``lota-attest-ca`` of the manifest is built without PKCS#11 and loads its
-  signing key from a file only; the ``-hsm`` tag of the ``attestca`` image
-  carries the PKCS#11 build (:doc:`ca-key`).
+  ``lota-attest-ca`` of the manifest loads its signing key from a file or
+  from a PKCS#11 token (:doc:`ca-key`).
 
 Helm chart
   Packaged, pushed to ``ghcr.io`` and attached to the release, unsigned

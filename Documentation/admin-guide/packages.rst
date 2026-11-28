@@ -12,8 +12,8 @@ install the same files, for COPR (:doc:`copr`). Their dependencies differ.
 The nfpm configurations name the libraries by hand: ``lota-agent`` requires
 ``tpm2-tss``, ``libbpf``, ``openssl-libs``, ``libseccomp`` and ``systemd``
 beside the requirements in the table, ``lota-sdk`` requires
-``openssl-libs``, and ``lota-verifier`` and ``lota-attest-ca`` require
-nothing. The spec leaves the libraries to the requirements rpmbuild
+``openssl-libs``, ``lota-attest-ca`` requires ``glibc`` 2.34 or newer, and
+``lota-verifier`` requires nothing. The spec leaves the libraries to the requirements rpmbuild
 generates from the binaries and requires ``systemd`` for the agent's
 scriptlets through ``%{?systemd_requires}``. Both require
 ``pkgconfig(libcrypto)`` for ``lota-sdk-devel``.

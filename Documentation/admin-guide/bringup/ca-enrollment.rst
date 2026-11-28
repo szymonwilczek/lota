@@ -174,18 +174,8 @@ environment, so it stays out of the argument list:
 The CA logs ``using PKCS#11 CA signing key`` with the module and the token.
 :ghsrc:`examples/hsm-ca/README.rst` sets up a SoftHSM token for this.
 
-Token support needs cgo and is built only with the ``pkcs11`` tag:
-
-.. code-block:: console
-
-   $ make attest-ca GO_TAGS=pkcs11
-
-The default build, which the packages carry, and the default container image
-stop with ``this lota-attest-ca was built without PKCS#11 support`` when
-they are given ``-ca-key-pkcs11-module`` and no ``-ca-key`` and the other
-options pass their checks, and name both roads to one that has it
-(:ghsrc:`src/attestca/casigner_nopkcs11.go`). A CA asked for a token never
-falls back to ``-ca-key``.
+The CA of the release manifest, the package and the ``attestca`` image all
+carry token support. A CA asked for a token never falls back to ``-ca-key``.
 
 The token refusals, each fatal at startup:
 

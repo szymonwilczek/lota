@@ -43,7 +43,6 @@ func main() {
 		listen       = flag.String("listen", ":8444", "TLS listen address")
 		caCertPath   = flag.String("ca-cert", "", "PEM CA certificate that signs AIK certificates")
 		caKeyPath    = flag.String("ca-key", "", "(dev-only) PEM PKCS#8 CA private key; production holds the CA key in an HSM")
-		p11Module    = flag.String("ca-key-pkcs11-module", "", "PKCS#11 module path holding the CA key (HSM/SoftHSM); requires a pkcs11-tagged build, PIN in LOTA_CA_PKCS11_PIN")
 		p11Token     = flag.String("ca-key-pkcs11-token", "", "PKCS#11 token label the CA key lives on")
 		p11Label     = flag.String("ca-key-pkcs11-label", "", "PKCS#11 CA key object label")
 		p11ID        = flag.String("ca-key-pkcs11-id", "", "PKCS#11 CA key object id (hex); alternative to -ca-key-pkcs11-label")
@@ -58,6 +57,9 @@ func main() {
 		tenantStrict = flag.Bool("tenant-manifest-strict", false, "refuse enrollment for an endorsement key absent from -tenant-manifest (the manifest doubles as an EK allowlist)")
 		enrollTokens = flag.String("enrollment-tokens", "", "token-to-tenant file ('<token_sha256> <tenant>' per line); a device presenting a listed enrollment token is assigned that tenant. Absent = every presented token is rejected.")
 		requireToken = flag.Bool("require-enrollment-token", false, "refuse any enrollment that presents no token; requires -enrollment-tokens")
+		p11Module    = flag.String("ca-key-pkcs11-module", "",
+			"PKCS#11 module path holding the CA key "+
+				"(HSM/SoftHSM); PIN in LOTA_CA_PKCS11_PIN")
 	)
 	var ekRoots stringList
 	flag.Var(&ekRoots, "ek-root", "PEM file of trusted TPM manufacturer roots (repeatable)")

@@ -1,8 +1,5 @@
 # SPDX-License-Identifier: MIT
 # nfpm config for the lota-attest-ca package (enrollment service)
-#
-# default pure-Go build, so no library dependencies beyond glibc
-# pkcs11/HSM build is a separate cgo artifact and is not packaged here
 name: lota-attest-ca
 arch: amd64
 platform: linux
@@ -20,6 +17,11 @@ description: |
   through credential activation and issues short-lived AIK certificates that
   the fleet verifier trusts.
 changelog: ./build/changelog.gen.yaml
+
+overrides:
+  rpm:
+    depends:
+      - glibc >= 2.34
 
 contents:
   - src: ./build/lota-attest-ca

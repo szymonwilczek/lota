@@ -1,20 +1,21 @@
 # ko build configuration for the LOTA attestation CA OCI image.
 #
-# Pure Go, linked static, without the pkcs11 tag. The HSM signing path is
-# the -hsm image, built from packaging/ko/attestca-hsm by
-# `make container-image-attest-ca-hsm`.
+# cgo on distroless cc (glibc, libstdc++, libcrypto), so the operator's
+# read-only mounted PKCS#11 module can be dlopen'd.
+# Debian 13: the module needs a glibc with every symbol version it uses
+# (Fedora 44 SoftHSM uses up to GLIBC_2.38, Debian 12 has 2.36).
 #
 # ko builds reproducible distroless image without a Dockerfile or the
 # Docker daemon; build it through `make container-image-attest-ca`.
 #
-# Nonroot distroless static base carries no shell, libc or package manager,
-# and the CA signing material must be supplied through a mounted volume.
-defaultBaseImage: gcr.io/distroless/static:nonroot
+# The base carries no shell or package manager, and the CA signing
+# material must be supplied through a mounted volume.
+defaultBaseImage: gcr.io/distroless/cc-debian13:nonroot
 builds:
   - id: lota-attest-ca
     main: .
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
     flags:
       - -trimpath
     ldflags:

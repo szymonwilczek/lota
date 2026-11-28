@@ -109,12 +109,12 @@ SoftHSM token ready, and the CA material beside it in $OUT_DIR:
   pseudonym.key   device-pseudonym secret
   softhsm2.conf   token store (SOFTHSM2_CONF)
 
-Point a PKCS#11-enabled CA at the token:
+Point the CA at the token:
 
   export SOFTHSM2_CONF=$SOFTHSM2_CONF
   export LOTA_CA_PKCS11_PIN=$PIN
 
-  make BUILD_DIR=$BUILD_DIR attest-ca GO_TAGS=pkcs11
+  make BUILD_DIR=$BUILD_DIR attest-ca
   $BUILD_DIR/lota-attest-ca -listen :8444 \\
       -ca-cert $OUT_DIR/ca.crt \\
       -ca-key-pkcs11-module $MODULE \\

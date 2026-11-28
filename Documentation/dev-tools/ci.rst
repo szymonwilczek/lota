@@ -165,8 +165,7 @@ fetched and needs no version tag.
 
 ``pkcs11-softhsm``
   Initialises a SoftHSM token and runs ``TestPKCS11SignerIssuesAIK`` in
-  ``src/attestca`` with ``-tags pkcs11``. That tag is the only build that
-  carries the PKCS#11 signer; the default build is pure Go.
+  ``src/attestca``, which ``go test ./...`` skips without a token.
 
 ``go-coverage``
   ``scripts/check-go-coverage.sh`` with a Postgres service, so the
