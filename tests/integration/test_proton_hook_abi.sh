@@ -17,31 +17,21 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "proton hook abi"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 WRAPPER="$REPO_DIR/scripts/lota-proton-hook"
 
 if [[ ! -x "$WRAPPER" ]]; then
-    echo "[proton-hook-abi] missing artifact: $WRAPPER" >&2
-    exit 2
+    FAIL "missing artifact: %s" "$WRAPPER"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-	echo "PASS: $msg"
-    else
-	echo "FAIL: $msg"
-	failures=$((failures + 1))
-    fi
-}
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 says() { grep -q -- "$2" <<<"$1"; }
 denies() { ! grep -q -- "$2" <<<"$1"; }
@@ -96,73 +86,72 @@ run_wrapper() { # <env assignments...>
     return $rc
 }
 
-echo "=== lota-proton-hook: the library each ABI is given ==="
-
 # 1. Both halves: the token, resolved by each process itself.
 BOTH=$(make_root both lib64 lib)
 run_wrapper LOTA_HOOK_LIB_ROOTS="$BOTH"
-check "both ABIs installed: the preload names \$LIB" \
-      says "$preload" '\$LIB'
-check "and the soname beneath it" says "$preload" "$SONAME"
-check "and no word size of its own" denies "$preload" "/lib64/"
+TEST "both ABIs installed: the preload names \$LIB"
+says "$preload" '\$LIB' || FAIL "%s" "$preload"
+TEST "and the soname beneath it"
+says "$preload" "$SONAME" || FAIL "%s" "$preload"
+TEST "and no word size of its own"
+denies "$preload" "/lib64/" || FAIL "%s" "$preload"
 
 # 2. Unexpanded: a shell would bake in the wrapper's own word size.
-check "the token reaches the loader unexpanded" \
-      test "$preload" = "$BOTH/\$LIB/$SONAME"
+TEST "the token reaches the loader unexpanded"
+test "$preload" = "$BOTH/\$LIB/$SONAME" || FAIL
 
 # 3. Only the 64-bit half: in a 32-bit process the token finds nothing.
 ONLY64=$(make_root only64 lib64)
 run_wrapper LOTA_HOOK_LIB_ROOTS="$ONLY64"
-check "only the 64-bit half: the preload is a plain path" \
-      denies "$preload" '\$LIB'
-check "and it is the half that is there" \
-      test "$preload" = "$ONLY64/lib64/$SONAME"
+TEST "only the 64-bit half: the preload is a plain path"
+denies "$preload" '\$LIB' || FAIL "%s" "$preload"
+TEST "and it is the half that is there"
+test "$preload" = "$ONLY64/lib64/$SONAME" || FAIL
 
 # 4. Only the 32-bit half.
 ONLY32=$(make_root only32 lib)
 run_wrapper LOTA_HOOK_LIB_ROOTS="$ONLY32"
-check "only the 32-bit half: the preload is a plain path" \
-      denies "$preload" '\$LIB'
-check "and it is the half that is there" \
-      test "$preload" = "$ONLY32/lib/$SONAME"
+TEST "only the 32-bit half: the preload is a plain path"
+denies "$preload" '\$LIB' || FAIL "%s" "$preload"
+TEST "and it is the half that is there"
+test "$preload" = "$ONLY32/lib/$SONAME" || FAIL
 
 # 5. One token reaches only halves of one name.
 MIXED=$(make_root mixed lib64)
 mkdir -p "$MIXED/lib"
 : >"$MIXED/lib/liblota_wine_hook.so.1"
 run_wrapper LOTA_HOOK_LIB_ROOTS="$MIXED"
-check "halves of different names are not a pair" \
-      denies "$preload" '\$LIB'
+TEST "halves of different names are not a pair"
+denies "$preload" '\$LIB' || FAIL "%s" "$preload"
 
 # 6. The first root holding a pair wins, e.g. a local source build.
 LOCAL=$(make_root localpair lib64 lib)
 run_wrapper LOTA_HOOK_LIB_ROOTS="$ONLY64:$LOCAL"
-check "a later root holding a pair beats an earlier half" \
-      test "$preload" = "$LOCAL/\$LIB/$SONAME"
+TEST "a later root holding a pair beats an earlier half"
+test "$preload" = "$LOCAL/\$LIB/$SONAME" || FAIL
 
 # 7. LOTA_HOOK_LIB_PATH overrides the probe.
 EXPLICIT="$WORK_DIR/explicit.so"
 : >"$EXPLICIT"
 run_wrapper LOTA_HOOK_LIB_ROOTS="$BOTH" LOTA_HOOK_LIB_PATH="$EXPLICIT"
-check "an explicit library path still wins" \
-      test "$preload" = "$EXPLICIT"
+TEST "an explicit library path still wins"
+test "$preload" = "$EXPLICIT" || FAIL
 
 # 8. No hook: reported, and the game still starts.
 EMPTY=$(make_root empty)
 run_wrapper LOTA_HOOK_LIB_ROOTS="$EMPTY"
-check "no hook at all is reported" says "$err" "hook library not found"
-check "and the game is started anyway" test "$rc" -eq 0
-check "with the preload left alone" test -z "$preload"
+TEST "no hook at all is reported"
+says "$err" "hook library not found" || FAIL "%s" "$err"
+TEST "and the game is started anyway"
+test "$rc" -eq 0 || FAIL
+TEST "with the preload left alone"
+test -z "$preload" || FAIL
 
 # 9. A preload the player set stays in front of ours.
 run_wrapper LOTA_HOOK_LIB_ROOTS="$BOTH" LD_PRELOAD=/opt/theirs.so
-check "an existing preload is kept" says "$preload" "/opt/theirs.so"
-check "and ours is still the token" says "$preload" '\$LIB'
+TEST "an existing preload is kept"
+says "$preload" "/opt/theirs.so" || FAIL "%s" "$preload"
+TEST "and ours is still the token"
+says "$preload" '\$LIB' || FAIL "%s" "$preload"
 
-echo ""
-if [[ $failures -eq 0 ]]; then
-    echo "[proton-hook-abi] OK"
-    exit 0
-fi
-echo "[proton-hook-abi] $failures check(s) failed" >&2
-exit 1
+test_end

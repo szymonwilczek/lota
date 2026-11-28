@@ -25,17 +25,7 @@
 
 #include "../src/agent/aik_cert.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 static const char *tmp_path(void)
 {
@@ -131,13 +121,27 @@ static int write_test_cert(const char *path, long before, long after)
 static void test_renew_due_decision(void)
 {
 	/* final third: remaining < total/3 */
-	CHECK(aik_cert_renew_due(100, 3000), "deep in final third is due");
-	CHECK(!aik_cert_renew_due(2000, 3000), "first two thirds not due");
-	CHECK(!aik_cert_renew_due(1000, 3000), "exact third boundary not due");
-	CHECK(aik_cert_renew_due(999, 3000), "just inside final third is due");
-	CHECK(aik_cert_renew_due(-10, 3000), "expired cert is due");
-	CHECK(aik_cert_renew_due(5, 0), "unreadable span errs toward due");
-	CHECK(aik_cert_renew_due(5, -1), "negative span errs toward due");
+	TEST("deep in final third is due");
+	if (!aik_cert_renew_due(100, 3000))
+		FAIL("expected: aik_cert_renew_due(100, 3000)");
+	TEST("first two thirds not due");
+	if (aik_cert_renew_due(2000, 3000))
+		FAIL("expected: !aik_cert_renew_due(2000, 3000)");
+	TEST("exact third boundary not due");
+	if (aik_cert_renew_due(1000, 3000))
+		FAIL("expected: !aik_cert_renew_due(1000, 3000)");
+	TEST("just inside final third is due");
+	if (!aik_cert_renew_due(999, 3000))
+		FAIL("expected: aik_cert_renew_due(999, 3000)");
+	TEST("expired cert is due");
+	if (!aik_cert_renew_due(-10, 3000))
+		FAIL("expected: aik_cert_renew_due(-10, 3000)");
+	TEST("unreadable span errs toward due");
+	if (!aik_cert_renew_due(5, 0))
+		FAIL("expected: aik_cert_renew_due(5, 0)");
+	TEST("negative span errs toward due");
+	if (!aik_cert_renew_due(5, -1))
+		FAIL("expected: aik_cert_renew_due(5, -1)");
 }
 
 static void test_lifetime_valid_cert(void)
@@ -145,14 +149,21 @@ static void test_lifetime_valid_cert(void)
 	const char *path = tmp_path();
 	int64_t remaining = 0, total = 0;
 
-	CHECK(write_test_cert(path, -60, 3600) == 0, "mint valid cert");
-	CHECK(aik_cert_lifetime_path(path, &remaining, &total) == 0,
-	      "lifetime parses valid cert");
+	TEST("mint valid cert");
+	if (write_test_cert(path, -60, 3600) != 0)
+		FAIL("expected: write_test_cert(path, -60, 3600) == 0");
+	TEST("lifetime parses valid cert");
+	if (aik_cert_lifetime_path(path, &remaining, &total) != 0)
+		FAIL("expected: aik_cert_lifetime_path(path, &remaining, "
+		     "&total) == 0");
 	/* total span ~3660s; remaining ~3600s
 	 * allow a few seconds of slack */
-	CHECK(total >= 3655 && total <= 3665, "total span as minted");
-	CHECK(remaining >= 3590 && remaining <= 3600,
-	      "remaining near notAfter");
+	TEST("total span as minted");
+	if (!(total >= 3655 && total <= 3665))
+		FAIL("expected: total >= 3655 && total <= 3665");
+	TEST("remaining near notAfter");
+	if (!(remaining >= 3590 && remaining <= 3600))
+		FAIL("expected: remaining >= 3590 && remaining <= 3600");
 	unlink(path);
 }
 
@@ -161,21 +172,30 @@ static void test_lifetime_expired_cert(void)
 	const char *path = tmp_path();
 	int64_t remaining = 0, total = 0;
 
-	CHECK(write_test_cert(path, -7200, -3600) == 0, "mint expired cert");
-	CHECK(aik_cert_lifetime_path(path, &remaining, &total) == 0,
-	      "lifetime parses expired cert");
-	CHECK(remaining < 0, "expired cert reports negative remaining");
-	CHECK(aik_cert_renew_due(remaining, total),
-	      "expired cert is renewal-due");
+	TEST("mint expired cert");
+	if (write_test_cert(path, -7200, -3600) != 0)
+		FAIL("expected: write_test_cert(path, -7200, -3600) == 0");
+	TEST("lifetime parses expired cert");
+	if (aik_cert_lifetime_path(path, &remaining, &total) != 0)
+		FAIL("expected: aik_cert_lifetime_path(path, &remaining, "
+		     "&total) == 0");
+	TEST("expired cert reports negative remaining");
+	if (remaining >= 0)
+		FAIL("expected: remaining < 0");
+	TEST("expired cert is renewal-due");
+	if (!aik_cert_renew_due(remaining, total))
+		FAIL("expected: aik_cert_renew_due(remaining, total)");
 	unlink(path);
 }
 
 static void test_missing_is_enoent(void)
 {
 	int64_t remaining = 0, total = 0;
-	CHECK(aik_cert_lifetime_path("/tmp/lota-aik-cert-absent.XXXXXX",
-				     &remaining, &total) == -ENOENT,
-	      "absent cert returns -ENOENT");
+	TEST("absent cert returns -ENOENT");
+	if (aik_cert_lifetime_path("/tmp/lota-aik-cert-absent.XXXXXX",
+				   &remaining, &total) != -ENOENT)
+		FAIL("expected: aik_cert_lifetime_path(\"/tmp/lota-aik-cert-absent.XXXXXX\", "
+		     "&remaining, &total) == -ENOENT");
 }
 
 static void test_garbage_is_einval(void)
@@ -187,23 +207,31 @@ static void test_garbage_is_einval(void)
 
 	if (fd >= 0 && !f)
 		close(fd);
-	CHECK(f != NULL, "open garbage file");
+	TEST("open garbage file");
+	if (f == NULL)
+		FAIL("expected: f != NULL");
 	if (f) {
 		fwrite("not a certificate", 1, 17, f);
 		fclose(f);
 	}
-	CHECK(aik_cert_lifetime_path(path, &remaining, &total) == -EINVAL,
-	      "unparseable cert rejected");
+	TEST("unparseable cert rejected");
+	if (aik_cert_lifetime_path(path, &remaining, &total) != -EINVAL)
+		FAIL("expected: aik_cert_lifetime_path(path, &remaining, "
+		     "&total) == -EINVAL");
 	unlink(path);
 }
 
 static void test_null_args(void)
 {
 	int64_t remaining = 0, total = 0;
-	CHECK(aik_cert_lifetime_path(NULL, &remaining, &total) == -EINVAL,
-	      "NULL path rejected");
-	CHECK(aik_cert_lifetime_path("/tmp/x", NULL, &total) == -EINVAL,
-	      "NULL remaining rejected");
+	TEST("NULL path rejected");
+	if (aik_cert_lifetime_path(NULL, &remaining, &total) != -EINVAL)
+		FAIL("expected: aik_cert_lifetime_path(NULL, &remaining, "
+		     "&total) == -EINVAL");
+	TEST("NULL remaining rejected");
+	if (aik_cert_lifetime_path("/tmp/x", NULL, &total) != -EINVAL)
+		FAIL("expected: aik_cert_lifetime_path(\"/tmp/x\", NULL, "
+		     "&total) == -EINVAL");
 }
 
 /*
@@ -219,12 +247,18 @@ static void test_certificate_names_the_key(void)
 	uint8_t spki[512];
 	size_t spki_len = 0;
 
-	CHECK(write_test_cert_ex(path, -60, 3600, spki, sizeof(spki),
-				 &spki_len) == 0,
-	      "mint a cert and keep the key it was issued over");
-	CHECK(spki_len > 0, "the minted key exported an SPKI");
-	CHECK(aik_cert_matches_key(path, spki, spki_len) == 0,
-	      "a certificate matches the key it was issued over");
+	TEST("mint a cert and keep the key it was issued over");
+	if (write_test_cert_ex(path, -60, 3600, spki, sizeof(spki),
+			       &spki_len) != 0)
+		FAIL("expected: write_test_cert_ex(path, -60, 3600, spki, "
+		     "sizeof(spki), &spki_len) == 0");
+	TEST("the minted key exported an SPKI");
+	if (spki_len <= 0)
+		FAIL("expected: spki_len > 0");
+	TEST("a certificate matches the key it was issued over");
+	if (aik_cert_matches_key(path, spki, spki_len) != 0)
+		FAIL("expected: aik_cert_matches_key(path, spki, spki_len) == "
+		     "0");
 	unlink(path);
 }
 
@@ -235,22 +269,31 @@ static void test_a_replaced_key_is_rejected(void)
 	size_t len_a = 0, len_b = 0;
 
 	/* two certificates, two keys: B's key against A's certificate */
-	CHECK(write_test_cert_ex(path, -60, 3600, spki_a, sizeof(spki_a),
-				 &len_a) == 0,
-	      "mint publisher A's certificate");
-	CHECK(write_test_cert_ex(path, -60, 3600, spki_b, sizeof(spki_b),
-				 &len_b) == 0,
-	      "mint a second certificate over a different key");
+	TEST("mint publisher A's certificate");
+	if (write_test_cert_ex(path, -60, 3600, spki_a, sizeof(spki_a),
+			       &len_a) != 0)
+		FAIL("expected: write_test_cert_ex(path, -60, 3600, spki_a, "
+		     "sizeof(spki_a), &len_a) == 0");
+	TEST("mint a second certificate over a different key");
+	if (write_test_cert_ex(path, -60, 3600, spki_b, sizeof(spki_b),
+			       &len_b) != 0)
+		FAIL("expected: write_test_cert_ex(path, -60, 3600, spki_b, "
+		     "sizeof(spki_b), &len_b) == 0");
 
 	/* path now holds B's certificate, so A's key is the stranger */
-	CHECK(aik_cert_matches_key(path, spki_b, len_b) == 0,
-	      "the second certificate matches its own key");
-	CHECK(aik_cert_matches_key(path, spki_a, len_a) == -EKEYREJECTED,
-	      "a key the certificate does not name is refused");
+	TEST("the second certificate matches its own key");
+	if (aik_cert_matches_key(path, spki_b, len_b) != 0)
+		FAIL("expected: aik_cert_matches_key(path, spki_b, len_b) == 0");
+	TEST("a key the certificate does not name is refused");
+	if (aik_cert_matches_key(path, spki_a, len_a) != -EKEYREJECTED)
+		FAIL("expected: aik_cert_matches_key(path, spki_a, len_a) == "
+		     "-EKEYREJECTED");
 
 	/* a truncated key is not a match either, and must not read past it */
-	CHECK(aik_cert_matches_key(path, spki_b, len_b - 1) == -EKEYREJECTED,
-	      "a truncated key is refused rather than matched short");
+	TEST("a truncated key is refused rather than matched short");
+	if (aik_cert_matches_key(path, spki_b, len_b - 1) != -EKEYREJECTED)
+		FAIL("expected: aik_cert_matches_key(path, spki_b, len_b - 1) "
+		     "== -EKEYREJECTED");
 	unlink(path);
 }
 
@@ -260,24 +303,34 @@ static void test_match_arguments_and_missing_cert(void)
 	uint8_t spki[512];
 	size_t spki_len = 0;
 
-	CHECK(write_test_cert_ex(path, -60, 3600, spki, sizeof(spki),
-				 &spki_len) == 0,
-	      "mint a cert for the argument checks");
+	TEST("mint a cert for the argument checks");
+	if (write_test_cert_ex(path, -60, 3600, spki, sizeof(spki),
+			       &spki_len) != 0)
+		FAIL("expected: write_test_cert_ex(path, -60, 3600, spki, "
+		     "sizeof(spki), &spki_len) == 0");
 
-	CHECK(aik_cert_matches_key(NULL, spki, spki_len) == -EINVAL,
-	      "NULL certificate path rejected");
-	CHECK(aik_cert_matches_key(path, NULL, spki_len) == -EINVAL,
-	      "NULL key rejected");
-	CHECK(aik_cert_matches_key(path, spki, 0) == -EINVAL,
-	      "empty key rejected");
+	TEST("NULL certificate path rejected");
+	if (aik_cert_matches_key(NULL, spki, spki_len) != -EINVAL)
+		FAIL("expected: aik_cert_matches_key(NULL, spki, spki_len) == "
+		     "-EINVAL");
+	TEST("NULL key rejected");
+	if (aik_cert_matches_key(path, NULL, spki_len) != -EINVAL)
+		FAIL("expected: aik_cert_matches_key(path, NULL, spki_len) == "
+		     "-EINVAL");
+	TEST("empty key rejected");
+	if (aik_cert_matches_key(path, spki, 0) != -EINVAL)
+		FAIL("expected: aik_cert_matches_key(path, spki, 0) == -EINVAL");
 	unlink(path);
 
-	CHECK(aik_cert_matches_key(path, spki, spki_len) == -ENOENT,
-	      "a profile with no certificate stored is -ENOENT, not a match");
+	TEST("a profile with no certificate stored is -ENOENT, not a match");
+	if (aik_cert_matches_key(path, spki, spki_len) != -ENOENT)
+		FAIL("expected: aik_cert_matches_key(path, spki, spki_len) == "
+		     "-ENOENT");
 }
 
 int main(void)
 {
+	test_begin("aik cert renew");
 	test_renew_due_decision();
 	test_lifetime_valid_cert();
 	test_lifetime_expired_cert();
@@ -288,10 +341,5 @@ int main(void)
 	test_a_replaced_key_is_rejected();
 	test_match_arguments_and_missing_cert();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) FAILED\n", g_failures);
-		return 1;
-	}
-	printf("\nAll AIK cert renewal tests passed\n");
-	return 0;
+	return test_end();
 }

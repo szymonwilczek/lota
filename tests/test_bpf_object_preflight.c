@@ -25,19 +25,10 @@
 #include "../src/agent/bpf_loader.h"
 #include "../src/agent/policy_sign.h"
 
-static int g_failures;
+#include "test.h"
+
 static int g_verify_verdict;
 static int g_verify_calls;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
 
 /* --wrap targets need external linkage */
 int __wrap_policy_verify_buffer(const uint8_t *data, size_t data_len,
@@ -61,17 +52,17 @@ static void write_file(const char *path, const void *data, size_t len)
 	FILE *f;
 
 	if (fd < 0) {
-		fprintf(stderr, "FAIL: open %s: %s\n", path, strerror(errno));
+		FAIL("open %s: %s", path, strerror(errno));
 		exit(1);
 	}
 	f = fdopen(fd, "wb");
 	if (!f) {
-		fprintf(stderr, "FAIL: fdopen %s: %s\n", path, strerror(errno));
+		FAIL("fdopen %s: %s", path, strerror(errno));
 		close(fd);
 		exit(1);
 	}
 	if (len && fwrite(data, 1, len, f) != len) {
-		fprintf(stderr, "FAIL: fwrite %s\n", path);
+		FAIL("fwrite %s", path);
 		fclose(f);
 		exit(1);
 	}
@@ -108,10 +99,13 @@ static void test_a_signed_object_is_accepted(void)
 	g_verify_verdict = 0;
 	g_verify_calls = 0;
 
-	CHECK(bpf_loader_verify_object(g_obj_path, g_pubkey) == 0,
-	      "an object whose signature verifies is accepted");
-	CHECK(g_verify_calls == 1,
-	      "the verdict came from the signature primitive, once");
+	TEST("an object whose signature verifies is accepted");
+	if (bpf_loader_verify_object(g_obj_path, g_pubkey) != 0)
+		FAIL("expected: bpf_loader_verify_object(g_obj_path, "
+		     "g_pubkey) == 0");
+	TEST("the verdict came from the signature primitive, once");
+	if (g_verify_calls != 1)
+		FAIL("expected: g_verify_calls == 1");
 }
 
 /*
@@ -124,8 +118,10 @@ static void test_a_bad_signature_is_refused(void)
 	write_signature(POLICY_SIG_SIZE);
 	g_verify_verdict = -EPERM;
 
-	CHECK(bpf_loader_verify_object(g_obj_path, g_pubkey) < 0,
-	      "an object signed by another key is refused");
+	TEST("an object signed by another key is refused");
+	if (bpf_loader_verify_object(g_obj_path, g_pubkey) >= 0)
+		FAIL("expected: bpf_loader_verify_object(g_obj_path, "
+		     "g_pubkey) < 0");
 }
 
 /*
@@ -140,18 +136,24 @@ static void test_missing_material_is_refused(void)
 
 	write_object();
 	unlink(g_sig_path);
-	CHECK(bpf_loader_verify_object(g_obj_path, g_pubkey) < 0,
-	      "an object with no signature beside it is refused");
+	TEST("an object with no signature beside it is refused");
+	if (bpf_loader_verify_object(g_obj_path, g_pubkey) >= 0)
+		FAIL("expected: bpf_loader_verify_object(g_obj_path, "
+		     "g_pubkey) < 0");
 
 	unlink(g_obj_path);
 	write_signature(POLICY_SIG_SIZE);
-	CHECK(bpf_loader_verify_object(g_obj_path, g_pubkey) < 0,
-	      "a signature with no object is refused");
+	TEST("a signature with no object is refused");
+	if (bpf_loader_verify_object(g_obj_path, g_pubkey) >= 0)
+		FAIL("expected: bpf_loader_verify_object(g_obj_path, "
+		     "g_pubkey) < 0");
 
 	write_object();
 	write_signature(POLICY_SIG_SIZE - 1);
-	CHECK(bpf_loader_verify_object(g_obj_path, g_pubkey) < 0,
-	      "a signature shorter than Ed25519's is refused");
+	TEST("a signature shorter than Ed25519's is refused");
+	if (bpf_loader_verify_object(g_obj_path, g_pubkey) >= 0)
+		FAIL("expected: bpf_loader_verify_object(g_obj_path, "
+		     "g_pubkey) < 0");
 }
 
 /*
@@ -167,19 +169,26 @@ static void test_no_key_is_refused_not_skipped(void)
 	g_verify_verdict = 0;
 	g_verify_calls = 0;
 
-	CHECK(bpf_loader_verify_object(g_obj_path, NULL) == -EINVAL,
-	      "an unset public key is refused");
-	CHECK(bpf_loader_verify_object(g_obj_path, "") == -EINVAL,
-	      "an empty public key path is refused");
-	CHECK(bpf_loader_verify_object(NULL, g_pubkey) == -EINVAL,
-	      "an unset object path is refused");
-	CHECK(g_verify_calls == 0,
-	      "none of those reached the signature primitive");
+	TEST("an unset public key is refused");
+	if (bpf_loader_verify_object(g_obj_path, NULL) != -EINVAL)
+		FAIL("expected: bpf_loader_verify_object(g_obj_path, NULL) == "
+		     "-EINVAL");
+	TEST("an empty public key path is refused");
+	if (bpf_loader_verify_object(g_obj_path, "") != -EINVAL)
+		FAIL("expected: bpf_loader_verify_object(g_obj_path, \"\") == "
+		     "-EINVAL");
+	TEST("an unset object path is refused");
+	if (bpf_loader_verify_object(NULL, g_pubkey) != -EINVAL)
+		FAIL("expected: bpf_loader_verify_object(NULL, g_pubkey) == "
+		     "-EINVAL");
+	TEST("none of those reached the signature primitive");
+	if (g_verify_calls != 0)
+		FAIL("expected: g_verify_calls == 0");
 }
 
 int main(void)
 {
-	printf("=== enforcement object pre-flight tests ===\n");
+	test_begin("bpf object preflight");
 	test_a_signed_object_is_accepted();
 	test_a_bad_signature_is_refused();
 	test_missing_material_is_refused();
@@ -188,10 +197,5 @@ int main(void)
 	unlink(g_obj_path);
 	unlink(g_sig_path);
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll enforcement object pre-flight tests passed\n");
-	return 0;
+	return test_end();
 }

@@ -305,7 +305,7 @@ static int load_hook(const char *token_dir, const char *publisher,
 
 	hook_lib = dlopen(LOTA_HOOK_LIB_PATH, RTLD_NOW);
 	if (!hook_lib) {
-		printf("  dlopen(%s): %s\n", LOTA_HOOK_LIB_PATH, dlerror());
+		FAIL("dlopen(%s): %s", LOTA_HOOK_LIB_PATH, dlerror());
 		return -1;
 	}
 
@@ -494,11 +494,9 @@ static void test_the_hook_names_the_title_s_publisher(void)
 	}
 
 	if (strcmp(selected, TITLE_PUBLISHER) != 0) {
-		printf("FAIL: connection selected %s\n", selected);
+		FAIL("connection selected %s", selected);
 		return;
 	}
-
-	PASS();
 }
 
 /* the consumer finds the token through the variable the hook leaves */
@@ -507,10 +505,9 @@ static void test_the_hook_exports_the_dir_it_chose(int child)
 	TEST("the hook exports the token dir it fell back to");
 
 	if (child != 0) {
-		printf("FAIL: child status %d\n", child);
+		FAIL("child status %d", child);
 		return;
 	}
-	PASS();
 }
 
 /* a launch chain's helpers come and go; the hook must not hold them up */
@@ -523,10 +520,9 @@ static void test_an_active_hook_does_not_delay_exit(long ms)
 		return;
 	}
 	if (ms > 2000) {
-		printf("FAIL: exit took %ld ms\n", ms);
+		FAIL("exit took %ld ms", ms);
 		return;
 	}
-	PASS();
 }
 
 static void test_a_named_publisher_gets_a_token(void)
@@ -553,8 +549,6 @@ static void test_a_named_publisher_gets_a_token(void)
 		FAIL("the snapshot does not carry the token");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_the_evidence_lands_next_to_the_token(void)
@@ -584,8 +578,6 @@ static void test_the_evidence_lands_next_to_the_token(void)
 		FAIL("the evidence file is not what the agent sent");
 		return;
 	}
-
-	PASS();
 }
 
 /* An unnamed launch runs and publishes status; only the token is missing */
@@ -597,19 +589,16 @@ static void test_the_refusal_reaches_the_player_s_log(void)
 		FAIL("the refusal is not in the log");
 		return;
 	}
-
-	PASS();
 }
 
 int main(void)
 {
 	char template[] = "/tmp/lota-hook-pub-XXXXXX";
 	pid_t agent;
-	int failures;
 	int unusable;
 	long exit_ms;
 
-	printf("\n=== Wine hook publisher identity ===\n\n");
+	test_begin("wine hook publisher");
 
 	if (!mkdtemp(template)) {
 		perror("mkdtemp");
@@ -636,28 +625,28 @@ int main(void)
 
 	agent = start_mock_agent();
 	if (agent < 0) {
-		printf("  cannot start the mock agent: %s\n", strerror(errno));
-		return 2;
+		FAIL("cannot start the mock agent: %s", strerror(errno));
+		return test_end();
 	}
 	unusable = run_unusable_token_dir();
 	exit_ms = run_exit_after_token();
 
 	if (run_unnamed_publisher() != 0) {
-		printf("  cannot drive the unnamed-publisher launch: %s\n",
-		       strerror(errno));
+		FAIL("cannot drive the unnamed-publisher launch: %s",
+		     strerror(errno));
 		kill(agent, SIGKILL);
 		waitpid(agent, NULL, 0);
-		return 2;
+		return test_end();
 	}
 
 	if (load_hook(named_dir, TITLE_PUBLISHER, "silent") != 0) {
 		kill(agent, SIGKILL);
 		waitpid(agent, NULL, 0);
-		return 2;
+		return test_end();
 	}
 
 	if (wait_for_file(token_path, 10) < 0)
-		printf("  the hook wrote no token\n");
+		FAIL("the hook wrote no token");
 
 	test_the_hook_names_the_title_s_publisher();
 	test_a_named_publisher_gets_a_token();
@@ -670,10 +659,7 @@ int main(void)
 	waitpid(agent, NULL, 0);
 	unlink(sock_path);
 
-	printf("\n%d/%d passed\n\n", tests_passed, tests_run);
-	failures = tests_run - tests_passed;
-
 	/* the hook's destructor would join its thread on a dead agent */
 	fflush(stdout);
-	_exit(failures ? 1 : 0);
+	_exit(test_end());
 }

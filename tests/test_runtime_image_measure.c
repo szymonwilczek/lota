@@ -12,7 +12,6 @@
  */
 
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 #include <openssl/evp.h>
 #include <errno.h>
@@ -83,57 +82,44 @@ fail:
 
 int main(void)
 {
+	test_begin("runtime image measure");
 	struct lota_runtime_image_module mods[3];
 	uint8_t a[32], b[32], ref[32];
-
-	printf("Runtime image measurement tests:\n");
 
 	/* a.out then libc.so, canonically ordered */
 	make_module(&mods[0], "a.out", 0x11);
 	make_module(&mods[1], "libc.so.6", 0x22);
 
 	TEST("digest matches independent reference layout");
-	if (lota_compute_runtime_image_digest(mods, 2, a) == 0 &&
-	    reference_digest(mods, 2, ref) == 0 && memcmp(a, ref, 32) == 0)
-		PASS();
-	else
+	if (!(lota_compute_runtime_image_digest(mods, 2, a) == 0 &&
+	      reference_digest(mods, 2, ref) == 0 && memcmp(a, ref, 32) == 0))
 		FAIL("layout drift");
 
 	TEST("digest is deterministic");
-	if (lota_compute_runtime_image_digest(mods, 2, b) == 0 &&
-	    memcmp(a, b, 32) == 0)
-		PASS();
-	else
+	if (!(lota_compute_runtime_image_digest(mods, 2, b) == 0 &&
+	      memcmp(a, b, 32) == 0))
 		FAIL("non-deterministic");
 
 	TEST("soname change alters digest");
 	make_module(&mods[1], "libc.so.7", 0x22);
-	if (lota_compute_runtime_image_digest(mods, 2, b) == 0 &&
-	    memcmp(a, b, 32) != 0)
-		PASS();
-	else
+	if (!(lota_compute_runtime_image_digest(mods, 2, b) == 0 &&
+	      memcmp(a, b, 32) != 0))
 		FAIL("soname not bound");
 
 	TEST("verity digest change alters digest");
 	make_module(&mods[1], "libc.so.6", 0x23);
-	if (lota_compute_runtime_image_digest(mods, 2, b) == 0 &&
-	    memcmp(a, b, 32) != 0)
-		PASS();
-	else
+	if (!(lota_compute_runtime_image_digest(mods, 2, b) == 0 &&
+	      memcmp(a, b, 32) != 0))
 		FAIL("verity digest not bound");
 
 	TEST("module count change alters digest");
-	if (lota_compute_runtime_image_digest(mods, 1, b) == 0 &&
-	    memcmp(a, b, 32) != 0)
-		PASS();
-	else
+	if (!(lota_compute_runtime_image_digest(mods, 1, b) == 0 &&
+	      memcmp(a, b, 32) != 0))
 		FAIL("count not bound");
 
 	TEST("empty set yields a defined digest");
-	if (lota_compute_runtime_image_digest(NULL, 0, b) == 0 &&
-	    reference_digest(NULL, 0, ref) == 0 && memcmp(b, ref, 32) == 0)
-		PASS();
-	else
+	if (!(lota_compute_runtime_image_digest(NULL, 0, b) == 0 &&
+	      reference_digest(NULL, 0, ref) == 0 && memcmp(b, ref, 32) == 0))
 		FAIL("empty set rejected");
 
 	/* reset to canonical pair for the validator tests */
@@ -141,48 +127,36 @@ int main(void)
 	make_module(&mods[1], "libc.so.6", 0x22);
 
 	TEST("validator accepts canonical order");
-	if (lota_validate_runtime_image_modules(mods, 2) == 0)
-		PASS();
-	else
+	if (lota_validate_runtime_image_modules(mods, 2) != 0)
 		FAIL("rejected valid set");
 
 	TEST("validator rejects unsorted order");
 	make_module(&mods[0], "libc.so.6", 0x22);
 	make_module(&mods[1], "a.out", 0x11);
-	if (lota_validate_runtime_image_modules(mods, 2) == -EINVAL &&
-	    lota_compute_runtime_image_digest(mods, 2, b) == -EINVAL)
-		PASS();
-	else
+	if (!(lota_validate_runtime_image_modules(mods, 2) == -EINVAL &&
+	      lota_compute_runtime_image_digest(mods, 2, b) == -EINVAL))
 		FAIL("accepted unsorted");
 
 	TEST("validator rejects duplicate module");
 	make_module(&mods[0], "libc.so.6", 0x22);
 	make_module(&mods[1], "libc.so.6", 0x22);
-	if (lota_validate_runtime_image_modules(mods, 2) == -EINVAL)
-		PASS();
-	else
+	if (lota_validate_runtime_image_modules(mods, 2) != -EINVAL)
 		FAIL("accepted duplicate");
 
 	TEST("validator accepts a SHA-256 verity length");
 	make_module_len(&mods[0], "a.out", 0x11,
 			LOTA_VERITY_DIGEST_SHA256_SIZE);
-	if (lota_validate_runtime_image_modules(mods, 1) == 0)
-		PASS();
-	else
+	if (lota_validate_runtime_image_modules(mods, 1) != 0)
 		FAIL("rejected a SHA-256 fs-verity digest");
 
 	TEST("validator rejects an unsupported verity length");
 	make_module_len(&mods[0], "a.out", 0x11, 48);
-	if (lota_validate_runtime_image_modules(mods, 1) == -EINVAL)
-		PASS();
-	else
+	if (lota_validate_runtime_image_modules(mods, 1) != -EINVAL)
 		FAIL("accepted a 48-byte verity digest");
 
 	TEST("validator rejects a zero verity length");
 	make_module_len(&mods[0], "a.out", 0x11, 0);
-	if (lota_validate_runtime_image_modules(mods, 1) == -EINVAL)
-		PASS();
-	else
+	if (lota_validate_runtime_image_modules(mods, 1) != -EINVAL)
 		FAIL("accepted an empty verity digest");
 
 	TEST("verity length is bound into the digest");
@@ -190,28 +164,20 @@ int main(void)
 			LOTA_VERITY_DIGEST_SHA256_SIZE);
 	make_module_len(&mods[1], "libc.so.6", 0x22,
 			LOTA_VERITY_DIGEST_SHA256_SIZE);
-	if (lota_compute_runtime_image_digest(mods, 2, b) == 0 &&
-	    reference_digest(mods, 2, ref) == 0 && memcmp(b, ref, 32) == 0 &&
-	    memcmp(a, b, 32) != 0)
-		PASS();
-	else
+	if (!(lota_compute_runtime_image_digest(mods, 2, b) == 0 &&
+	      reference_digest(mods, 2, ref) == 0 && memcmp(b, ref, 32) == 0 &&
+	      memcmp(a, b, 32) != 0))
 		FAIL("SHA-256 set folds like the SHA-512 one");
 
 	TEST("validator rejects empty soname");
 	make_module(&mods[0], "a.out", 0x11);
 	mods[0].soname[0] = '\0';
-	if (lota_validate_runtime_image_modules(mods, 1) == -EINVAL)
-		PASS();
-	else
+	if (lota_validate_runtime_image_modules(mods, 1) != -EINVAL)
 		FAIL("accepted empty soname");
 
 	TEST("validator rejects NULL set with non-zero count");
-	if (lota_validate_runtime_image_modules(NULL, 1) == -EINVAL)
-		PASS();
-	else
+	if (lota_validate_runtime_image_modules(NULL, 1) != -EINVAL)
 		FAIL("accepted NULL set");
 
-	printf("\n%d/%d runtime image measurement tests passed\n", tests_passed,
-	       tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

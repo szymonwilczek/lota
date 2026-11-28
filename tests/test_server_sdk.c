@@ -29,33 +29,7 @@
 #include "lota_token.h"
 #include "token_forge.h"
 
-#define GREEN "\033[32m"
-#define RED "\033[31m"
-#define YELLOW "\033[33m"
-#define RESET "\033[0m"
-#define BOLD "\033[1m"
-
-static int tests_run = 0;
-static int tests_pass = 0;
-static int tests_fail = 0;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-50s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                                   \
-	do {                                     \
-		tests_pass++;                    \
-		printf(GREEN "PASS" RESET "\n"); \
-	} while (0)
-
-#define FAIL(reason)                                        \
-	do {                                                \
-		tests_fail++;                               \
-		printf(RED "FAIL" RESET " — %s\n", reason); \
-	} while (0)
+#include "test.h"
 
 /*
  * A tampered registry digest is the one signal a relying party has that the
@@ -65,8 +39,7 @@ static int tests_fail = 0;
 static void test_verify_tampered_registry_digest_is_named(
 	EVP_PKEY *key, const uint8_t *aik_der, size_t aik_len)
 {
-	TEST("lota_server_verify_token - tampered registry digest is not a "
-	     "nonce failure");
+	TEST("lota_server_verify_token - tampered digest is no nonce failure");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0 };
@@ -114,8 +87,6 @@ static void test_verify_tampered_registry_digest_is_named(
 		FAIL("the runtime-image refusal has no message of its own");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_serialize_basic(void)
@@ -143,7 +114,7 @@ static void test_serialize_basic(void)
 		char msg[64];
 		snprintf(msg, sizeof(msg), "size=%zu, expected=%zu", expected,
 			 (size_t)LOTA_TOKEN_HEADER_SIZE + 64 + 32);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 
@@ -161,8 +132,6 @@ static void test_serialize_basic(void)
 		FAIL("bad magic");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_serialize_buffer_too_small(void)
@@ -180,9 +149,7 @@ static void test_serialize_buffer_too_small(void)
 
 	uint8_t tiny[10];
 	int ret = lota_token_serialize(&token, tiny, sizeof(tiny), NULL);
-	if (ret == LOTA_ERR_BUFFER_TOO_SMALL) {
-		PASS();
-	} else {
+	if (ret != LOTA_ERR_BUFFER_TOO_SMALL) {
 		FAIL("expected LOTA_ERR_BUFFER_TOO_SMALL");
 	}
 }
@@ -229,12 +196,11 @@ static void test_serialize_requires_protect_version(void)
 		FAIL("token failed to serialize");
 		return;
 	}
-	PASS();
 }
 
 static void test_serialize_total_size_within_u16(void)
 {
-	TEST("lota_token_serialize - total_size stays within uint16 wire field");
+	TEST("lota_token_serialize - total_size fits the uint16 wire field");
 
 	struct lota_token token;
 	memset(&token, 0, sizeof(token));
@@ -274,8 +240,6 @@ static void test_serialize_total_size_within_u16(void)
 			return;
 		}
 	}
-
-	PASS();
 }
 
 static void test_parse_untrusted(void)
@@ -309,7 +273,7 @@ static void test_parse_untrusted(void)
 		char msg[64];
 		snprintf(msg, sizeof(msg), "parse returned %d: %s", ret,
 			 lota_server_strerror(ret));
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 
@@ -323,8 +287,6 @@ static void test_parse_untrusted(void)
 		FAIL("nonce not echoed");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_verify_full_success(EVP_PKEY *key, const uint8_t *aik_der,
@@ -352,7 +314,7 @@ static void test_verify_full_success(EVP_PKEY *key, const uint8_t *aik_der,
 		char msg[128];
 		snprintf(msg, sizeof(msg), "verify returned %d: %s", ret,
 			 lota_server_strerror(ret));
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 
@@ -368,11 +330,9 @@ static void test_verify_full_success(EVP_PKEY *key, const uint8_t *aik_der,
 		char msg[64];
 		snprintf(msg, sizeof(msg), "pcr_digest_len=%zu, want 32",
 			 claims.pcr_digest_len);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-
-	PASS();
 }
 
 static void test_verify_full_success_sha384(EVP_PKEY *key,
@@ -401,7 +361,7 @@ static void test_verify_full_success_sha384(EVP_PKEY *key,
 		char msg[128];
 		snprintf(msg, sizeof(msg), "verify returned %d: %s", ret,
 			 lota_server_strerror(ret));
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 
@@ -409,11 +369,9 @@ static void test_verify_full_success_sha384(EVP_PKEY *key,
 		char msg[64];
 		snprintf(msg, sizeof(msg), "pcr_digest_len=%zu, want 48",
 			 claims.pcr_digest_len);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-
-	PASS();
 }
 
 static void test_verify_full_success_sha512(EVP_PKEY *key,
@@ -442,7 +400,7 @@ static void test_verify_full_success_sha512(EVP_PKEY *key,
 		char msg[128];
 		snprintf(msg, sizeof(msg), "verify returned %d: %s", ret,
 			 lota_server_strerror(ret));
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 
@@ -450,18 +408,16 @@ static void test_verify_full_success_sha512(EVP_PKEY *key,
 		char msg[64];
 		snprintf(msg, sizeof(msg), "pcr_digest_len=%zu, want 64",
 			 claims.pcr_digest_len);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-
-	PASS();
 }
 
 static void test_verify_with_expected_nonce(EVP_PKEY *key,
 					    const uint8_t *aik_der,
 					    size_t aik_len)
 {
-	TEST("lota_server_verify_token — correct expected_nonce");
+	TEST("lota_server_verify_token - correct expected_nonce");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0x01, 0x02, 0x03 };
@@ -483,14 +439,12 @@ static void test_verify_with_expected_nonce(EVP_PKEY *key,
 		FAIL("should pass with correct nonce");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_verify_wrong_nonce(EVP_PKEY *key, const uint8_t *aik_der,
 				    size_t aik_len)
 {
-	TEST("lota_server_verify_token — wrong expected_nonce → NONCE_FAIL");
+	TEST("lota_server_verify_token - wrong expected_nonce -> NONCE_FAIL");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0x01, 0x02, 0x03 };
@@ -509,19 +463,17 @@ static void test_verify_wrong_nonce(EVP_PKEY *key, const uint8_t *aik_der,
 	struct lota_server_claims claims;
 	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
 				       wrong_nonce, &claims);
-	if (ret == LOTA_SERVER_ERR_NONCE_FAIL) {
-		PASS();
-	} else {
+	if (ret != LOTA_SERVER_ERR_NONCE_FAIL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected NONCE_FAIL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 	}
 }
 
 static void test_verify_bad_signature(EVP_PKEY *key, const uint8_t *aik_der,
 				      size_t aik_len)
 {
-	TEST("lota_server_verify_token — wrong AIK key → SIG_FAIL");
+	TEST("lota_server_verify_token - wrong AIK key -> SIG_FAIL");
 	(void)key; /* original key, not used directly */
 
 	/* DIFFERENT key to sign with */
@@ -548,19 +500,17 @@ static void test_verify_bad_signature(EVP_PKEY *key, const uint8_t *aik_der,
 				       nonce, &claims);
 	EVP_PKEY_free(wrong_key);
 
-	if (ret == LOTA_SERVER_ERR_SIG_FAIL) {
-		PASS();
-	} else {
+	if (ret != LOTA_SERVER_ERR_SIG_FAIL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected SIG_FAIL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 	}
 }
 
 static void test_verify_tampered_flags(EVP_PKEY *key, const uint8_t *aik_der,
 				       size_t aik_len)
 {
-	TEST("lota_server_verify_token - tampered flags → NONCE_FAIL");
+	TEST("lota_server_verify_token - tampered flags -> NONCE_FAIL");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0 };
@@ -581,12 +531,10 @@ static void test_verify_tampered_flags(EVP_PKEY *key, const uint8_t *aik_der,
 	struct lota_server_claims claims;
 	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
 				       nonce, &claims);
-	if (ret == LOTA_SERVER_ERR_NONCE_FAIL) {
-		PASS();
-	} else {
+	if (ret != LOTA_SERVER_ERR_NONCE_FAIL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected NONCE_FAIL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 	}
 }
 
@@ -594,7 +542,7 @@ static void test_verify_tampered_stopped_ms(EVP_PKEY *key,
 					    const uint8_t *aik_der,
 					    size_t aik_len)
 {
-	TEST("lota_server_verify_token - tampered stopped_ms → NONCE_FAIL");
+	TEST("lota_server_verify_token - tampered stopped_ms -> NONCE_FAIL");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0 };
@@ -615,19 +563,17 @@ static void test_verify_tampered_stopped_ms(EVP_PKEY *key,
 	struct lota_server_claims claims;
 	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
 				       nonce, &claims);
-	if (ret == LOTA_SERVER_ERR_NONCE_FAIL) {
-		PASS();
-	} else {
+	if (ret != LOTA_SERVER_ERR_NONCE_FAIL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected NONCE_FAIL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 	}
 }
 
 static void test_verify_tampered_pcr_mask(EVP_PKEY *key, const uint8_t *aik_der,
 					  size_t aik_len)
 {
-	TEST("lota_server_verify_token - tampered pcr_mask → NONCE_FAIL");
+	TEST("lota_server_verify_token - tampered pcr_mask -> NONCE_FAIL");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0 };
@@ -652,12 +598,10 @@ static void test_verify_tampered_pcr_mask(EVP_PKEY *key, const uint8_t *aik_der,
 	struct lota_server_claims claims;
 	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
 				       nonce, &claims);
-	if (ret == LOTA_SERVER_ERR_NONCE_FAIL) {
-		PASS();
-	} else {
+	if (ret != LOTA_SERVER_ERR_NONCE_FAIL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected NONCE_FAIL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 	}
 }
 
@@ -746,13 +690,11 @@ static void test_verify_mixed_pcr_banks_rejected(EVP_PKEY *key,
 	free(attest);
 	free(sig);
 
-	if (ret == LOTA_SERVER_ERR_ATTEST_PARSE) {
-		PASS();
-	} else {
+	if (ret != LOTA_SERVER_ERR_ATTEST_PARSE) {
 		char msg[80];
 		snprintf(msg, sizeof(msg), "expected ERR_ATTEST_PARSE, got %d",
 			 ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 	}
 }
 
@@ -780,14 +722,13 @@ static void test_verify_expired(EVP_PKEY *key, const uint8_t *aik_der,
 	if (ret != LOTA_SERVER_ERR_EXPIRED) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected ERR_EXPIRED, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	if (!claims.expired) {
 		FAIL("claims.expired should be 1");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -800,7 +741,7 @@ static void test_verify_beyond_freshness_window(EVP_PKEY *key,
 						const uint8_t *aik_der,
 						size_t aik_len)
 {
-	TEST("lota_server_verify_token - beyond freshness window -> ERR_FUTURE");
+	TEST("lota_server_verify_token - past freshness window -> ERR_FUTURE");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0 };
@@ -823,10 +764,9 @@ static void test_verify_beyond_freshness_window(EVP_PKEY *key,
 	if (ret != LOTA_SERVER_ERR_FUTURE) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected ERR_FUTURE, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 /* Token an agent on the default interval mints must stay acceptable */
@@ -855,10 +795,9 @@ static void test_verify_at_freshness_window(EVP_PKEY *key,
 	if (ret != LOTA_SERVER_OK) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected OK, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 static void test_strerror_new_codes(void)
@@ -876,9 +815,7 @@ static void test_strerror_new_codes(void)
 	if (!s || strlen(s) == 0)
 		all_ok = 0;
 
-	if (all_ok) {
-		PASS();
-	} else {
+	if (!all_ok) {
 		FAIL("some strerror returned NULL or empty for new codes");
 	}
 }
@@ -888,9 +825,7 @@ static void test_malformed_inputs(void)
 	TEST("lota_server_verify_token - NULL inputs");
 	struct lota_server_claims claims;
 	int ret = lota_server_verify_token(NULL, 0, NULL, 0, NULL, &claims);
-	if (ret == LOTA_SERVER_ERR_INVALID_ARG) {
-		PASS();
-	} else {
+	if (ret != LOTA_SERVER_ERR_INVALID_ARG) {
 		FAIL("expected INVALID_ARG");
 	}
 
@@ -901,12 +836,10 @@ static void test_malformed_inputs(void)
 	ret = lota_server_verify_token(tiny, sizeof(tiny), fake_key,
 				       sizeof(fake_key), expected_nonce,
 				       &claims);
-	if (ret == LOTA_SERVER_ERR_BAD_TOKEN) {
-		PASS();
-	} else {
+	if (ret != LOTA_SERVER_ERR_BAD_TOKEN) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected BAD_TOKEN, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 	}
 
 	TEST("lota_server_verify_token - bad magic");
@@ -916,9 +849,7 @@ static void test_malformed_inputs(void)
 	ret = lota_server_verify_token(bad_magic, sizeof(bad_magic), fake_key,
 				       sizeof(fake_key), expected_nonce,
 				       &claims);
-	if (ret == LOTA_SERVER_ERR_BAD_TOKEN) {
-		PASS();
-	} else {
+	if (ret != LOTA_SERVER_ERR_BAD_TOKEN) {
 		FAIL("expected BAD_TOKEN for bad magic");
 	}
 }
@@ -947,24 +878,20 @@ static void test_unknown_hash_alg_rejected(EVP_PKEY *key,
 
 	int ret = lota_server_verify_token(tokbuf, tok_written, aik_der,
 					   aik_len, nonce, &claims);
-	if (ret == LOTA_SERVER_ERR_BAD_TOKEN) {
-		PASS();
-	} else {
+	if (ret != LOTA_SERVER_ERR_BAD_TOKEN) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected BAD_TOKEN, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 	}
 
 	TEST("lota_server_parse_token - unknown hash_alg rejected");
 
 	struct lota_server_claims parsed;
 	ret = lota_server_parse_token(tokbuf, tok_written, &parsed);
-	if (ret == LOTA_SERVER_ERR_BAD_TOKEN) {
-		PASS();
-	} else {
+	if (ret != LOTA_SERVER_ERR_BAD_TOKEN) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected BAD_TOKEN, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 	}
 }
 
@@ -995,9 +922,7 @@ static void test_strerror(void)
 	if (!s || strlen(s) == 0)
 		all_ok = 0;
 
-	if (all_ok) {
-		PASS();
-	} else {
+	if (!all_ok) {
 		FAIL("some strerror returned NULL or empty");
 	}
 }
@@ -1007,10 +932,8 @@ static void test_sdk_version(void)
 	TEST("lota_server_sdk_version - returns version string");
 
 	const char *v = lota_server_sdk_version();
-	if (v && v[0] != '\0') {
-		PASS();
-	} else {
-		FAIL(v ? "empty" : "NULL");
+	if (!(v && v[0] != '\0')) {
+		FAIL("%s", v ? "empty" : "NULL");
 	}
 }
 
@@ -1049,7 +972,6 @@ static void test_update_pending_flag_is_distinct_and_named(void)
 		FAIL("pending update masked the attested flag");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1073,7 +995,6 @@ static void test_sdk_version_agrees_across_libraries(void)
 		FAIL("gaming and server report different versions");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1088,14 +1009,13 @@ static void test_sdk_version_is_a_real_build(void)
 	const char *v = lota_server_sdk_version();
 
 	if (!v || v[0] == '\0') {
-		FAIL(v ? "empty" : "NULL");
+		FAIL("%s", v ? "empty" : "NULL");
 		return;
 	}
 	if (strcmp(v, "unknown") == 0) {
 		FAIL("built without a version string");
 		return;
 	}
-	PASS();
 }
 
 /* Append @n bytes of @v little-endian to @b at *@off. */
@@ -1192,8 +1112,6 @@ static void test_registry_digest(void)
 		    LOTA_SERVER_OK ||
 	    memcmp(want, got, sizeof(got)) != 0)
 		FAIL("digest differs from the documented layout");
-	else
-		PASS();
 
 	TEST("registry_digest binds what the list leaves out");
 	{
@@ -1286,9 +1204,7 @@ static void test_registry_digest(void)
 		ok &= lota_server_registry_digest(flags, edit, 4, actors, 2,
 						  other) == LOTA_SERVER_OK &&
 		      memcmp(other, got, sizeof(got)) == 0;
-		if (ok)
-			PASS();
-		else
+		if (!ok)
 			FAIL("an edit to the list kept the digest");
 	}
 
@@ -1339,9 +1255,7 @@ static void test_registry_digest(void)
 		     lota_server_registry_digest(
 			     flags, mods, LOTA_SERVER_REGISTRY_MAX_OBJECTS + 1,
 			     NULL, 0, got) == LOTA_SERVER_ERR_INVALID_ARG;
-		if (ok)
-			PASS();
-		else
+		if (!ok)
 			FAIL("accepted a malformed module");
 	}
 
@@ -1381,9 +1295,7 @@ static void test_registry_digest(void)
 				   flags, mods, 4, actors,
 				   LOTA_SERVER_REGISTRY_MAX_ACTORS + 1,
 				   got) == LOTA_SERVER_ERR_INVALID_ARG;
-		if (ok)
-			PASS();
-		else
+		if (!ok)
 			FAIL("accepted a malformed actor");
 	}
 }
@@ -1524,10 +1436,8 @@ static void test_boot_evidence_honest(void)
 		{ ev_authority, sizeof(ev_authority), NULL, 0 },
 	};
 	ret = evidence_says(boot_on, 4, &sb);
-	if (ret == LOTA_SERVER_OK && sb == 1)
-		PASS();
-	else
-		FAIL(lota_server_strerror(ret));
+	if (!(ret == LOTA_SERVER_OK && sb == 1))
+		FAIL("%s", lota_server_strerror(ret));
 
 	TEST("boot evidence - a boot without Secure Boot reads off");
 	struct test_event boot_off[] = {
@@ -1537,9 +1447,7 @@ static void test_boot_evidence_honest(void)
 	};
 	sb = -1;
 	ret = evidence_says(boot_off, 3, &sb);
-	if (ret == LOTA_SERVER_OK && sb == 0)
-		PASS();
-	else
+	if (!(ret == LOTA_SERVER_OK && sb == 0))
 		FAIL("an off boot did not read off");
 }
 
@@ -1561,9 +1469,7 @@ static void test_boot_evidence_root_extends(void)
 		{ on, on_len, on, on_len },
 	};
 	ret = evidence_says(appended, 4, &sb);
-	if (ret == LOTA_SERVER_OK && sb == 0)
-		PASS();
-	else
+	if (!(ret == LOTA_SERVER_OK && sb == 0))
 		FAIL("a measurement root added reads on");
 
 	TEST("boot evidence - a later separator does not reopen the window");
@@ -1575,9 +1481,7 @@ static void test_boot_evidence_root_extends(void)
 	};
 	sb = -1;
 	ret = evidence_says(early_separator, 4, &sb);
-	if (ret == LOTA_SERVER_OK && sb == 0)
-		PASS();
-	else
+	if (!(ret == LOTA_SERVER_OK && sb == 0))
 		FAIL("a measurement after a second separator reads on");
 
 	TEST("boot evidence - no separator reads off");
@@ -1588,9 +1492,7 @@ static void test_boot_evidence_root_extends(void)
 	};
 	sb = -1;
 	ret = evidence_says(no_separator, 3, &sb);
-	if (ret == LOTA_SERVER_OK && sb == 0)
-		PASS();
-	else
+	if (!(ret == LOTA_SERVER_OK && sb == 0))
 		FAIL("a measurement with no separator before it reads on");
 
 	TEST("boot evidence - a SecureBoot measurement sent hidden reads off");
@@ -1600,9 +1502,7 @@ static void test_boot_evidence_root_extends(void)
 	};
 	sb = -1;
 	ret = evidence_says(hidden, 2, &sb);
-	if (ret == LOTA_SERVER_OK && sb == 0)
-		PASS();
-	else
+	if (!(ret == LOTA_SERVER_OK && sb == 0))
 		FAIL("an unread measurement reads on");
 
 	TEST("boot evidence - conflicting SecureBoot measurements read off");
@@ -1613,9 +1513,7 @@ static void test_boot_evidence_root_extends(void)
 	};
 	sb = -1;
 	ret = evidence_says(conflict, 3, &sb);
-	if (ret == LOTA_SERVER_OK && sb == 0)
-		PASS();
-	else
+	if (!(ret == LOTA_SERVER_OK && sb == 0))
 		FAIL("a 1 next to a 0 reads on");
 
 	TEST("boot evidence - a SecureBoot value wider than a byte reads off");
@@ -1625,9 +1523,7 @@ static void test_boot_evidence_root_extends(void)
 	};
 	sb = -1;
 	ret = evidence_says(wide_value, 2, &sb);
-	if (ret == LOTA_SERVER_OK && sb == 0)
-		PASS();
-	else
+	if (!(ret == LOTA_SERVER_OK && sb == 0))
 		FAIL("a two-byte value reads on");
 
 	TEST("boot evidence - data that is not what was measured is refused");
@@ -1637,9 +1533,7 @@ static void test_boot_evidence_root_extends(void)
 	};
 	sb = -1;
 	ret = evidence_says(swapped, 2, &sb);
-	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE && sb == 0)
-		PASS();
-	else
+	if (!(ret == LOTA_SERVER_ERR_BAD_EVIDENCE && sb == 0))
 		FAIL("SecureBoot=1 data over a SecureBoot=0 digest passed");
 }
 
@@ -1661,9 +1555,7 @@ static void test_boot_evidence_edits(void)
 	buf[LOTA_BOOT_EVIDENCE_HEADER_SIZE] ^= 1;
 	ret = lota_server_verify_boot_evidence(&claims, buf, len, &sb);
 	buf[LOTA_BOOT_EVIDENCE_HEADER_SIZE] ^= 1;
-	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE)
-		PASS();
-	else
+	if (ret != LOTA_SERVER_ERR_BAD_EVIDENCE)
 		FAIL("PCR 0 changed and the evidence passed");
 
 	TEST("boot evidence - an event left out is refused");
@@ -1674,94 +1566,74 @@ static void test_boot_evidence_edits(void)
 			&claims, buf, len - LOTA_BOOT_EVIDENCE_EVENT_SIZE, &sb);
 	}
 	ev_le16(buf + 2, 3);
-	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE)
-		PASS();
-	else
+	if (ret != LOTA_SERVER_ERR_BAD_EVIDENCE)
 		FAIL("evidence short of the separator passed");
 
 	TEST("boot evidence - trailing bytes are refused");
 	buf[len] = 0;
 	ret = lota_server_verify_boot_evidence(&claims, buf, len + 1, &sb);
-	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE)
-		PASS();
-	else
+	if (ret != LOTA_SERVER_ERR_BAD_EVIDENCE)
 		FAIL("a trailing byte passed");
 
 	TEST("boot evidence - another token's PCR mask is refused");
 	other = claims;
 	other.pcr_mask &= ~(1u << 14);
 	ret = lota_server_verify_boot_evidence(&other, buf, len, &sb);
-	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE)
-		PASS();
-	else
+	if (ret != LOTA_SERVER_ERR_BAD_EVIDENCE)
 		FAIL("the mask was not held to the token's");
 
 	TEST("boot evidence - another token's PCR digest is refused");
 	other = claims;
 	other.pcr_digest[0] ^= 1;
 	ret = lota_server_verify_boot_evidence(&other, buf, len, &sb);
-	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE)
-		PASS();
-	else
+	if (ret != LOTA_SERVER_ERR_BAD_EVIDENCE)
 		FAIL("the digest was not held to the token's");
 
 	TEST("boot evidence - a truncated buffer is refused");
 	ret = lota_server_verify_boot_evidence(&claims, buf, len - 1, &sb);
-	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE)
-		PASS();
-	else
+	if (ret != LOTA_SERVER_ERR_BAD_EVIDENCE)
 		FAIL("a short buffer passed");
 
 	TEST("boot evidence - NULL arguments are refused");
-	if (lota_server_verify_boot_evidence(NULL, buf, len, &sb) ==
-		    LOTA_SERVER_ERR_INVALID_ARG &&
-	    lota_server_verify_boot_evidence(&claims, NULL, len, &sb) ==
-		    LOTA_SERVER_ERR_INVALID_ARG &&
-	    lota_server_verify_boot_evidence(&claims, buf, len, NULL) ==
-		    LOTA_SERVER_ERR_INVALID_ARG)
-		PASS();
-	else
+	if (!(lota_server_verify_boot_evidence(NULL, buf, len, &sb) ==
+		      LOTA_SERVER_ERR_INVALID_ARG &&
+	      lota_server_verify_boot_evidence(&claims, NULL, len, &sb) ==
+		      LOTA_SERVER_ERR_INVALID_ARG &&
+	      lota_server_verify_boot_evidence(&claims, buf, len, NULL) ==
+		      LOTA_SERVER_ERR_INVALID_ARG))
 		FAIL("a NULL argument was accepted");
 }
 
 int main(void)
 {
-	printf(BOLD "\n=== LOTA Server SDK - Test Suite ===\n\n" RESET);
+	test_begin("server sdk");
 
 	/* test RSA-2048 key pair */
-	printf(YELLOW "Generating RSA-2048 test key pair..." RESET "\n");
 	EVP_PKEY *key = forge_rsa_key();
 	if (!key) {
-		fprintf(stderr, "Failed to generate RSA key\n");
-		return 1;
+		FAIL("cannot generate an RSA key");
+		return test_end();
 	}
 
 	/* public key as DER */
 	size_t aik_len = 0;
 	uint8_t *aik_der = forge_pubkey_der(key, &aik_len);
 	if (!aik_der) {
-		fprintf(stderr, "Failed to export public key\n");
-		return 1;
+		FAIL("cannot export the public key");
+		return test_end();
 	}
-	printf(YELLOW "AIK public key: %zu bytes (DER/PKIX)\n\n" RESET,
-	       aik_len);
 
-	printf(BOLD "Serialization (Gaming SDK):\n" RESET);
 	test_serialize_basic();
 	test_serialize_buffer_too_small();
 	test_serialize_total_size_within_u16();
 
-	printf(BOLD "\nParsing (Server SDK - untrusted):\n" RESET);
 	test_parse_untrusted();
 
-	printf(BOLD
-	       "\nFull Verification (Server SDK - RSA + nonce binding):\n" RESET);
 	test_verify_full_success(key, aik_der, aik_len);
 	test_verify_full_success_sha384(key, aik_der, aik_len);
 	test_verify_full_success_sha512(key, aik_der, aik_len);
 	test_verify_with_expected_nonce(key, aik_der, aik_len);
 
-	printf(BOLD "\nRejection Scenarios:\n" RESET);
 	test_verify_wrong_nonce(key, aik_der, aik_len);
 	test_verify_bad_signature(key, aik_der, aik_len);
 	test_verify_tampered_flags(key, aik_der, aik_len);
@@ -1773,7 +1645,6 @@ int main(void)
 	test_verify_beyond_freshness_window(key, aik_der, aik_len);
 	test_verify_at_freshness_window(key, aik_der, aik_len);
 
-	printf(BOLD "\nEdge Cases & Error Handling:\n" RESET);
 	test_malformed_inputs();
 	test_serialize_requires_protect_version();
 	test_unknown_hash_alg_rejected(key, aik_der, aik_len);
@@ -1788,14 +1659,8 @@ int main(void)
 	test_boot_evidence_root_extends();
 	test_boot_evidence_edits();
 
-	printf(BOLD "\n=== Results: %d/%d passed" RESET, tests_pass, tests_run);
-	if (tests_fail > 0) {
-		printf(RED " (%d FAILED)" RESET, tests_fail);
-	}
-	printf("\n\n");
-
 	free(aik_der);
 	EVP_PKEY_free(key);
 
-	return tests_fail > 0 ? 1 : 0;
+	return test_end();
 }

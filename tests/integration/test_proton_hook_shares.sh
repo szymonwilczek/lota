@@ -16,6 +16,9 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "proton hook shares"
+
 # assertions grep the wrapper's own messages
 export LC_ALL=C
 
@@ -23,25 +26,12 @@ REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 WRAPPER="$REPO_DIR/scripts/lota-proton-hook"
 
 if [[ ! -x "$WRAPPER" ]]; then
-    echo "[proton-hook-shares] missing artifact: $WRAPPER" >&2
-    exit 2
+    FAIL "missing artifact: %s" "$WRAPPER"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-	echo "PASS: $msg"
-    else
-	echo "FAIL: $msg"
-	failures=$((failures + 1))
-    fi
-}
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 says() { grep -qi -- "$2" <<<"$1"; }
 denies() { ! grep -qi -- "$2" <<<"$1"; }
@@ -86,8 +76,6 @@ run_wrapper() {
     return $rc
 }
 
-echo "=== lota-proton-hook: what the game's container is given ==="
-
 # session dir as under Steam: agent socket dir beside the hook's dir
 RUNTIME="$WORK_DIR/run"
 mkdir -p "$RUNTIME/lota"
@@ -96,60 +84,66 @@ mkdir -p "$RUNTIME/lota"
 # 1. The wrapper alone shares both directories.
 run_wrapper XDG_RUNTIME_DIR="$RUNTIME" \
 	    LOTA_HOOK_SOCKET="$RUNTIME/lota/lota.sock"
-check "the hook's own directory is shared" \
-      shares "$rw" "$RUNTIME/lota-hook"
-check "the socket's directory is shared" \
-      shares "$rw" "$RUNTIME/lota"
+TEST "the hook's own directory is shared"
+shares "$rw" "$RUNTIME/lota-hook" || FAIL
+TEST "the socket's directory is shared"
+shares "$rw" "$RUNTIME/lota" || FAIL
 
 # 2. Created on the host first, or there is nothing to bind.
-check "the hook's directory is created on the host" \
-      test -d "$RUNTIME/lota-hook"
-check "and it is the player's alone" \
-      test "$(stat -c %a "$RUNTIME/lota-hook")" = "700"
+TEST "the hook's directory is created on the host"
+test -d "$RUNTIME/lota-hook" || FAIL
+TEST "and it is the player's alone"
+test "$(stat -c %a "$RUNTIME/lota-hook")" = "700" || FAIL
 
 # 3. A player's own share is kept.
 run_wrapper XDG_RUNTIME_DIR="$RUNTIME" \
 	    LOTA_HOOK_SOCKET="$RUNTIME/lota/lota.sock" \
 	    PRESSURE_VESSEL_FILESYSTEMS_RW="/opt/mymods"
-check "an existing share survives" shares "$rw" "/opt/mymods"
-check "and the hook's directory is added to it" \
-      shares "$rw" "$RUNTIME/lota-hook"
+TEST "an existing share survives"
+shares "$rw" "/opt/mymods" || FAIL
+TEST "and the hook's directory is added to it"
+shares "$rw" "$RUNTIME/lota-hook" || FAIL
 
 # 4. The setup script's launch string already names both: no duplicates.
 run_wrapper XDG_RUNTIME_DIR="$RUNTIME" \
 	    LOTA_HOOK_SOCKET="$RUNTIME/lota/lota.sock" \
 	    PRESSURE_VESSEL_FILESYSTEMS_RW="$RUNTIME/lota:$RUNTIME/lota-hook"
-check "a directory already shared is shared once" \
-      shares_once "$rw" "$RUNTIME/lota-hook"
-check "and so is the socket's" shares_once "$rw" "$RUNTIME/lota"
+TEST "a directory already shared is shared once"
+shares_once "$rw" "$RUNTIME/lota-hook" || FAIL
+TEST "and so is the socket's"
+shares_once "$rw" "$RUNTIME/lota" || FAIL
 
 # 5. LOTA_HOOK_TOKEN_DIR is followed.
 OVERRIDE="$WORK_DIR/elsewhere"
 run_wrapper XDG_RUNTIME_DIR="$RUNTIME" LOTA_HOOK_TOKEN_DIR="$OVERRIDE"
-check "the overridden token directory is shared" shares "$rw" "$OVERRIDE"
-check "the default is not shared instead" denies "$rw" "$RUNTIME/lota-hook"
-check "the overridden directory is created" test -d "$OVERRIDE"
+TEST "the overridden token directory is shared"
+shares "$rw" "$OVERRIDE" || FAIL
+TEST "the default is not shared instead"
+denies "$rw" "$RUNTIME/lota-hook" || FAIL "%s" "$rw"
+TEST "the overridden directory is created"
+test -d "$OVERRIDE" || FAIL
 
 # 6. No session: the library's /tmp/lota-<uid> fallback is shared.
 run_wrapper XDG_RUNTIME_DIR=
-check "the fallback directory is shared when there is no session" \
-      shares "$rw" "/tmp/lota-$(id -u)"
+TEST "the fallback directory is shared when there is no session"
+shares "$rw" "/tmp/lota-$(id -u)" || FAIL
 
 # 7. A missing socket dir is left out: a nonexistent path fails the
 #    container build, and the agent owns that directory.
 run_wrapper XDG_RUNTIME_DIR="$RUNTIME" \
 	    LOTA_HOOK_SOCKET="$WORK_DIR/no-such-dir/lota.sock"
-check "a missing socket directory is left out" \
-      denies "$rw" "$WORK_DIR/no-such-dir"
-check "and the hook's directory is still shared" \
-      shares "$rw" "$RUNTIME/lota-hook"
+TEST "a missing socket directory is left out"
+denies "$rw" "$WORK_DIR/no-such-dir" || FAIL "%s" "$rw"
+TEST "and the hook's directory is still shared"
+shares "$rw" "$RUNTIME/lota-hook" || FAIL
 
 # 8. LOTA_HOOK_DISABLE=1 leaves the container's mounts untouched.
 run_wrapper XDG_RUNTIME_DIR="$RUNTIME" LOTA_HOOK_DISABLE=1 \
 	    PRESSURE_VESSEL_FILESYSTEMS_RW="/opt/mymods"
-check "DISABLE=1: nothing of LOTA's is shared" denies "$rw" "lota"
-check "DISABLE=1: the player's own share is untouched" \
-      says "$rw" "/opt/mymods"
+TEST "DISABLE=1: nothing of LOTA's is shared"
+denies "$rw" "lota" || FAIL "%s" "$rw"
+TEST "DISABLE=1: the player's own share is untouched"
+says "$rw" "/opt/mymods" || FAIL "%s" "$rw"
 
 # 9. Missing library: nothing to share, only the library warning.
 MISSING_RUNTIME="$WORK_DIR/run-nolib"
@@ -160,13 +154,9 @@ nolib_out=$(env XDG_RUNTIME_DIR="$MISSING_RUNTIME" \
 	        "$WRAPPER" /bin/sh -c \
 	        'printf "RW=[%s]\n" "${PRESSURE_VESSEL_FILESYSTEMS_RW:-}"' 2>/dev/null)
 set -e
-check "a missing library shares nothing" denies "$nolib_out" "lota-hook"
-check "and creates nothing" test ! -d "$MISSING_RUNTIME/lota-hook"
+TEST "a missing library shares nothing"
+denies "$nolib_out" "lota-hook" || FAIL "%s" "$nolib_out"
+TEST "and creates nothing"
+test ! -d "$MISSING_RUNTIME/lota-hook" || FAIL
 
-echo ""
-if [[ $failures -eq 0 ]]; then
-    echo "[proton-hook-shares] OK"
-    exit 0
-fi
-echo "[proton-hook-shares] $failures check(s) failed" >&2
-exit 1
+test_end

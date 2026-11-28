@@ -17,17 +17,7 @@
 #include "../include/lota_ipc.h"
 #include "../src/agent/status_cmd.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 static void test_flags(void)
 {
@@ -36,24 +26,32 @@ static void test_flags(void)
 	status_flags_string(LOTA_STATUS_TPM_OK | LOTA_STATUS_BPF_LOADED |
 				    LOTA_STATUS_BENCH,
 			    buf, sizeof(buf));
-	CHECK(strcmp(buf, "TPM_OK,BPF_LOADED,BENCH") == 0,
-	      "flags print by the names a title sees");
+	TEST("flags print by the names a title sees");
+	if (strcmp(buf, "TPM_OK,BPF_LOADED,BENCH") != 0)
+		FAIL("expected: strcmp(buf, \"TPM_OK,BPF_LOADED,BENCH\") == 0");
 
 	status_flags_string(LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_LOCKOUT |
 				    LOTA_STATUS_EVENTS_LOST,
 			    buf, sizeof(buf));
-	CHECK(strcmp(buf, "ATTESTED,EVENTS_LOST,TPM_LOCKOUT") == 0,
-	      "host-only bits are named too");
+	TEST("host-only bits are named too");
+	if (strcmp(buf, "ATTESTED,EVENTS_LOST,TPM_LOCKOUT") != 0)
+		FAIL("expected: strcmp(buf, "
+		     "\"ATTESTED,EVENTS_LOST,TPM_LOCKOUT\") == 0");
 
 	status_flags_string(LOTA_STATUS_TPM_OK | (1U << 30), buf, sizeof(buf));
-	CHECK(strcmp(buf, "TPM_OK,0x40000000") == 0,
-	      "a bit without a name is not dropped");
+	TEST("a bit without a name is not dropped");
+	if (strcmp(buf, "TPM_OK,0x40000000") != 0)
+		FAIL("expected: strcmp(buf, \"TPM_OK,0x40000000\") == 0");
 
 	status_flags_string(0, buf, sizeof(buf));
-	CHECK(strcmp(buf, "none") == 0, "no bits reads as none");
+	TEST("no bits reads as none");
+	if (strcmp(buf, "none") != 0)
+		FAIL("expected: strcmp(buf, \"none\") == 0");
 
 	status_flags_string(LOTA_STATUS_TPM_OK | LOTA_STATUS_BENCH, buf, 8);
-	CHECK(strlen(buf) == 7, "a short buffer is cut, not overrun");
+	TEST("a short buffer is cut, not overrun");
+	if (strlen(buf) != 7)
+		FAIL("expected: strlen(buf) == 7");
 }
 
 static void test_format(void)
@@ -68,23 +66,32 @@ static void test_format(void)
 	s.attest_count = 5;
 	s.fail_count = 1;
 	status_format(&s, buf, sizeof(buf));
-	CHECK(strcmp(buf, "Mode:         enforce\n"
-			  "Flags:        TPM_OK,BENCH\n"
-			  "Policy:       none (LSM not loaded)\n"
-			  "Attested:     2023-11-14 22:13:20 UTC\n"
-			  "Token until:  none\n"
-			  "Attestations: 5 succeeded, 1 failed\n") == 0,
-	      "the report has one line per field");
+	TEST("the report has one line per field");
+	if (strcmp(buf, "Mode:         enforce\n"
+			"Flags:        TPM_OK,BENCH\n"
+			"Policy:       none (LSM not loaded)\n"
+			"Attested:     2023-11-14 22:13:20 UTC\n"
+			"Token until:  none\n"
+			"Attestations: 5 succeeded, 1 failed\n") != 0)
+		FAIL("expected: strcmp(buf, \"Mode:         enforce\\n\" "
+		     "\"Flags:        TPM_OK,BENCH\\n\" \"Policy:       none "
+		     "(LSM not loaded)\\n\" \"Attested:     2023-11-14 "
+		     "22:13:20 UTC\\n\" \"Token until:  none\\n\" "
+		     "\"Attestations: 5 succeeded, 1 failed\\n\") == 0");
 
 	s.mode = 9;
 	status_format(&s, buf, sizeof(buf));
-	CHECK(strstr(buf, "Mode:         unknown (9)\n") != NULL,
-	      "a mode this build does not know is shown as a number");
+	TEST("a mode this build does not know is shown as a number");
+	if (strstr(buf, "Mode:         unknown (9)\n") == NULL)
+		FAIL("expected: strstr(buf, \"Mode:         unknown (9)\\n\") "
+		     "!= NULL");
 
 	s.last_attest_time = 0;
 	status_format(&s, buf, sizeof(buf));
-	CHECK(strstr(buf, "Attested:     never\n") != NULL,
-	      "a host never attested says so");
+	TEST("a host never attested says so");
+	if (strstr(buf, "Attested:     never\n") == NULL)
+		FAIL("expected: strstr(buf, \"Attested:     never\\n\") != "
+		     "NULL");
 }
 
 static void test_policy(void)
@@ -97,25 +104,32 @@ static void test_policy(void)
 	s.flags = LOTA_STATUS_BPF_LOADED | LOTA_STATUS_ENFORCE |
 		  LOTA_STATUS_STRICT_MMAP | LOTA_STATUS_BLOCK_PTRACE;
 	status_policy_string(&s, buf, sizeof(buf));
-	CHECK(strcmp(buf, "strict_mmap,block_ptrace; each refusal is logged "
-			  "as *_BLOCKED with its file") == 0,
-	      "the keys print as lota.conf names them, with where refusals go");
+	TEST("the keys print as lota.conf names them, with where refusals go");
+	if (strcmp(buf, "strict_mmap,block_ptrace; each refusal is logged "
+			"as *_BLOCKED with its file") != 0)
+		FAIL("expected: strcmp(buf, \"strict_mmap,block_ptrace; each "
+		     "refusal is logged \" \"as *_BLOCKED with its file\") == "
+		     "0");
 
 	s.flags = LOTA_STATUS_BPF_LOADED | LOTA_STATUS_ENFORCE;
 	status_policy_string(&s, buf, sizeof(buf));
-	CHECK(strcmp(buf, "none") == 0, "enforce with no key reads as none");
+	TEST("enforce with no key reads as none");
+	if (strcmp(buf, "none") != 0)
+		FAIL("expected: strcmp(buf, \"none\") == 0");
 
 	s.mode = LOTA_MODE_MONITOR;
 	s.flags = LOTA_STATUS_BPF_LOADED;
 	status_policy_string(&s, buf, sizeof(buf));
-	CHECK(strcmp(buf, "none (monitor mode)") == 0,
-	      "monitor says why no key applies");
+	TEST("monitor says why no key applies");
+	if (strcmp(buf, "none (monitor mode)") != 0)
+		FAIL("expected: strcmp(buf, \"none (monitor mode)\") == 0");
 
 	s.mode = LOTA_MODE_ENFORCE;
 	s.flags = 0;
 	status_policy_string(&s, buf, sizeof(buf));
-	CHECK(strcmp(buf, "none (LSM not loaded)") == 0,
-	      "enforce without the LSM says so, not none");
+	TEST("enforce without the LSM says so, not none");
+	if (strcmp(buf, "none (LSM not loaded)") != 0)
+		FAIL("expected: strcmp(buf, \"none (LSM not loaded)\") == 0");
 }
 
 /* One connection answered with @resp and @body, then the child exits */
@@ -174,47 +188,60 @@ static void test_request(void)
 	pid_t pid;
 
 	if (!mkdtemp(dir)) {
-		CHECK(0, "mkdtemp");
+		TEST("mkdtemp");
+		if (!0)
+			FAIL("expected: 0");
 		return;
 	}
 	snprintf(path, sizeof(path), "%s/sock", dir);
 
-	CHECK(status_request(path, &got) == -ENOENT,
-	      "no agent on the socket is an error");
+	TEST("no agent on the socket is an error");
+	if (status_request(path, &got) != -ENOENT)
+		FAIL("expected: status_request(path, &got) == -ENOENT");
 
 	memset(&sent, 0, sizeof(sent));
 	sent.flags = LOTA_STATUS_BENCH;
 	sent.mode = LOTA_MODE_MONITOR;
 	sent.attest_count = 3;
 	pid = serve_once(path, &resp, &sent, sizeof(sent));
-	CHECK(pid > 0, "fake agent listening");
+	TEST("fake agent listening");
+	if (pid <= 0)
+		FAIL("expected: pid > 0");
 	memset(&got, 0xff, sizeof(got));
-	CHECK(status_request(path, &got) == 0 && got.flags == sent.flags &&
-		      got.mode == sent.mode && got.attest_count == 3,
-	      "the daemon's answer is read whole");
-	CHECK(reap(pid) == 0, "GET_STATUS was the request");
+	TEST("the daemon's answer is read whole");
+	if (!(status_request(path, &got) == 0 && got.flags == sent.flags &&
+	      got.mode == sent.mode && got.attest_count == 3))
+		FAIL("expected: status_request(path, &got) == 0 && got.flags "
+		     "== sent.flags && got.mode == sent.mode && "
+		     "got.attest_count == 3");
+	TEST("GET_STATUS was the request");
+	if (reap(pid) != 0)
+		FAIL("expected: reap(pid) == 0");
 	unlink(path);
 
 	resp.payload_len = 4;
 	pid = serve_once(path, &resp, &sent, 4);
-	CHECK(status_request(path, &got) == -EPROTO,
-	      "a status of the wrong size is refused");
+	TEST("a status of the wrong size is refused");
+	if (status_request(path, &got) != -EPROTO)
+		FAIL("expected: status_request(path, &got) == -EPROTO");
 	reap(pid);
 	unlink(path);
 
 	resp.payload_len = sizeof(sent);
 	resp.magic = 0;
 	pid = serve_once(path, &resp, &sent, sizeof(sent));
-	CHECK(status_request(path, &got) == -EPROTO,
-	      "an answer without the magic is refused");
+	TEST("an answer without the magic is refused");
+	if (status_request(path, &got) != -EPROTO)
+		FAIL("expected: status_request(path, &got) == -EPROTO");
 	reap(pid);
 	unlink(path);
 
 	resp.magic = LOTA_IPC_MAGIC;
 	resp.result = LOTA_IPC_ERR_ACCESS_DENIED;
 	pid = serve_once(path, &resp, &sent, sizeof(sent));
-	CHECK(status_request(path, &got) == -EACCES,
-	      "a refusal is not read as a status");
+	TEST("a refusal is not read as a status");
+	if (status_request(path, &got) != -EACCES)
+		FAIL("expected: status_request(path, &got) == -EACCES");
 	reap(pid);
 	unlink(path);
 
@@ -223,14 +250,12 @@ static void test_request(void)
 
 int main(void)
 {
-	printf("=== agent --status tests ===\n\n");
+	test_begin("status cmd");
 
 	test_flags();
 	test_format();
 	test_policy();
 	test_request();
 
-	printf("\n%s: %d failure(s)\n", g_failures ? "FAILED" : "OK",
-	       g_failures);
-	return g_failures ? 1 : 0;
+	return test_end();
 }

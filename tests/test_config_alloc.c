@@ -26,18 +26,7 @@
 #include "../src/agent/config.h"
 #include "lota.h"
 
-static int failures;
-
-#define CHECK(cond, msg)                                              \
-	do {                                                          \
-		if (!(cond)) {                                        \
-			printf("  FAIL: %s (%s:%d)\n", msg, __FILE__, \
-			       __LINE__);                             \
-			failures++;                                   \
-		} else {                                              \
-			printf("  ok: %s\n", msg);                    \
-		}                                                     \
-	} while (0)
+#include "test.h"
 
 /* Write a config file and hand back its path in @path_out */
 static int write_cfg(char *path_out, size_t path_size, const char *body)
@@ -114,10 +103,12 @@ static void test_defaults_match_config_init(void)
 	struct lota_config *made = config_new();
 	struct lota_config *ref = calloc(1, sizeof(*ref));
 
-	printf("test: config_new applies the same defaults as config_init\n");
-
-	CHECK(made != NULL, "config_new returns a config");
-	CHECK(ref != NULL, "reference block allocated");
+	TEST("config_new returns a config");
+	if (made == NULL)
+		FAIL("expected: made != NULL");
+	TEST("reference block allocated");
+	if (ref == NULL)
+		FAIL("expected: ref != NULL");
 	if (!made || !ref) {
 		config_free(made);
 		free(ref);
@@ -125,8 +116,9 @@ static void test_defaults_match_config_init(void)
 	}
 
 	config_init(ref);
-	CHECK(memcmp(made, ref, sizeof(*made)) == 0,
-	      "every byte matches a config_init'd block");
+	TEST("every byte matches a config_init'd block");
+	if (memcmp(made, ref, sizeof(*made)) != 0)
+		FAIL("expected: memcmp(made, ref, sizeof(*made)) == 0");
 
 	config_free(made);
 	free(ref);
@@ -137,17 +129,23 @@ static void test_parses_a_file(void)
 {
 	struct lota_config *cfg = config_new();
 
-	printf("test: a config_new config loads a file\n");
-
-	CHECK(cfg != NULL, "config_new returns a config");
+	TEST("config_new returns a config");
+	if (cfg == NULL)
+		FAIL("expected: cfg != NULL");
 	if (!cfg)
 		return;
 
-	CHECK(load_body(cfg, "server = attest.example.org\nport = 4711\n") == 0,
-	      "config_load succeeds");
-	CHECK(strcmp(cfg->server, "attest.example.org") == 0,
-	      "server parsed into the allocated config");
-	CHECK(cfg->port == 4711, "port parsed into the allocated config");
+	TEST("config_load succeeds");
+	if (load_body(cfg, "server = attest.example.org\nport = 4711\n") != 0)
+		FAIL("expected: load_body(cfg, \"server = "
+		     "attest.example.org\\nport = 4711\\n\") == 0");
+	TEST("server parsed into the allocated config");
+	if (strcmp(cfg->server, "attest.example.org") != 0)
+		FAIL("expected: strcmp(cfg->server, \"attest.example.org\") "
+		     "== 0");
+	TEST("port parsed into the allocated config");
+	if (cfg->port != 4711)
+		FAIL("expected: cfg->port == 4711");
 
 	config_free(cfg);
 }
@@ -155,9 +153,10 @@ static void test_parses_a_file(void)
 /* free(NULL) is a no-op, and so is this */
 static void test_free_null_is_a_noop(void)
 {
-	printf("test: config_free tolerates NULL\n");
 	config_free(NULL);
-	CHECK(1, "config_free(NULL) returned");
+	TEST("config_free(NULL) returned");
+	if (!1)
+		FAIL("expected: 1");
 }
 
 /*
@@ -169,24 +168,29 @@ static void test_each_config_is_independent(void)
 	struct lota_config *a = config_new();
 	struct lota_config *b;
 
-	printf("test: each config_new is a fresh, independent object\n");
-
-	CHECK(a != NULL, "first config allocated");
+	TEST("first config allocated");
+	if (a == NULL)
+		FAIL("expected: a != NULL");
 	if (!a)
 		return;
 
 	snprintf(a->server, sizeof(a->server), "%s", "first.example.org");
 
 	b = config_new();
-	CHECK(b != NULL, "second config allocated");
+	TEST("second config allocated");
+	if (b == NULL)
+		FAIL("expected: b != NULL");
 	if (!b) {
 		config_free(a);
 		return;
 	}
 
-	CHECK(a != b, "the two configs are distinct objects");
-	CHECK(strcmp(b->server, "first.example.org") != 0,
-	      "the second config does not carry the first one's writes");
+	TEST("the two configs are distinct objects");
+	if (a == b)
+		FAIL("expected: a != b");
+	TEST("the second config does not carry the first one's writes");
+	if (strcmp(b->server, "first.example.org") == 0)
+		FAIL("expected: strcmp(b->server, \"first.example.org\") != 0");
 
 	config_free(a);
 	config_free(b);
@@ -226,31 +230,38 @@ static void test_works_on_a_stack_smaller_than_the_struct(void)
 	pthread_t th;
 	int ok = 0;
 
-	printf("test: the config path runs on a %u KiB stack\n",
-	       SMALL_THREAD_STACK / 1024u);
-
-	CHECK(sizeof(struct lota_config) > SMALL_THREAD_STACK,
-	      "the struct is larger than the whole thread stack");
+	TEST("the struct is larger than the whole thread stack");
+	if (sizeof(struct lota_config) <= SMALL_THREAD_STACK)
+		FAIL("expected: sizeof(struct lota_config) > "
+		     "SMALL_THREAD_STACK");
 
 	if (pthread_attr_init(&attr) != 0) {
-		CHECK(0, "pthread_attr_init");
+		TEST("pthread_attr_init");
+		if (!0)
+			FAIL("expected: 0");
 		return;
 	}
 	if (pthread_attr_setstacksize(&attr, SMALL_THREAD_STACK) != 0) {
 		pthread_attr_destroy(&attr);
-		CHECK(0, "pthread_attr_setstacksize");
+		TEST("pthread_attr_setstacksize");
+		if (!0)
+			FAIL("expected: 0");
 		return;
 	}
 	if (pthread_create(&th, &attr, load_on_small_stack, &ok) != 0) {
 		pthread_attr_destroy(&attr);
-		CHECK(0, "pthread_create");
+		TEST("pthread_create");
+		if (!0)
+			FAIL("expected: 0");
 		return;
 	}
 
 	pthread_join(th, NULL);
 	pthread_attr_destroy(&attr);
 
-	CHECK(ok == 1, "config allocated and parsed on the small stack");
+	TEST("config allocated and parsed on the small stack");
+	if (ok != 1)
+		FAIL("expected: ok == 1");
 }
 
 /*
@@ -261,37 +272,34 @@ static void test_list_bounds(const char *what, const char *key,
 			     const char *prefix, int max, int start,
 			     int (*count_of)(const struct lota_config *))
 {
-	struct lota_config *cfg = config_new();
+	struct lota_config *cfg;
+	char name[TEST_NAME_MAX + 1];
 	char *body;
 
-	printf("test: %s stops at %d entries\n", what, max);
-
-	CHECK(cfg != NULL, "config allocated");
-	if (!cfg)
-		return;
-
-	body = repeat_key(key, prefix, max, start);
-	CHECK(body != NULL, "full-length body built");
-	if (body) {
-		CHECK(load_body(cfg, body) == 0, "exactly max entries parse");
-		CHECK(count_of(cfg) == max, "all max entries are recorded");
-		free(body);
-	}
-
-	config_free(cfg);
+	snprintf(name, sizeof(name), "%s: exactly %d entries parse", what, max);
+	TEST(name);
 	cfg = config_new();
-	if (!cfg)
-		return;
+	body = repeat_key(key, prefix, max, start);
+	if (!cfg || !body)
+		FAIL("allocation failed");
+	else if (load_body(cfg, body) != 0)
+		FAIL("load_body refused %d entries", max);
+	else if (count_of(cfg) != max)
+		FAIL("recorded %d entries, expected %d", count_of(cfg), max);
+	free(body);
+	config_free(cfg);
 
+	snprintf(name, sizeof(name), "%s: entry %d is refused", what, max + 1);
+	TEST(name);
+	cfg = config_new();
 	body = repeat_key(key, prefix, max + 1, start);
-	CHECK(body != NULL, "over-length body built");
-	if (body) {
-		CHECK(load_body(cfg, body) != 0,
-		      "one entry past max is refused");
-		CHECK(count_of(cfg) <= max, "the count never exceeds max");
-		free(body);
-	}
-
+	if (!cfg || !body)
+		FAIL("allocation failed");
+	else if (load_body(cfg, body) == 0)
+		FAIL("load_body accepted %d entries", max + 1);
+	else if (count_of(cfg) > max)
+		FAIL("recorded %d entries, max %d", count_of(cfg), max);
+	free(body);
 	config_free(cfg);
 }
 
@@ -328,9 +336,9 @@ static void test_overlong_value_is_bounded(void)
 	size_t fill = sizeof(body) / 2;
 	size_t i;
 
-	printf("test: an over-long value cannot run past its cell\n");
-
-	CHECK(cfg != NULL, "config allocated");
+	TEST("config allocated");
+	if (cfg == NULL)
+		FAIL("expected: cfg != NULL");
 	if (!cfg)
 		return;
 
@@ -342,17 +350,19 @@ static void test_overlong_value_is_bounded(void)
 
 	/* Parsing may accept or reject; neither may write past the field */
 	(void)load_body(cfg, body);
-	CHECK(strlen(cfg->server) < sizeof(cfg->server),
-	      "server stays within its cell");
-	CHECK(cfg->server[sizeof(cfg->server) - 1] == '\0',
-	      "server is still terminated");
+	TEST("server stays within its cell");
+	if (strlen(cfg->server) >= sizeof(cfg->server))
+		FAIL("expected: strlen(cfg->server) < sizeof(cfg->server)");
+	TEST("server is still terminated");
+	if (cfg->server[sizeof(cfg->server) - 1] != '\0')
+		FAIL("expected: cfg->server[sizeof(cfg->server) - 1] == '\\0'");
 
 	config_free(cfg);
 }
 
 int main(void)
 {
-	printf("=== config_new / config_free ===\n\n");
+	test_begin("config alloc");
 
 	test_defaults_match_config_init();
 	test_parses_a_file();
@@ -372,6 +382,5 @@ int main(void)
 
 	test_overlong_value_is_bounded();
 
-	printf("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED");
-	return failures == 0 ? 0 : 1;
+	return test_end();
 }

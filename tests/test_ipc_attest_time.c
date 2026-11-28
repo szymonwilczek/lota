@@ -465,8 +465,6 @@ static void test_never_attested_reports_no_time(struct ipc_context *ctx)
 		FAIL("a machine that attested nothing names a time it did");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_completed_round_sets_the_time(struct ipc_context *ctx)
@@ -488,8 +486,6 @@ static void test_completed_round_sets_the_time(struct ipc_context *ctx)
 		FAIL("the answer is not the time the round was attested");
 		return;
 	}
-
-	PASS();
 }
 
 /* a session opening or closing recomputes the status, not the time */
@@ -515,8 +511,6 @@ static void test_recompute_keeps_the_time(struct ipc_context *ctx)
 		FAIL("the recomputation moved the attestation time");
 		return;
 	}
-
-	PASS();
 }
 
 /* a round with no evidence syncs time zero; the old time stands */
@@ -543,8 +537,6 @@ static void test_idle_round_keeps_the_time(struct ipc_context *ctx)
 		FAIL("an idle round is reported as an attestation");
 		return;
 	}
-
-	PASS();
 }
 
 /* the round publishes the word from scratch; the loss outlives it */
@@ -581,8 +573,6 @@ static void test_events_lost_outlives_a_round(struct ipc_context *ctx)
 		FAIL("a round erased the loss");
 		return;
 	}
-
-	PASS();
 }
 
 int main(void)
@@ -590,17 +580,17 @@ int main(void)
 	struct ipc_context ctx;
 	int listen_fd;
 
-	printf("=== Status attestation-time tests ===\n\n");
+	test_begin("ipc attest time");
 
 	listen_fd = listener_open();
 	if (listen_fd < 0) {
-		printf("SKIP: cannot create a Unix socket in /tmp (%s)\n",
-		       strerror(-listen_fd));
+		SKIP("cannot create a Unix socket in /tmp (%s)",
+		     strerror(-listen_fd));
 		return 0;
 	}
 
 	if (ipc_init_activated(&ctx, listen_fd) < 0) {
-		printf("SKIP: ipc_init_activated failed\n");
+		SKIP("ipc_init_activated failed");
 		close(listen_fd);
 		unlink(test_socket);
 		return 0;
@@ -615,6 +605,5 @@ int main(void)
 	ipc_cleanup(&ctx);
 	unlink(test_socket);
 
-	printf("\n%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

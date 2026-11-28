@@ -26,17 +26,7 @@
 #include "../src/agent/moklist.h"
 #include "attestation.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 static void write_file(const char *dir, const char *name, const char *val)
 {
@@ -99,14 +89,23 @@ static void test_picks_system_firmware(void)
 	make_entry(base, "entry1", "1", "785", "785",
 		   "b53e82ee-2b53-5829-9756-68e1e4eff873");
 
-	CHECK(esrt_read_system_firmware_path(base, &e) == 0, "read returns 0");
-	CHECK(e.present == 1, "system firmware present");
-	CHECK(e.fw_version == 785, "fw_version picked from fw_type=1 entry");
-	CHECK(e.lowest_supported == 785, "lowest_supported parsed");
+	TEST("read returns 0");
+	if (esrt_read_system_firmware_path(base, &e) != 0)
+		FAIL("expected: esrt_read_system_firmware_path(base, &e) == 0");
+	TEST("system firmware present");
+	if (e.present != 1)
+		FAIL("expected: e.present == 1");
+	TEST("fw_version picked from fw_type=1 entry");
+	if (e.fw_version != 785)
+		FAIL("expected: e.fw_version == 785");
+	TEST("lowest_supported parsed");
+	if (e.lowest_supported != 785)
+		FAIL("expected: e.lowest_supported == 785");
 
 	/* GUID b53e82ee-... -> first byte 0xb5 */
-	CHECK(e.fw_class[0] == 0xb5 && e.fw_class[1] == 0x3e,
-	      "fw_class GUID parsed to raw bytes");
+	TEST("fw_class GUID parsed to raw bytes");
+	if (!(e.fw_class[0] == 0xb5 && e.fw_class[1] == 0x3e))
+		FAIL("expected: e.fw_class[0] == 0xb5 && e.fw_class[1] == 0x3e");
 
 	rm_rf(base);
 }
@@ -114,10 +113,14 @@ static void test_picks_system_firmware(void)
 static void test_missing_is_not_present(void)
 {
 	struct lota_esrt e;
-	CHECK(esrt_read_system_firmware_path("/tmp/lota-esrt-absent.XXXXXX",
-					     &e) == 0,
-	      "absent ESRT dir returns 0");
-	CHECK(e.present == 0, "absent ESRT reported as not-present");
+	TEST("absent ESRT dir returns 0");
+	if (esrt_read_system_firmware_path("/tmp/lota-esrt-absent.XXXXXX",
+					   &e) != 0)
+		FAIL("expected: esrt_read_system_firmware_path(\"/tmp/lota-esrt-absent.XXXXXX\", "
+		     "&e) == 0");
+	TEST("absent ESRT reported as not-present");
+	if (e.present != 0)
+		FAIL("expected: e.present == 0");
 }
 
 static void test_only_device_entries(void)
@@ -129,8 +132,12 @@ static void test_only_device_entries(void)
 	make_entry(base, "entry0", "2", "100", "0",
 		   "69585d92-b50a-4ad7-b265-2eb1ae066574");
 
-	CHECK(esrt_read_system_firmware_path(base, &e) == 0, "read returns 0");
-	CHECK(e.present == 0, "device-only ESRT reported as not-present");
+	TEST("read returns 0");
+	if (esrt_read_system_firmware_path(base, &e) != 0)
+		FAIL("expected: esrt_read_system_firmware_path(base, &e) == 0");
+	TEST("device-only ESRT reported as not-present");
+	if (e.present != 0)
+		FAIL("expected: e.present == 0");
 
 	rm_rf(base);
 }
@@ -138,10 +145,14 @@ static void test_only_device_entries(void)
 static void test_null_args(void)
 {
 	struct lota_esrt e;
-	CHECK(esrt_read_system_firmware_path(NULL, &e) == -EINVAL,
-	      "NULL base rejected");
-	CHECK(esrt_read_system_firmware_path("/tmp", NULL) == -EINVAL,
-	      "NULL out rejected");
+	TEST("NULL base rejected");
+	if (esrt_read_system_firmware_path(NULL, &e) != -EINVAL)
+		FAIL("expected: esrt_read_system_firmware_path(NULL, &e) == "
+		     "-EINVAL");
+	TEST("NULL out rejected");
+	if (esrt_read_system_firmware_path("/tmp", NULL) != -EINVAL)
+		FAIL("expected: esrt_read_system_firmware_path(\"/tmp\", "
+		     "NULL) == -EINVAL");
 }
 
 /*
@@ -158,9 +169,15 @@ static void test_overrange_fw_version_skipped(void)
 	make_entry(base, "entry0", "1", "4294967296", "0",
 		   "b53e82ee-2b53-5829-9756-68e1e4eff873");
 
-	CHECK(esrt_read_system_firmware_path(base, &e) == 0, "read returns 0");
-	CHECK(e.present == 0, "over-range fw_version entry skipped");
-	CHECK(e.fw_version == 0, "no truncated version recorded");
+	TEST("read returns 0");
+	if (esrt_read_system_firmware_path(base, &e) != 0)
+		FAIL("expected: esrt_read_system_firmware_path(base, &e) == 0");
+	TEST("over-range fw_version entry skipped");
+	if (e.present != 0)
+		FAIL("expected: e.present == 0");
+	TEST("no truncated version recorded");
+	if (e.fw_version != 0)
+		FAIL("expected: e.fw_version == 0");
 
 	rm_rf(base);
 }
@@ -196,11 +213,18 @@ static void test_malformed_guid_graceful(void)
 	mkdir(base, 0755);
 	make_entry(base, "entry0", "1", "785", "785", guid);
 
-	CHECK(esrt_read_system_firmware_path(base, &e) == 0, "read returns 0");
-	CHECK(e.present == 1, "entry present despite malformed GUID");
-	CHECK(e.fw_version == 785, "fw_version still parsed");
-	CHECK(e.fw_class[0] == 0 && e.fw_class[1] == 0,
-	      "malformed GUID left unset, no over-read");
+	TEST("read returns 0");
+	if (esrt_read_system_firmware_path(base, &e) != 0)
+		FAIL("expected: esrt_read_system_firmware_path(base, &e) == 0");
+	TEST("entry present despite malformed GUID");
+	if (e.present != 1)
+		FAIL("expected: e.present == 1");
+	TEST("fw_version still parsed");
+	if (e.fw_version != 785)
+		FAIL("expected: e.fw_version == 785");
+	TEST("malformed GUID left unset, no over-read");
+	if (!(e.fw_class[0] == 0 && e.fw_class[1] == 0))
+		FAIL("expected: e.fw_class[0] == 0 && e.fw_class[1] == 0");
 
 	rm_rf(base);
 }
@@ -216,7 +240,7 @@ static void write_var(const char *path, size_t attrs, const char *data,
 		return;
 	if (write(fd, prefix, attrs) != (ssize_t)attrs ||
 	    write(fd, data, size) != (ssize_t)size)
-		g_failures++;
+		FAIL("short write to %s", path);
 	close(fd);
 }
 
@@ -228,51 +252,69 @@ static void test_mok_list_read(void)
 	int fd = mkstemp(path);
 
 	if (fd < 0) {
-		CHECK(0, "fixture file");
+		TEST("fixture file");
+		if (!0)
+			FAIL("expected: 0");
 		return;
 	}
 	close(fd);
 
 	write_var(path, 4, "abcd", 4);
-	CHECK(mok_list_read_path(path, buf, sizeof(buf), &size) == 0,
-	      "list read returns 0");
-	CHECK(size == 4 && memcmp(buf, "abcd", 4) == 0,
-	      "attributes dropped, data intact");
+	TEST("list read returns 0");
+	if (mok_list_read_path(path, buf, sizeof(buf), &size) != 0)
+		FAIL("expected: mok_list_read_path(path, buf, sizeof(buf), "
+		     "&size) == 0");
+	TEST("attributes dropped, data intact");
+	if (!(size == 4 && memcmp(buf, "abcd", 4) == 0))
+		FAIL("expected: size == 4 && memcmp(buf, \"abcd\", 4) == 0");
 
 	write_var(path, 4, "abcdefgh", 8);
-	CHECK(mok_list_read_path(path, buf, sizeof(buf), &size) == 0 &&
-		      size == 8,
-	      "list filling the buffer exactly is read");
+	TEST("list filling the buffer exactly is read");
+	if (!(mok_list_read_path(path, buf, sizeof(buf), &size) == 0 &&
+	      size == 8))
+		FAIL("expected: mok_list_read_path(path, buf, sizeof(buf), "
+		     "&size) == 0 && size == 8");
 
 	write_var(path, 4, "abcdefghi", 9);
-	CHECK(mok_list_read_path(path, buf, sizeof(buf), &size) == -E2BIG &&
-		      size == 0,
-	      "list over the buffer goes unsent");
+	TEST("list over the buffer goes unsent");
+	if (!(mok_list_read_path(path, buf, sizeof(buf), &size) == -E2BIG &&
+	      size == 0))
+		FAIL("expected: mok_list_read_path(path, buf, sizeof(buf), "
+		     "&size) == -E2BIG && size == 0");
 
 	write_var(path, 2, "", 0);
-	CHECK(mok_list_read_path(path, buf, sizeof(buf), &size) == -ENODATA &&
-		      size == 0,
-	      "variable shorter than its attributes refused");
+	TEST("variable shorter than its attributes refused");
+	if (!(mok_list_read_path(path, buf, sizeof(buf), &size) == -ENODATA &&
+	      size == 0))
+		FAIL("expected: mok_list_read_path(path, buf, sizeof(buf), "
+		     "&size) == -ENODATA && size == 0");
 
 	unlink(path);
 	size = 99;
-	CHECK(mok_list_read_path(path, buf, sizeof(buf), &size) == 0 &&
-		      size == 0,
-	      "missing variable is an empty list");
+	TEST("missing variable is an empty list");
+	if (!(mok_list_read_path(path, buf, sizeof(buf), &size) == 0 &&
+	      size == 0))
+		FAIL("expected: mok_list_read_path(path, buf, sizeof(buf), "
+		     "&size) == 0 && size == 0");
 
-	CHECK(mok_list_read_path(NULL, buf, sizeof(buf), &size) == -EINVAL &&
-		      mok_list_read_path(path, NULL, 0, &size) == -EINVAL &&
-		      mok_list_read_path(path, buf, sizeof(buf), NULL) ==
-			      -EINVAL,
-	      "NULL arguments refused");
+	TEST("NULL arguments refused");
+	if (!(mok_list_read_path(NULL, buf, sizeof(buf), &size) == -EINVAL &&
+	      mok_list_read_path(path, NULL, 0, &size) == -EINVAL &&
+	      mok_list_read_path(path, buf, sizeof(buf), NULL) == -EINVAL))
+		FAIL("expected: mok_list_read_path(NULL, buf, sizeof(buf), "
+		     "&size) == -EINVAL && mok_list_read_path(path, NULL, 0, "
+		     "&size) == -EINVAL && mok_list_read_path(path, buf, "
+		     "sizeof(buf), NULL) == -EINVAL");
 
 	/* live variable or none: either way the wrapper must not fail on size */
-	CHECK(mok_list_read(buf, 0, &size) == 0 || size == 0,
-	      "default path keeps out_size consistent");
+	TEST("default path keeps out_size consistent");
+	if (!(mok_list_read(buf, 0, &size) == 0 || size == 0))
+		FAIL("expected: mok_list_read(buf, 0, &size) == 0 || size == 0");
 }
 
 int main(void)
 {
+	test_begin("esrt");
 	test_mok_list_read();
 	test_picks_system_firmware();
 	test_missing_is_not_present();
@@ -281,10 +323,5 @@ int main(void)
 	test_overrange_fw_version_skipped();
 	test_malformed_guid_graceful();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) FAILED\n", g_failures);
-		return 1;
-	}
-	printf("\nAll ESRT tests passed\n");
-	return 0;
+	return test_end();
 }

@@ -46,12 +46,6 @@ int lota_protect_main(int argc, char **argv);
 #include "lota_gaming.h"
 #include "lota_ipc.h"
 
-static void SKIP(const char *msg)
-{
-	tests_passed++;
-	printf("SKIP (%s)\n", msg);
-}
-
 /* temp directory for test artifacts */
 static char tmpdir[64];
 
@@ -59,7 +53,7 @@ static void setup_tmpdir(void)
 {
 	snprintf(tmpdir, sizeof(tmpdir), "/tmp/lota_test_hook_XXXXXX");
 	if (!mkdtemp(tmpdir)) {
-		fprintf(stderr, "mkdtemp failed: %s\n", strerror(errno));
+		FAIL("mkdtemp failed: %s", strerror(errno));
 		exit(1);
 	}
 }
@@ -118,7 +112,6 @@ static void test_parse_log_level_debug(void)
 		FAIL("wrong level");
 		return;
 	}
-	PASS();
 }
 
 static void test_parse_log_level_info(void)
@@ -128,7 +121,6 @@ static void test_parse_log_level_info(void)
 		FAIL("wrong level");
 		return;
 	}
-	PASS();
 }
 
 static void test_parse_log_level_warn(void)
@@ -138,7 +130,6 @@ static void test_parse_log_level_warn(void)
 		FAIL("wrong level");
 		return;
 	}
-	PASS();
 }
 
 static void test_parse_log_level_error(void)
@@ -148,7 +139,6 @@ static void test_parse_log_level_error(void)
 		FAIL("wrong level");
 		return;
 	}
-	PASS();
 }
 
 static void test_parse_log_level_silent(void)
@@ -158,7 +148,6 @@ static void test_parse_log_level_silent(void)
 		FAIL("wrong level");
 		return;
 	}
-	PASS();
 }
 
 static void test_parse_log_level_null(void)
@@ -168,7 +157,6 @@ static void test_parse_log_level_null(void)
 		FAIL("wrong default");
 		return;
 	}
-	PASS();
 }
 
 static void test_parse_log_level_invalid(void)
@@ -178,7 +166,6 @@ static void test_parse_log_level_invalid(void)
 		FAIL("wrong default");
 		return;
 	}
-	PASS();
 }
 
 static void test_token_dir_candidate_explicit(void)
@@ -201,7 +188,6 @@ static void test_token_dir_candidate_explicit(void)
 		FAIL("wrong dir");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -228,7 +214,6 @@ static void test_token_dir_candidate_xdg(void)
 		FAIL("wrong dir");
 		return;
 	}
-	PASS();
 }
 
 static void test_token_dir_candidates_never_the_socket_dir(void)
@@ -250,7 +235,6 @@ static void test_token_dir_candidates_never_the_socket_dir(void)
 	}
 
 	unsetenv("XDG_RUNTIME_DIR");
-	PASS();
 }
 
 static void test_token_dir_candidate_fallback(void)
@@ -275,7 +259,6 @@ static void test_token_dir_candidate_fallback(void)
 		FAIL("wrong fallback dir");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -318,7 +301,6 @@ static void test_setup_token_dir_falls_through(void)
 		FAIL("did not settle on the fallback");
 		return;
 	}
-	PASS();
 }
 
 static void test_setup_token_dir_explicit_refused_falls_through(void)
@@ -357,7 +339,6 @@ static void test_setup_token_dir_explicit_refused_falls_through(void)
 		return;
 	}
 	rmdir(expected);
-	PASS();
 }
 
 static void test_ensure_token_dir_creates(void)
@@ -385,7 +366,6 @@ static void test_ensure_token_dir_creates(void)
 		FAIL("wrong mode");
 		return;
 	}
-	PASS();
 }
 
 static void test_ensure_token_dir_exists(void)
@@ -399,7 +379,6 @@ static void test_ensure_token_dir_exists(void)
 		FAIL("ensure_token_dir failed");
 		return;
 	}
-	PASS();
 }
 
 static void test_ensure_token_dir_not_a_dir(void)
@@ -425,7 +404,6 @@ static void test_ensure_token_dir_not_a_dir(void)
 		FAIL("expected -ENOTDIR");
 		return;
 	}
-	PASS();
 }
 
 static void test_ensure_token_dir_rejects_symlink(void)
@@ -457,8 +435,6 @@ static void test_ensure_token_dir_rejects_symlink(void)
 		FAIL("expected -ELOOP or -ENOTDIR");
 		return;
 	}
-
-	PASS();
 }
 
 /* a trailing slash makes open() follow the link despite O_NOFOLLOW */
@@ -494,7 +470,6 @@ static void test_token_dir_override_trailing_slash_symlink(void)
 		FAIL("the symlink was followed");
 		return;
 	}
-	PASS();
 }
 
 static void test_ensure_token_dir_existing_mode_tightened(void)
@@ -526,8 +501,6 @@ static void test_ensure_token_dir_existing_mode_tightened(void)
 		FAIL("mode was not tightened to 0700");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_atomic_write_creates_file(void)
@@ -549,7 +522,6 @@ static void test_atomic_write_creates_file(void)
 		FAIL("content mismatch");
 		return;
 	}
-	PASS();
 }
 
 static void test_atomic_write_overwrites(void)
@@ -572,7 +544,6 @@ static void test_atomic_write_overwrites(void)
 		FAIL("content mismatch");
 		return;
 	}
-	PASS();
 }
 
 static void test_atomic_write_no_tmp_leftover(void)
@@ -598,7 +569,6 @@ static void test_atomic_write_no_tmp_leftover(void)
 		FAIL(".tmp files left behind");
 		return;
 	}
-	PASS();
 }
 
 static void test_atomic_write_ignores_predictable_symlink_tmp(void)
@@ -673,7 +643,6 @@ static void test_atomic_write_ignores_predictable_symlink_tmp(void)
 	}
 
 	unlink(planted_tmp);
-	PASS();
 }
 
 static void test_atomic_write_file_mode(void)
@@ -693,10 +662,9 @@ static void test_atomic_write_file_mode(void)
 	if ((st.st_mode & 0777) != 0600) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "mode=%o", st.st_mode & 0777);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 static void test_write_status_attested(void)
@@ -754,7 +722,6 @@ static void test_write_status_attested(void)
 		FAIL("missing LOTA_PID");
 		return;
 	}
-	PASS();
 }
 
 /* a hook that has nothing new to say still rewrites LOTA_UPDATED */
@@ -789,7 +756,6 @@ static void test_status_heartbeat(void)
 		FAIL("the rewrite did not move the write time");
 		goto out;
 	}
-	PASS();
 out:
 	atomic_store(&g_hook.have_status, 0);
 	unlink(path);
@@ -803,10 +769,9 @@ static void test_rate_limit_reason(void)
 
 	if (!why || !strstr(why, "this user or this session") ||
 	    !strstr(why, "the next refresh asks again")) {
-		FAIL(why ? why : "no reason");
+		FAIL("%s", why ? why : "no reason");
 		return;
 	}
-	PASS();
 }
 
 static void test_write_status_not_attested(void)
@@ -836,7 +801,6 @@ static void test_write_status_not_attested(void)
 		FAIL("missing LOTA_ATTESTED=0");
 		return;
 	}
-	PASS();
 }
 
 static void test_write_status_zero_flags(void)
@@ -869,7 +833,6 @@ static void test_write_status_zero_flags(void)
 		FAIL("wrong flags");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -886,86 +849,74 @@ static void test_write_status_zero_flags(void)
 static void test_policy_default_skips_usr_bin(void)
 {
 	TEST("policy: default skips /usr/bin/* (FHS system path)");
-	if (!policy_should_activate("/usr/bin/bash", NULL, NULL) &&
-	    !policy_should_activate("/usr/bin/basename", NULL, NULL) &&
-	    !policy_should_activate("/usr/bin/sudo", NULL, NULL) &&
-	    !policy_should_activate("/usr/sbin/ldconfig", NULL, NULL) &&
-	    !policy_should_activate("/usr/libexec/foo", NULL, NULL))
-		PASS();
-	else
+	if (!(!policy_should_activate("/usr/bin/bash", NULL, NULL) &&
+	      !policy_should_activate("/usr/bin/basename", NULL, NULL) &&
+	      !policy_should_activate("/usr/bin/sudo", NULL, NULL) &&
+	      !policy_should_activate("/usr/sbin/ldconfig", NULL, NULL) &&
+	      !policy_should_activate("/usr/libexec/foo", NULL, NULL)))
 		FAIL("FHS /usr path must be skipped by default");
 }
 
 static void test_policy_default_skips_legacy_bin(void)
 {
 	TEST("policy: default skips /bin /sbin /lib /lib64 (non-usrmerge)");
-	if (!policy_should_activate("/bin/sh", NULL, NULL) &&
-	    !policy_should_activate("/sbin/init", NULL, NULL) &&
-	    !policy_should_activate("/lib/x86_64-linux-gnu/ld-linux.so.2", NULL,
-				    NULL) &&
-	    !policy_should_activate("/lib64/ld-linux-x86-64.so.2", NULL, NULL))
-		PASS();
-	else
+	if (!(!policy_should_activate("/bin/sh", NULL, NULL) &&
+	      !policy_should_activate("/sbin/init", NULL, NULL) &&
+	      !policy_should_activate("/lib/x86_64-linux-gnu/ld-linux.so.2",
+				      NULL, NULL) &&
+	      !policy_should_activate("/lib64/ld-linux-x86-64.so.2", NULL,
+				      NULL)))
 		FAIL("legacy /bin /sbin /lib /lib64 must be skipped by default");
 }
 
 static void test_policy_default_skips_pressure_vessel_host(void)
 {
 	TEST("policy: default skips /run/host/usr/* (pressure-vessel)");
-	if (!policy_should_activate("/run/host/usr/bin/basename", NULL, NULL) &&
-	    !policy_should_activate("/run/host/usr/sbin/ldconfig", NULL,
-				    NULL) &&
-	    !policy_should_activate("/run/host/lib64/ld-linux.so.2", NULL,
-				    NULL))
-		PASS();
-	else
+	if (!(!policy_should_activate("/run/host/usr/bin/basename", NULL,
+				      NULL) &&
+	      !policy_should_activate("/run/host/usr/sbin/ldconfig", NULL,
+				      NULL) &&
+	      !policy_should_activate("/run/host/lib64/ld-linux.so.2", NULL,
+				      NULL)))
 		FAIL("pressure-vessel /run/host/usr path must be skipped");
 }
 
 static void test_policy_default_activates_steam_path(void)
 {
 	TEST("policy: default activates Steam install paths");
-	if (policy_should_activate(
-		    "~/.local/share/Steam/steamapps/common/"
-		    "Counter-Strike Global Offensive/game/bin/linuxsteamrt64/cs2",
-		    NULL, NULL) &&
-	    policy_should_activate("~/.local/share/Steam/ubuntu12_32/reaper",
-				   NULL, NULL))
-		PASS();
-	else
+	if (!(policy_should_activate(
+		      "~/.local/share/Steam/steamapps/common/"
+		      "Counter-Strike Global Offensive/game/bin/linuxsteamrt64/cs2",
+		      NULL, NULL) &&
+	      policy_should_activate("~/.local/share/Steam/ubuntu12_32/reaper",
+				     NULL, NULL)))
 		FAIL("Steam-tree binaries must activate by default");
 }
 
 static void test_policy_default_activates_opt_and_home(void)
 {
 	TEST("policy: default activates /opt, /home, /srv (non-FHS-system)");
-	if (policy_should_activate("/opt/games/cs2", NULL, NULL) &&
-	    policy_should_activate("/home/user/games/foo", NULL, NULL) &&
-	    policy_should_activate("/srv/games/bar", NULL, NULL))
-		PASS();
-	else
+	if (!(policy_should_activate("/opt/games/cs2", NULL, NULL) &&
+	      policy_should_activate("/home/user/games/foo", NULL, NULL) &&
+	      policy_should_activate("/srv/games/bar", NULL, NULL)))
 		FAIL("/opt /home /srv must activate by default");
 }
 
 static void test_policy_default_activates_snap_and_flatpak(void)
 {
 	TEST("policy: default activates /snap and Flatpak paths");
-	if (policy_should_activate("/snap/cs2/current/cs2", NULL, NULL) &&
-	    policy_should_activate(
-		    "/var/lib/flatpak/app/com.valvesoftware.Steam/current/cs2",
-		    NULL, NULL))
-		PASS();
-	else
+	if (!(policy_should_activate("/snap/cs2/current/cs2", NULL, NULL) &&
+	      policy_should_activate(
+		      "/var/lib/flatpak/app/com.valvesoftware.Steam/current/cs2",
+		      NULL, NULL)))
 		FAIL("Snap and Flatpak operator-installed paths must activate");
 }
 
 static void test_policy_empty_exe_defaults_to_activate(void)
 {
-	TEST("policy: empty exe falls back to activate (read_self_exe failure)");
-	if (policy_should_activate("", NULL, NULL) &&
-	    policy_should_activate(NULL, NULL, NULL))
-		PASS();
-	else
+	TEST("policy: empty exe falls back to activate (read_self_exe fails)");
+	if (!(policy_should_activate("", NULL, NULL) &&
+	      policy_should_activate(NULL, NULL, NULL)))
 		FAIL("empty/NULL exe must fall back to activate");
 }
 
@@ -973,11 +924,9 @@ static void test_policy_handles_deleted_suffix(void)
 {
 	TEST("policy: handles '(deleted)' suffix on /proc/self/exe");
 	/* unlinked binary in /usr/ -> still matches /usr/ prefix -> skip */
-	if (!policy_should_activate("/usr/bin/cat (deleted)", NULL, NULL) &&
-	    /* unlinked binary outside /usr/ -> still activates */
-	    policy_should_activate("~/Steam/cs2 (deleted)", NULL, NULL))
-		PASS();
-	else
+	if (!(!policy_should_activate("/usr/bin/cat (deleted)", NULL, NULL) &&
+	      /* unlinked binary outside /usr/ -> still activates */
+	      policy_should_activate("~/Steam/cs2 (deleted)", NULL, NULL)))
 		FAIL("(deleted) suffix must not change prefix match outcome");
 }
 
@@ -985,15 +934,13 @@ static void test_policy_activate_pin_is_positive(void)
 {
 	TEST("policy: LOTA_HOOK_ACTIVATE_PATH is a positive pin");
 	const char *allow = "~/.local/share/Steam,/opt/games";
-	if (policy_should_activate(
-		    "~/.local/share/Steam/steamapps/common/cs2/cs2", allow,
-		    NULL) &&
-	    policy_should_activate("/opt/games/foo", allow, NULL) &&
-	    !policy_should_activate("/usr/bin/bash", allow, NULL) &&
-	    !policy_should_activate("/tmp/random/binary", allow, NULL) &&
-	    !policy_should_activate("~/other/path", allow, NULL))
-		PASS();
-	else
+	if (!(policy_should_activate(
+		      "~/.local/share/Steam/steamapps/common/cs2/cs2", allow,
+		      NULL) &&
+	      policy_should_activate("/opt/games/foo", allow, NULL) &&
+	      !policy_should_activate("/usr/bin/bash", allow, NULL) &&
+	      !policy_should_activate("/tmp/random/binary", allow, NULL) &&
+	      !policy_should_activate("~/other/path", allow, NULL)))
 		FAIL("ACTIVATE_PATH must be exclusive whitelist");
 }
 
@@ -1006,10 +953,8 @@ static void test_policy_activate_pin_overrides_fhs_skip(void)
 	 * the explicit pin must win because the operator has spoken.
 	 */
 	const char *allow = "/usr/local/games/";
-	if (policy_should_activate("/usr/local/games/foo", allow, NULL) &&
-	    !policy_should_activate("/usr/bin/bash", allow, NULL))
-		PASS();
-	else
+	if (!(policy_should_activate("/usr/local/games/foo", allow, NULL) &&
+	      !policy_should_activate("/usr/bin/bash", allow, NULL)))
 		FAIL("ACTIVATE_PATH must override the FHS default");
 }
 
@@ -1017,15 +962,14 @@ static void test_policy_skip_extends_default(void)
 {
 	TEST("policy: LOTA_HOOK_SKIP_PATH extends the FHS skip list");
 	const char *skip = "/nix/store/,/run/current-system/";
-	if (!policy_should_activate("/nix/store/abcdef/bin/bash", NULL, skip) &&
-	    !policy_should_activate("/run/current-system/sw/bin/foo", NULL,
-				    skip) &&
-	    /* FHS default still applies */
-	    !policy_should_activate("/usr/bin/cat", NULL, skip) &&
-	    /* paths outside both skip lists activate */
-	    policy_should_activate("~/Steam/cs2", NULL, skip))
-		PASS();
-	else
+	if (!(!policy_should_activate("/nix/store/abcdef/bin/bash", NULL,
+				      skip) &&
+	      !policy_should_activate("/run/current-system/sw/bin/foo", NULL,
+				      skip) &&
+	      /* FHS default still applies */
+	      !policy_should_activate("/usr/bin/cat", NULL, skip) &&
+	      /* paths outside both skip lists activate */
+	      policy_should_activate("~/Steam/cs2", NULL, skip)))
 		FAIL("SKIP_PATH must extend FHS without replacing it");
 }
 
@@ -1035,23 +979,19 @@ static void test_policy_activate_pin_ignores_skip(void)
 	const char *allow = "~/Steam/";
 	const char *skip = "~/Steam/";
 	/* ACTIVATE_PATH is evaluated first; SKIP_PATH never consulted */
-	if (policy_should_activate("~/Steam/cs2", allow, skip) &&
-	    !policy_should_activate("/usr/bin/cat", allow, skip))
-		PASS();
-	else
+	if (!(policy_should_activate("~/Steam/cs2", allow, skip) &&
+	      !policy_should_activate("/usr/bin/cat", allow, skip)))
 		FAIL("ACTIVATE_PATH must take precedence over SKIP_PATH");
 }
 
 static void test_policy_empty_env_strings_ignored(void)
 {
 	TEST("policy: empty env strings behave as unset");
-	if (!policy_should_activate("/usr/bin/cat", "", "") &&
-	    policy_should_activate("~/Steam/cs2", "", "") &&
-	    /* whitespace-only entries inside lists are ignored */
-	    !policy_should_activate("/usr/bin/cat", NULL, "   ,, ") &&
-	    policy_should_activate("~/Steam/cs2", "", NULL))
-		PASS();
-	else
+	if (!(!policy_should_activate("/usr/bin/cat", "", "") &&
+	      policy_should_activate("~/Steam/cs2", "", "") &&
+	      /* whitespace-only entries inside lists are ignored */
+	      !policy_should_activate("/usr/bin/cat", NULL, "   ,, ") &&
+	      policy_should_activate("~/Steam/cs2", "", NULL)))
 		FAIL("empty env strings must not flip the decision");
 }
 
@@ -1060,13 +1000,11 @@ static void test_policy_prefix_must_match_at_start(void)
 	TEST("policy: prefix match anchors at the start of the path");
 	/* "/usrlocal/..." must not match "/usr/" (no trailing slash boundary)
 	 */
-	if (policy_should_activate("/usrlocal/bin/foo", NULL, NULL) &&
-	    /* "/home/usr/x" must not be skipped just because "usr" appears */
-	    policy_should_activate("/home/usr/x", NULL, NULL) &&
-	    /* "/usr/" exact prefix still skips */
-	    !policy_should_activate("/usr/bin/cat", NULL, NULL))
-		PASS();
-	else
+	if (!(policy_should_activate("/usrlocal/bin/foo", NULL, NULL) &&
+	      /* "/home/usr/x" must not be skipped just because "usr" appears */
+	      policy_should_activate("/home/usr/x", NULL, NULL) &&
+	      /* "/usr/" exact prefix still skips */
+	      !policy_should_activate("/usr/bin/cat", NULL, NULL)))
 		FAIL("prefix match must anchor at index 0");
 }
 
@@ -1074,12 +1012,10 @@ static void test_policy_whitespace_tolerant(void)
 {
 	TEST("policy: comma list tolerates whitespace around entries");
 	const char *allow = " /opt/games ,  /home/games/ ,/srv/games/";
-	if (policy_should_activate("/opt/games/foo", allow, NULL) &&
-	    policy_should_activate("/home/games/bar", allow, NULL) &&
-	    policy_should_activate("/srv/games/baz", allow, NULL) &&
-	    !policy_should_activate("/usr/bin/cat", allow, NULL))
-		PASS();
-	else
+	if (!(policy_should_activate("/opt/games/foo", allow, NULL) &&
+	      policy_should_activate("/home/games/bar", allow, NULL) &&
+	      policy_should_activate("/srv/games/baz", allow, NULL) &&
+	      !policy_should_activate("/usr/bin/cat", allow, NULL)))
 		FAIL("path_has_prefix_in must strip leading/trailing "
 		     "whitespace");
 }
@@ -1101,12 +1037,10 @@ static void test_policy_whitespace_tolerant(void)
 static void test_policy_wine_title_is_attested(void)
 {
 	TEST("policy: the Windows title under Wine's loader is attested");
-	if (policy_should_activate_process(
+	if (!policy_should_activate_process(
 		    TEST_WINE "i386-unix/wine-preloader",
 		    "D:\\steamapps\\common\\A Title\\title.exe", TEST_TITLE_DIR,
 		    TEST_PIN, NULL))
-		PASS();
-	else
 		FAIL("the title's program must activate the hook");
 }
 
@@ -1114,40 +1048,36 @@ static void test_policy_wine_prefix_processes_are_skipped(void)
 {
 	TEST("policy: the prefix Wine starts beside the title is not");
 	const char *loader = TEST_WINE "i386-unix/wine64-preloader";
-	if (!policy_should_activate_process(
-		    loader, "C:\\windows\\system32\\services.exe",
-		    TEST_TITLE_DIR, TEST_PIN, NULL) &&
-	    !policy_should_activate_process(
-		    loader, "C:\\windows\\system32\\explorer.exe",
-		    TEST_TITLE_DIR, TEST_PIN, NULL) &&
-	    !policy_should_activate_process(
-		    loader,
-		    "\\\\?\\D:\\steamapps\\common\\Compat Tool\\files\\"
-		    "share\\wine/../../helper/helper.exe",
-		    TEST_TITLE_DIR, TEST_PIN, NULL) &&
-	    !policy_should_activate_process(
-		    TEST_WINE "x86_64-unix/wine-preloader",
-		    "c:\\windows\\system32\\launcher.exe", TEST_TITLE_DIR,
-		    TEST_PIN, NULL))
-		PASS();
-	else
+	if (!(!policy_should_activate_process(
+		      loader, "C:\\windows\\system32\\services.exe",
+		      TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	      !policy_should_activate_process(
+		      loader, "C:\\windows\\system32\\explorer.exe",
+		      TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	      !policy_should_activate_process(
+		      loader,
+		      "\\\\?\\D:\\steamapps\\common\\Compat Tool\\files\\"
+		      "share\\wine/../../helper/helper.exe",
+		      TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	      !policy_should_activate_process(
+		      TEST_WINE "x86_64-unix/wine-preloader",
+		      "c:\\windows\\system32\\launcher.exe", TEST_TITLE_DIR,
+		      TEST_PIN, NULL)))
 		FAIL("a prefix service must not be attested for the title");
 }
 
 static void test_policy_wine_title_any_drive_any_case(void)
 {
 	TEST("policy: the title is found through any drive, in any case");
-	if (policy_should_activate_process(
-		    TEST_WINE "x86_64-unix/wine",
-		    "Z:\\SRV\\library\\STEAMAPPS\\common\\a title\\bin\\"
-		    "title.exe",
-		    TEST_TITLE_DIR, TEST_PIN, NULL) &&
-	    policy_should_activate_process(
-		    TEST_WINE "x86_64-unix/wine64",
-		    "d:/steamapps/common/A Title/title.exe", TEST_TITLE_DIR,
-		    TEST_PIN, NULL))
-		PASS();
-	else
+	if (!(policy_should_activate_process(
+		      TEST_WINE "x86_64-unix/wine",
+		      "Z:\\SRV\\library\\STEAMAPPS\\common\\a title\\bin\\"
+		      "title.exe",
+		      TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	      policy_should_activate_process(
+		      TEST_WINE "x86_64-unix/wine64",
+		      "d:/steamapps/common/A Title/title.exe", TEST_TITLE_DIR,
+		      TEST_PIN, NULL)))
 		FAIL("drive letter, separator and case must not matter");
 }
 
@@ -1155,17 +1085,15 @@ static void test_policy_wine_title_matches_whole_components(void)
 {
 	TEST("policy: the title directory matches whole components");
 	const char *loader = TEST_WINE "i386-unix/wine-preloader";
-	if (!policy_should_activate_process(
-		    loader, "D:\\steamapps\\common\\A Title II\\title.exe",
-		    TEST_TITLE_DIR, TEST_PIN, NULL) &&
-	    !policy_should_activate_process(
-		    loader, "D:\\oldsteamapps\\common\\A Title\\title.exe",
-		    TEST_TITLE_DIR, TEST_PIN, NULL) &&
-	    !policy_should_activate_process(loader,
-					    "D:\\steamapps\\common\\A Title",
-					    TEST_TITLE_DIR, TEST_PIN, NULL))
-		PASS();
-	else
+	if (!(!policy_should_activate_process(
+		      loader, "D:\\steamapps\\common\\A Title II\\title.exe",
+		      TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	      !policy_should_activate_process(
+		      loader, "D:\\oldsteamapps\\common\\A Title\\title.exe",
+		      TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	      !policy_should_activate_process(loader,
+					      "D:\\steamapps\\common\\A Title",
+					      TEST_TITLE_DIR, TEST_PIN, NULL)))
 		FAIL("a neighbour whose name only starts the same matched");
 }
 
@@ -1173,36 +1101,32 @@ static void test_policy_wine_loader_without_program_is_skipped(void)
 {
 	TEST("policy: Wine's loader with no program is not the title");
 	const char *loader = TEST_WINE "i386-unix/wine-preloader";
-	if (!policy_should_activate_process(loader, NULL, TEST_TITLE_DIR,
-					    TEST_PIN, NULL) &&
-	    !policy_should_activate_process(loader, "", TEST_TITLE_DIR,
-					    TEST_PIN, NULL) &&
-	    policy_should_activate_process(
-		    TEST_WINE "i386-unix/wine-preloader (deleted)",
-		    "D:\\steamapps\\common\\A Title\\title.exe", TEST_TITLE_DIR,
-		    TEST_PIN, NULL))
-		PASS();
-	else
+	if (!(!policy_should_activate_process(loader, NULL, TEST_TITLE_DIR,
+					      TEST_PIN, NULL) &&
+	      !policy_should_activate_process(loader, "", TEST_TITLE_DIR,
+					      TEST_PIN, NULL) &&
+	      policy_should_activate_process(
+		      TEST_WINE "i386-unix/wine-preloader (deleted)",
+		      "D:\\steamapps\\common\\A Title\\title.exe",
+		      TEST_TITLE_DIR, TEST_PIN, NULL)))
 		FAIL("a loader hosting nothing must not be attested");
 }
 
 static void test_policy_program_leaves_native_processes_alone(void)
 {
 	TEST("policy: a native process is still decided by its path");
-	if (policy_should_activate_process(TEST_TITLE "/title", NULL,
-					   TEST_TITLE_DIR, TEST_PIN, NULL) &&
-	    !policy_should_activate_process(
-		    TEST_LIBRARY "/client/helper",
-		    "D:\\steamapps\\common\\A Title\\title.exe", TEST_TITLE_DIR,
-		    TEST_PIN, NULL) &&
-	    !policy_should_activate_process("/usr/bin/python3",
-					    TEST_TOOL "/launch", TEST_TITLE_DIR,
-					    TEST_PIN, NULL) &&
-	    policy_should_activate_process(TEST_TOOL "/files/bin/wineserver",
-					   NULL, TEST_TITLE_DIR, TEST_PIN,
-					   NULL))
-		PASS();
-	else
+	if (!(policy_should_activate_process(TEST_TITLE "/title", NULL,
+					     TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	      !policy_should_activate_process(
+		      TEST_LIBRARY "/client/helper",
+		      "D:\\steamapps\\common\\A Title\\title.exe",
+		      TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	      !policy_should_activate_process("/usr/bin/python3",
+					      TEST_TOOL "/launch",
+					      TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	      policy_should_activate_process(TEST_TOOL "/files/bin/wineserver",
+					     NULL, TEST_TITLE_DIR, TEST_PIN,
+					     NULL)))
 		FAIL("the program rule must answer for Wine's loader only");
 }
 
@@ -1210,16 +1134,14 @@ static void test_policy_wine_without_title_dir_uses_the_pin(void)
 {
 	TEST("policy: with no title directory Wine's loader uses the pin");
 	const char *loader = TEST_WINE "i386-unix/wine-preloader";
-	if (policy_should_activate_process(
-		    loader, "C:\\windows\\system32\\explorer.exe", NULL,
-		    TEST_PIN, NULL) &&
-	    policy_should_activate_process(
-		    loader, "C:\\windows\\system32\\explorer.exe", "", TEST_PIN,
-		    NULL) &&
-	    !policy_should_activate_process(loader, "C:\\game.exe", NULL,
-					    "/opt/games/", NULL))
-		PASS();
-	else
+	if (!(policy_should_activate_process(
+		      loader, "C:\\windows\\system32\\explorer.exe", NULL,
+		      TEST_PIN, NULL) &&
+	      policy_should_activate_process(
+		      loader, "C:\\windows\\system32\\explorer.exe", "",
+		      TEST_PIN, NULL) &&
+	      !policy_should_activate_process(loader, "C:\\game.exe", NULL,
+					      "/opt/games/", NULL)))
 		FAIL("an unset title directory must leave the pin in charge");
 }
 
@@ -1253,7 +1175,6 @@ static void test_write_status_marks_online_branch(void)
 		FAIL("missing LOTA_ATTESTED=1");
 		return;
 	}
-	PASS();
 }
 
 static void test_write_status_payload_offline_marker(void)
@@ -1285,7 +1206,6 @@ static void test_write_status_payload_offline_marker(void)
 		FAIL("attested flag leaked into offline payload");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1370,7 +1290,6 @@ static void test_offline_publish_replaces_the_last_good_status(void)
 		FAIL("snapshot survived the disconnect");
 		return;
 	}
-	PASS();
 }
 
 static void test_offline_publish_writes_once_per_episode(void)
@@ -1392,7 +1311,6 @@ static void test_offline_publish_writes_once_per_episode(void)
 		FAIL("the same episode published twice");
 		return;
 	}
-	PASS();
 }
 
 static void test_offline_clear_arms_the_next_disconnect(void)
@@ -1416,7 +1334,6 @@ static void test_offline_clear_arms_the_next_disconnect(void)
 		FAIL("the second disconnect never reached the sink");
 		return;
 	}
-	PASS();
 }
 
 /* a refusal or a registration between agents must not revive the cache */
@@ -1451,7 +1368,6 @@ static void test_a_republish_while_offline_stays_offline(void)
 		FAIL("the republish restored the cached verdict");
 		return;
 	}
-	PASS();
 }
 
 /* a publisher refusal is the agent saying no, not an agent gone */
@@ -1490,7 +1406,6 @@ static void test_a_publisher_refusal_is_not_offline(void)
 		FAIL("an agent lost after the refusal stayed reachable");
 		return;
 	}
-	PASS();
 }
 
 /* lota_poll_events() returns a count; only below zero is a failure */
@@ -1502,7 +1417,6 @@ static void test_a_quiet_wait_is_not_a_failure(void)
 		FAIL("zero events read as a failure");
 		return;
 	}
-	PASS();
 }
 
 static void test_a_delivered_event_is_not_a_failure(void)
@@ -1513,7 +1427,6 @@ static void test_a_delivered_event_is_not_a_failure(void)
 		FAIL("a delivered event read as a failure");
 		return;
 	}
-	PASS();
 }
 
 static void test_a_refusal_is_a_failure(void)
@@ -1525,7 +1438,6 @@ static void test_a_refusal_is_a_failure(void)
 		FAIL("a refusal read as success");
 		return;
 	}
-	PASS();
 }
 
 /* mock agent: a child answers the SDK and logs each command id it gets */
@@ -1797,8 +1709,6 @@ static void test_the_launch_path_registers_the_title(void)
 		FAIL("PROTECT_PID never sent, the title is not protected");
 		return;
 	}
-
-	PASS();
 }
 
 /* The latch holds: a later refresh does not re-register the process. */
@@ -1854,8 +1764,6 @@ static void test_the_registration_is_not_repeated(void)
 		FAIL("registration repeated after the first success");
 		return;
 	}
-
-	PASS();
 }
 
 /* lota-protect protects from exec, so nothing is left to wait for. */
@@ -1896,8 +1804,6 @@ static void test_the_first_refresh_registers(void)
 		FAIL("the title is not registered exactly once");
 		return;
 	}
-
-	PASS();
 }
 
 /* The player's file sink says it happened, not only the agent journal. */
@@ -1942,7 +1848,6 @@ static void test_the_status_file_names_the_refused_object(void)
 
 	atomic_store(&g_hook.self_protected, 0);
 	g_refusal->object[0] = '\0';
-	PASS();
 }
 
 /* A forked child's refusal survives the parent's next status write. */
@@ -1991,8 +1896,6 @@ static void test_a_child_refusal_reaches_the_parent_status(void)
 		FAIL("the parent's status dropped the child's refusal");
 		return;
 	}
-
-	PASS();
 }
 
 #define TORN_WRITERS 4
@@ -2079,11 +1982,10 @@ static void test_a_concurrent_refusal_is_never_torn(void)
 		return;
 	}
 	if (torn) {
-		printf("    %d of %d names torn\n", torn, seen);
+		FAIL("%d of %d names torn", torn, seen);
 		FAIL("the status named a torn refusal");
 		return;
 	}
-	PASS();
 }
 
 /* A child dead inside the lock leaves no half name and no stuck lock. */
@@ -2120,7 +2022,6 @@ static void test_a_child_dead_in_the_lock_frees_it(void)
 		return;
 	}
 	g_refusal->object[0] = '\0';
-	PASS();
 }
 
 /* Nothing the hook does to explain a refusal may change what loads. */
@@ -2176,8 +2077,6 @@ static void test_the_loader_wrapper_hands_back_what_it_got(void)
 		FAIL("a failed load the gate did not refuse was recorded");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -2262,8 +2161,6 @@ static void test_a_refused_dependency_is_named(void)
 		FAIL("an earlier refusal was blamed for this load");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -2314,8 +2211,6 @@ static void test_a_registration_publishes_itself(void)
 		FAIL("the sink still says the title is not in the gates");
 		return;
 	}
-
-	PASS();
 }
 
 /* likewise a refusal: no agent event follows it */
@@ -2379,8 +2274,6 @@ static void test_a_refusal_publishes_itself(void)
 		FAIL("the sink does not carry the refusal the title just met");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -2450,7 +2343,6 @@ static void test_lota_protect_protects_then_starts(void)
 		FAIL("the agent was not asked exactly once");
 		return;
 	}
-	PASS();
 }
 
 /* a tracer holding the process: the game must not start unprotected */
@@ -2485,7 +2377,6 @@ static void test_lota_protect_refused_does_not_start(void)
 		FAIL("the refusal did not exit with 125");
 		return;
 	}
-	PASS();
 }
 
 /* the thread asks again every cycle; the player's log hears it once */
@@ -2549,10 +2440,9 @@ static void test_a_repeated_registration_refusal_warns_once(void)
 		fclose(f);
 
 	if (warned != 1) {
-		printf("FAIL: %d warnings\n", warned);
+		FAIL("%d warnings", warned);
 		return;
 	}
-	PASS();
 }
 
 /* no agent: the game starts, and the agent's absence is what reports it */
@@ -2572,7 +2462,6 @@ static void test_lota_protect_without_agent_starts(void)
 		FAIL("the program did not run without an agent");
 		return;
 	}
-	PASS();
 }
 
 /* a token directory repaired to 0700 must log the mode it had */
@@ -2607,8 +2496,6 @@ static void test_a_repaired_token_dir_mode_is_reported(void)
 		FAIL("the repair does not name the mode it found");
 		return;
 	}
-
-	PASS();
 }
 
 /* A directory that was already 0700 was not repaired and says nothing. */
@@ -2634,8 +2521,6 @@ static void test_an_untouched_token_dir_reports_no_repair(void)
 		FAIL("a directory that was not repaired reports a repair");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -2690,8 +2575,6 @@ static void test_an_unreachable_socket_is_classified(void)
 		FAIL("a socket this process may not open is not reported as refused");
 		return;
 	}
-
-	PASS();
 }
 
 /* The reason a player can act on, not the errno alone. */
@@ -2718,13 +2601,11 @@ static void test_a_refused_socket_names_the_group(void)
 		FAIL("an errno with nothing to say invents a reason");
 		return;
 	}
-
-	PASS();
 }
 
 int main(void)
 {
-	printf("=== LOTA Wine Hook Unit Tests ===\n\n");
+	test_begin("wine hook");
 
 	setup_tmpdir();
 
@@ -2833,6 +2714,5 @@ int main(void)
 
 	cleanup_tmpdir();
 
-	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
-	return (tests_passed == tests_run) ? 0 : 1;
+	return test_end();
 }

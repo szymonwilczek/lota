@@ -12,33 +12,29 @@
 // lota_tpm_nv_chunk_check() must reject both.
 
 #include "lota_tpm_nv.h"
-
-#include <stdio.h>
+#include "test.h"
 
 int main(void)
 {
+	test_begin("tpm nv chunk");
+
 	/* zero-length chunk makes no progress: the read loop would spin */
-	if (lota_tpm_nv_chunk_check(0, 100) >= 0) {
-		fprintf(stderr, "FAIL: zero-length chunk accepted\n");
-		return 1;
-	}
+	TEST("zero-length chunk is rejected");
+	if (lota_tpm_nv_chunk_check(0, 100) >= 0)
+		FAIL("zero-length chunk accepted");
 
 	/* chunk larger than requested would overrun the destination */
-	if (lota_tpm_nv_chunk_check(200, 100) >= 0) {
-		fprintf(stderr, "FAIL: oversized chunk accepted\n");
-		return 1;
-	}
+	TEST("chunk larger than requested is rejected");
+	if (lota_tpm_nv_chunk_check(200, 100) >= 0)
+		FAIL("oversized chunk accepted");
 
 	/* chunks at or below the requested size are safe to copy */
-	if (lota_tpm_nv_chunk_check(100, 100) != 0) {
-		fprintf(stderr, "FAIL: full-size chunk rejected\n");
-		return 1;
-	}
-	if (lota_tpm_nv_chunk_check(50, 100) != 0) {
-		fprintf(stderr, "FAIL: partial chunk rejected\n");
-		return 1;
-	}
+	TEST("full-size chunk is accepted");
+	if (lota_tpm_nv_chunk_check(100, 100) != 0)
+		FAIL("full-size chunk rejected");
+	TEST("partial chunk is accepted");
+	if (lota_tpm_nv_chunk_check(50, 100) != 0)
+		FAIL("partial chunk rejected");
 
-	printf("tpm nv chunk check: ok\n");
-	return 0;
+	return test_end();
 }

@@ -136,7 +136,6 @@ static void test_live_self_measure(void)
 		FAIL("not deterministic");
 		return;
 	}
-	PASS();
 }
 
 /* Collect the object paths reported by lota_ac_list_runtime_objects. */
@@ -195,7 +194,6 @@ static void test_list_objects_self_first(void)
 		FAIL("first object is not the main executable");
 		return;
 	}
-	PASS();
 }
 
 static void test_live_matches_object_set(void)
@@ -241,7 +239,6 @@ static void test_live_matches_object_set(void)
 		FAIL("live != set over enumerated objects");
 		return;
 	}
-	PASS();
 }
 
 static void test_file_measure_copy_matches(void)
@@ -278,7 +275,6 @@ static void test_file_measure_copy_matches(void)
 		FAIL("copy differs");
 		goto cleanup;
 	}
-	PASS();
 cleanup:
 	unlink(p1);
 	unlink(p2);
@@ -340,7 +336,6 @@ static void test_tamper_in_exec_segment_detected(void)
 		FAIL("patch not detected");
 		return;
 	}
-	PASS();
 }
 
 static void test_invalid_args(void)
@@ -361,7 +356,6 @@ static void test_invalid_args(void)
 		FAIL("file NULL out");
 		return;
 	}
-	PASS();
 }
 
 static void test_missing_file(void)
@@ -374,7 +368,6 @@ static void test_missing_file(void)
 		FAIL("expected error");
 		return;
 	}
-	PASS();
 }
 
 static void test_non_elf_rejected(void)
@@ -404,7 +397,6 @@ static void test_non_elf_rejected(void)
 		FAIL("accepted junk");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -537,7 +529,6 @@ static void test_rejects_elfclass32(void)
 		FAIL("expected -ENOTSUP");
 		return;
 	}
-	PASS();
 }
 
 static void test_rejects_big_endian(void)
@@ -560,7 +551,6 @@ static void test_rejects_big_endian(void)
 		FAIL("expected -ENOTSUP");
 		return;
 	}
-	PASS();
 }
 
 static void test_rejects_bad_phentsize(void)
@@ -581,7 +571,6 @@ static void test_rejects_bad_phentsize(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_rejects_zero_phnum(void)
@@ -605,7 +594,6 @@ static void test_rejects_zero_phnum(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_rejects_phoff_past_eof(void)
@@ -629,7 +617,6 @@ static void test_rejects_phoff_past_eof(void)
 		FAIL("accepted phoff past EOF");
 		return;
 	}
-	PASS();
 }
 
 static void test_rejects_segment_past_eof(void)
@@ -652,7 +639,6 @@ static void test_rejects_segment_past_eof(void)
 		FAIL("expected -EIO");
 		return;
 	}
-	PASS();
 }
 
 static void test_rejects_no_exec_segment(void)
@@ -677,7 +663,6 @@ static void test_rejects_no_exec_segment(void)
 		FAIL("expected -ENOENT");
 		return;
 	}
-	PASS();
 }
 
 static void test_rejects_too_many_exec_segments(void)
@@ -705,7 +690,6 @@ static void test_rejects_too_many_exec_segments(void)
 		FAIL("expected -E2BIG");
 		return;
 	}
-	PASS();
 }
 
 static void test_second_segment_fields_bound(void)
@@ -777,7 +761,6 @@ static void test_second_segment_fields_bound(void)
 		FAIL("second segment vaddr not bound");
 		return;
 	}
-	PASS();
 }
 
 static void test_synthetic_two_segments_stable(void)
@@ -807,7 +790,6 @@ static void test_synthetic_two_segments_stable(void)
 		FAIL("identical inputs diverged");
 		return;
 	}
-	PASS();
 }
 
 static void test_set_order_independent(void)
@@ -854,7 +836,6 @@ static void test_set_order_independent(void)
 		FAIL("second object ignored in set");
 		return;
 	}
-	PASS();
 }
 
 static void test_set_skips_non_exec_member(void)
@@ -893,7 +874,6 @@ static void test_set_skips_non_exec_member(void)
 		FAIL("non-exec member changed the digest");
 		return;
 	}
-	PASS();
 }
 
 static void test_list_null_callback(void)
@@ -903,12 +883,11 @@ static void test_list_null_callback(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("=== LOTA runtime re-measurement tests === \n\n");
+	test_begin("runtime measure");
 
 	test_live_self_measure();
 	test_list_objects_self_first();
@@ -939,6 +918,5 @@ int main(void)
 	test_set_skips_non_exec_member();
 	test_list_null_callback();
 
-	printf("\n%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

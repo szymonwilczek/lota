@@ -608,7 +608,6 @@ static void test_session_notification_is_delivered(struct ipc_context *ctx)
 		}
 	}
 
-	PASS();
 out:
 	close(title_fd);
 	close(loop_fd);
@@ -708,7 +707,6 @@ static void test_sync_after_notification_is_answered(struct ipc_context *ctx)
 		}
 	}
 
-	PASS();
 out:
 	close(title_fd);
 	close(loop_fd);
@@ -896,8 +894,6 @@ static void test_outside_client_may_subscribe(struct ipc_context *ctx)
 		FAIL("subscribe was not answered with OK");
 		return;
 	}
-
-	PASS();
 }
 
 /* Subscribing is worth nothing unless the event then arrives unasked */
@@ -949,8 +945,6 @@ static void test_outside_client_is_notified(struct ipc_context *ctx)
 		FAIL("the pushed frame is not the status event");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -1009,8 +1003,6 @@ static void test_title_push_carries_its_publisher_view(struct ipc_context *ctx)
 		FAIL("the title did not get its push and its status");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -1039,8 +1031,6 @@ static void test_publisher_event_stays_reserved(struct ipc_context *ctx)
 		FAIL("a reserved-only mask is not refused as a bad request");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -1127,7 +1117,6 @@ static void test_attest_round_is_reported(struct ipc_context *ctx)
 		return;
 	}
 
-	PASS();
 	return;
 reap:
 	kill(pid, SIGKILL);
@@ -1170,8 +1159,6 @@ static void test_failed_round_is_reported(struct ipc_context *ctx)
 		FAIL("a failed round is emitted as a success");
 		return;
 	}
-
-	PASS();
 }
 
 /* Nothing happened, so nothing is announced */
@@ -1205,8 +1192,6 @@ static void test_repeated_sync_announces_nothing(struct ipc_context *ctx)
 		FAIL("an idle sync is announced as a round");
 		return;
 	}
-
-	PASS();
 }
 
 static pid_t protected_child(void)
@@ -1309,7 +1294,6 @@ static void test_terminate_reaches_the_target(struct ipc_context *ctx)
 		goto out;
 	}
 
-	PASS();
 out:
 	protected_forget();
 }
@@ -1345,7 +1329,6 @@ static void test_terminate_target_reaped_mid_request(struct ipc_context *ctx)
 		goto out;
 	}
 
-	PASS();
 out:
 	if (terminate_victim > 0) {
 		kill(terminate_victim, SIGKILL);
@@ -1600,8 +1583,6 @@ static void test_terminate_flags_the_owner_publisher(struct ipc_context *ctx,
 		FAIL("the owner publisher does not read its termination");
 	else if (!(ctx->status_flags & LOTA_STATUS_PROTECTED_TERMINATED))
 		FAIL("the host word does not carry the termination");
-	else
-		PASS();
 
 out:
 	if (sub >= 0)
@@ -1869,9 +1850,7 @@ static void test_token_holds_the_callers_instance(struct ipc_context *ctx,
 
 out:
 	if (why)
-		FAIL(why);
-	else
-		PASS();
+		FAIL("%s", why);
 	memset(instance_of, 0, sizeof(instance_of));
 	if (sibling > 0) {
 		kill(sibling, SIGKILL);
@@ -1946,8 +1925,6 @@ static void test_status_push_follows_the_title_word(struct ipc_context *ctx,
 	memcpy(&notify, payload, sizeof(notify));
 	if (!(notify.flags & LOTA_STATUS_ATTESTED))
 		FAIL("the push does not carry its publisher's verdict");
-	else
-		PASS();
 
 out:
 	if (sub >= 0)
@@ -2025,12 +2002,9 @@ static void test_terminate_from_nested_namespace(struct ipc_context *ctx)
 	close(pfd[0]);
 
 	if (WIFEXITED(status) && WEXITSTATUS(status) == 77) {
-		tests_run--;
-		printf("SKIP: no user and PID namespace here\n");
+		SKIP("no user and PID namespace here");
 	} else if (result != LOTA_IPC_ERR_ACCESS_DENIED) {
 		FAIL("a PID from a nested namespace reached the policy");
-	} else {
-		PASS();
 	}
 }
 
@@ -2040,17 +2014,17 @@ int main(void)
 	struct attest_target *profiles;
 	int listen_fd;
 
-	printf("=== IPC push notification tests ===\n\n");
+	test_begin("ipc notify");
 
 	listen_fd = listener_open();
 	if (listen_fd < 0) {
-		printf("SKIP: cannot create a Unix socket in /tmp (%s)\n",
-		       strerror(-listen_fd));
+		SKIP("cannot create a Unix socket in /tmp (%s)",
+		     strerror(-listen_fd));
 		return 0;
 	}
 
 	if (ipc_init_activated(&ctx, listen_fd) < 0) {
-		printf("SKIP: ipc_init_activated failed\n");
+		SKIP("ipc_init_activated failed");
 		close(listen_fd);
 		unlink(test_socket);
 		return 0;
@@ -2058,13 +2032,13 @@ int main(void)
 
 	profiles = calloc(1, sizeof(*profiles));
 	if (!profiles) {
-		printf("FAIL: out of memory\n");
+		FAIL("out of memory");
 		ipc_cleanup(&ctx);
 		unlink(test_socket);
 		return 1;
 	}
 	if (profile_init(profiles, test_profile_hex) < 0) {
-		printf("SKIP: cannot record consent under /tmp\n");
+		SKIP("cannot record consent under /tmp");
 		ipc_cleanup(&ctx);
 		free(profiles);
 		unlink(test_socket);
@@ -2093,6 +2067,5 @@ int main(void)
 	free(profiles);
 	unlink(test_socket);
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

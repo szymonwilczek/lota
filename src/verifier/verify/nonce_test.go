@@ -91,7 +91,7 @@ func TestNonceStore_GenerateAndVerify(t *testing.T) {
 		t.Error("SECURITY: Nonce is all zeros - no entropy!")
 	}
 
-	t.Logf("✓ Generated nonce: %x", challenge.Nonce)
+	t.Logf("Generated nonce: %x", challenge.Nonce)
 
 	report := &types.AttestationReport{}
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
@@ -104,7 +104,7 @@ func TestNonceStore_GenerateAndVerify(t *testing.T) {
 		t.Fatalf("Nonce verification failed for valid report: %v", err)
 	}
 
-	t.Log("✓ Nonce correctly verified on first use")
+	t.Log("Nonce correctly verified on first use")
 }
 
 func TestNonceStore_OneTimeUse(t *testing.T) {
@@ -125,7 +125,7 @@ func TestNonceStore_OneTimeUse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("First verification failed: %v", err)
 	}
-	t.Log("✓ First verification succeeded")
+	t.Log("First verification succeeded")
 
 	// MUST FAIL
 	err = store.VerifyNonce(report, "binding-1", zeroIdentity)
@@ -133,7 +133,7 @@ func TestNonceStore_OneTimeUse(t *testing.T) {
 		t.Fatal("SECURITY VIOLATION: Second verification succeeded - replay attack possible!")
 	}
 
-	t.Logf("✓ Correctly rejected replay attempt: %v", err)
+	t.Logf("Correctly rejected replay attempt: %v", err)
 }
 
 func TestNonceStore_Expiration(t *testing.T) {
@@ -193,7 +193,7 @@ func TestNonceStore_UnknownNonce(t *testing.T) {
 		t.Fatal("SECURITY: Unknown nonce was accepted!")
 	}
 
-	t.Logf("✓ Correctly rejected unknown nonce: %v", err)
+	t.Logf("Correctly rejected unknown nonce: %v", err)
 }
 
 func TestNonceStore_ClientBinding(t *testing.T) {
@@ -215,7 +215,7 @@ func TestNonceStore_ClientBinding(t *testing.T) {
 		t.Fatal("SECURITY: Nonce accepted for wrong binding ID!")
 	}
 
-	t.Logf("✓ Correctly rejected nonce for wrong binding ID: %v", err)
+	t.Logf("Correctly rejected nonce for wrong binding ID: %v", err)
 }
 
 func TestNonceStore_UniqueNonces(t *testing.T) {
@@ -244,7 +244,7 @@ func TestNonceStore_UniqueNonces(t *testing.T) {
 		seen[key] = true
 	}
 
-	t.Log("✓ All 100 generated nonces are unique")
+	t.Log("All 100 generated nonces are unique")
 }
 
 func TestNonceStore_GenerateChallenge_RetriesOnPendingCollision(t *testing.T) {
@@ -352,7 +352,7 @@ func TestNonceStore_PendingCount(t *testing.T) {
 		t.Errorf("After 5 challenges: got %d, want 5", store.PendingCount())
 	}
 
-	t.Logf("✓ Pending count correctly tracks outstanding challenges")
+	t.Logf("Pending count correctly tracks outstanding challenges")
 }
 
 func TestNonceStore_NonceMismatchInAttest(t *testing.T) {
@@ -377,7 +377,7 @@ func TestNonceStore_NonceMismatchInAttest(t *testing.T) {
 		t.Fatal("SECURITY VIOLATION: Accepted report with mismatched nonces!")
 	}
 
-	t.Logf("✓ Correctly detected nonce tampering: %v", err)
+	t.Logf("Correctly detected nonce tampering: %v", err)
 }
 
 func TestNonceStore_UsedNonceHistory(t *testing.T) {
@@ -409,7 +409,7 @@ func TestNonceStore_UsedNonceHistory(t *testing.T) {
 		t.Fatal("SECURITY VIOLATION: Used nonce was accepted on replay!")
 	}
 
-	t.Logf("✓ Used nonce correctly blocked on replay: %v", err)
+	t.Logf("Used nonce correctly blocked on replay: %v", err)
 }
 
 func TestNonceStore_UsedNonceHistoryMax(t *testing.T) {
@@ -445,7 +445,7 @@ func TestNonceStore_UsedNonceHistoryMax(t *testing.T) {
 		t.Errorf("Used count exceeds max: got %d, want <= 5", store.UsedCount())
 	}
 
-	t.Logf("✓ Used nonce history correctly bounded at max=%d (current=%d)",
+	t.Logf("Used nonce history correctly bounded at max=%d (current=%d)",
 		5, store.UsedCount())
 }
 
@@ -473,7 +473,7 @@ func TestNonceStore_RateLimitPending(t *testing.T) {
 		t.Fatal("SECURITY: Should have rejected challenge exceeding pending limit!")
 	}
 
-	t.Logf("✓ Correctly rejected challenge exceeding pending limit: %v", err)
+	t.Logf("Correctly rejected challenge exceeding pending limit: %v", err)
 
 	// other client should not be affected
 	_, err = store.GenerateChallenge("binding-other", 0x00004003)
@@ -481,7 +481,7 @@ func TestNonceStore_RateLimitPending(t *testing.T) {
 		t.Fatalf("Other client should not be rate limited: %v", err)
 	}
 
-	t.Log("✓ Rate limiting is per-client (other clients unaffected)")
+	t.Log("Rate limiting is per-client (other clients unaffected)")
 }
 
 func TestNonceStore_RateLimitWindow(t *testing.T) {
@@ -531,7 +531,7 @@ func TestNonceStore_RateLimitWindow(t *testing.T) {
 	if err == nil {
 		t.Fatal("SECURITY: Should have rejected verify exceeding identity rate limit!")
 	}
-	t.Logf("✓ Rate limit enforced: %v", err)
+	t.Logf("Rate limit enforced: %v", err)
 
 	// wait for window to reset
 	time.Sleep(250 * time.Millisecond)
@@ -549,7 +549,7 @@ func TestNonceStore_RateLimitWindow(t *testing.T) {
 		t.Fatalf("Verify after window reset should succeed: %v", err)
 	}
 
-	t.Log("✓ Rate limit window correctly resets")
+	t.Log("Rate limit window correctly resets")
 }
 
 func TestNonceStore_MonotonicCounter(t *testing.T) {
@@ -587,7 +587,7 @@ func TestNonceStore_MonotonicCounter(t *testing.T) {
 		}
 	}
 
-	t.Log("✓ Monotonic counter increments per successful verification")
+	t.Log("Monotonic counter increments per successful verification")
 }
 
 type usedNonceBackendFirstCollision struct {
@@ -719,7 +719,7 @@ func TestNonceStore_ConcurrentSafety(t *testing.T) {
 		t.Errorf("Concurrent error: %v", err)
 	}
 
-	t.Logf("✓ 100 concurrent challenge-verify cycles completed safely")
+	t.Logf("100 concurrent challenge-verify cycles completed safely")
 	t.Logf("  Pending: %d, Used: %d", store.PendingCount(), store.UsedCount())
 }
 
@@ -743,7 +743,7 @@ func TestNonceStoreFromConfig(t *testing.T) {
 		t.Errorf("Initial used: got %d, want 0", store.UsedCount())
 	}
 
-	t.Log("✓ NonceStore correctly initialized from config")
+	t.Log("NonceStore correctly initialized from config")
 }
 
 // Table-driven tests for edge cases

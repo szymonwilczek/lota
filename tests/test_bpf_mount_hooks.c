@@ -31,21 +31,11 @@
 #include <gelf.h>
 #include <libelf.h>
 
+#include "test.h"
+
 #ifndef BPF_OBJ_PATH
 #define BPF_OBJ_PATH "build/lota_lsm.bpf.o"
 #endif
-
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
 
 static Elf_Scn *find_section(Elf *elf, const char *section)
 {
@@ -286,8 +276,8 @@ static int compares_every_map(Elf *elf, const char *section)
 		    GELF_ST_TYPE(sym.st_info) != STT_OBJECT)
 			continue;
 		if (!seen[i]) {
-			fprintf(stderr, "  %s compares no %s\n", section,
-				elf_strptr(elf, symhdr.sh_link, sym.st_name));
+			FAIL("%s compares no %s", section,
+			     elf_strptr(elf, symhdr.sh_link, sym.st_name));
 			total = 0;
 			break;
 		}
@@ -304,55 +294,59 @@ int main(void)
 	Elf *elf;
 	int fd;
 
-	printf("=== mount-hook coverage in %s ===\n", path);
+	test_begin("bpf mount hooks");
 
 	if (elf_version(EV_CURRENT) == EV_NONE) {
-		fprintf(stderr, "FAIL: libelf is unusable\n");
+		FAIL("libelf is unusable");
 		return 1;
 	}
 
 	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) {
-		fprintf(stderr, "FAIL: cannot open %s\n", path);
+		FAIL("cannot open %s", path);
 		return 1;
 	}
 
 	elf = elf_begin(fd, ELF_C_READ, NULL);
 	if (!elf) {
-		fprintf(stderr, "FAIL: %s is not an ELF object\n", path);
+		FAIL("%s is not an ELF object", path);
 		close(fd);
 		return 1;
 	}
 
-	CHECK(has_section(elf, "lsm/sb_mount"),
-	      "the legacy mount(2) path is hooked");
-	CHECK(has_section(elf, "lsm/move_mount"),
-	      "the open_tree/move_mount path is hooked");
+	TEST("the legacy mount(2) path is hooked");
+	if (!has_section(elf, "lsm/sb_mount"))
+		FAIL("expected: has_section(elf, \"lsm/sb_mount\")");
+	TEST("the open_tree/move_mount path is hooked");
+	if (!has_section(elf, "lsm/move_mount"))
+		FAIL("expected: has_section(elf, \"lsm/move_mount\")");
 
-	CHECK(masks_bits(elf, "lota_sb_mount", MS_BIND | MS_MOVE),
-	      "mount(2) is checked for MS_BIND and MS_MOVE alike");
+	TEST("mount(2) is checked for MS_BIND and MS_MOVE alike");
+	if (!masks_bits(elf, "lota_sb_mount", MS_BIND | MS_MOVE))
+		FAIL("expected: masks_bits(elf, \"lota_sb_mount\", MS_BIND | "
+		     "MS_MOVE)");
 
-	CHECK(has_map(elf, "trusted_libs"),
-	      "the trusted libraries themselves are keyed");
+	TEST("the trusted libraries themselves are keyed");
+	if (!has_map(elf, "trusted_libs"))
+		FAIL("expected: has_map(elf, \"trusted_libs\")");
 
-	CHECK(!has_map(elf, "trusted_lib_mnt"),
-	      "no ancestor directory of a trusted library is armed");
+	TEST("no ancestor directory of a trusted library is armed");
+	if (has_map(elf, "trusted_lib_mnt"))
+		FAIL("expected: !has_map(elf, \"trusted_lib_mnt\")");
 
-	CHECK(reserves_ringbuf(elf, "lota_sb_mount"),
-	      "a refused mount(2) bind leaves a record");
-	CHECK(reserves_ringbuf(elf, "lota_move_mount"),
-	      "a refused move_mount leaves a record");
+	TEST("a refused mount(2) bind leaves a record");
+	if (!reserves_ringbuf(elf, "lota_sb_mount"))
+		FAIL("expected: reserves_ringbuf(elf, \"lota_sb_mount\")");
+	TEST("a refused move_mount leaves a record");
+	if (!reserves_ringbuf(elf, "lota_move_mount"))
+		FAIL("expected: reserves_ringbuf(elf, \"lota_move_mount\")");
 
-	CHECK(compares_every_map(elf, "lsm/bpf_map"),
-	      "lsm/bpf_map compares the map with each map in .maps");
+	TEST("lsm/bpf_map compares the map with each map in .maps");
+	if (!compares_every_map(elf, "lsm/bpf_map"))
+		FAIL("expected: compares_every_map(elf, \"lsm/bpf_map\")");
 
 	elf_end(elf);
 	close(fd);
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll mount-hook coverage tests passed\n");
-	return 0;
+	return test_end();
 }

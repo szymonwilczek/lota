@@ -14,6 +14,9 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "verify rpm release"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
@@ -21,21 +24,13 @@ TOOL="$REPO_DIR/scripts/verify-rpm-release.sh"
 
 for t in rpmbuild rpm2archive tar openssl; do
     if ! command -v "$t" >/dev/null 2>&1; then
-        echo "SKIP: $t is not installed"
-        exit 0
+        SKIP "%s is not installed" "$t"
+        test_end
     fi
 done
 
 WORK=$(mktemp -d)
-trap 'rm -rf -- "$WORK"' EXIT
-
-fail=0
-
-pass_msg() { echo "PASS: $1"; }
-fail_msg() {
-    echo "FAIL: $1"
-    fail=1
-}
+test_cleanup 'rm -rf -- "$WORK"'
 
 # a payload tree: a tool, a link to it, and a signed object with its key
 make_payload() {
@@ -89,7 +84,7 @@ $post
 EOF
     rpmbuild -bb --quiet --define "_topdir $top" "$top/SPECS/$name.spec" \
              >"$top/rpmbuild.log" 2>&1 || {
-        cat "$top/rpmbuild.log"
+        FAIL "%s" "$(tail -n 20 "$top/rpmbuild.log")"
         exit 1
     }
     cp "$top"/RPMS/noarch/*.rpm "$out/"
@@ -97,14 +92,12 @@ EOF
 
 # expect_check WANT MANIFEST RPM_DIR MESSAGE
 expect_check() {
-    local want="$1" manifest="$2" dir="$3" msg="$4" rc=0
+    local want="$1" manifest="$2" dir="$3" rc=0
+    TEST "$4"
     "$TOOL" check "$manifest" "$dir" >"$WORK/check.log" 2>&1 || rc=$?
-    if [[ "$want" == pass && $rc -eq 0 ]] ||
-           [[ "$want" == fail && $rc -ne 0 ]]; then
-        pass_msg "$msg"
-    else
-        fail_msg "$msg"
-        cat "$WORK/check.log"
+    if [[ "$want" == pass && $rc -ne 0 ]] ||
+           [[ "$want" == fail && $rc -eq 0 ]]; then
+        FAIL "%s" "$(cat "$WORK/check.log")"
     fi
 }
 
@@ -117,23 +110,16 @@ build_rpm example-sdk "$WORK/payload" "$WORK/release"
 "$TOOL" stage "$WORK/release" "$WORK/stage"
 "$TOOL" manifest "$WORK/stage" "$WORK/SHA256SUMS-fedora"
 
-if grep -q 'example-agent-1.0-1.noarch/usr/bin/example-tool$' \
-        "$WORK/SHA256SUMS-fedora" &&
-        grep -q 'example-agent-1.0-1.noarch.header$' "$WORK/SHA256SUMS-fedora" &&
-        ! grep -q 'example-link$' "$WORK/SHA256SUMS-fedora"; then
-    pass_msg "the manifest names each file and header by package and version"
-else
-    fail_msg "the manifest names each file and header by package and version"
-    cat "$WORK/SHA256SUMS-fedora"
-fi
+TEST "the manifest names each file and header by package"
+grep -q 'example-agent-1.0-1.noarch/usr/bin/example-tool$' \
+     "$WORK/SHA256SUMS-fedora" &&
+     grep -q 'example-agent-1.0-1.noarch.header$' "$WORK/SHA256SUMS-fedora" &&
+     ! grep -q 'example-link$' "$WORK/SHA256SUMS-fedora" ||
+     FAIL "%s" "$(cat "$WORK/SHA256SUMS-fedora")"
 hdr="$WORK/stage/example-agent-1.0-1.noarch.header"
-if grep -q '^lrwxrwxrwx root root .* /usr/bin/example-link -> example-tool$' \
-        "$hdr" && grep -q '^echo installed$' "$hdr"; then
-    pass_msg "the header file records the link and the scriptlet"
-else
-    fail_msg "the header file records the link and the scriptlet"
-    cat "$hdr"
-fi
+TEST "the header file records the link and the scriptlet"
+grep -q '^lrwxrwxrwx root root .* /usr/bin/example-link -> example-tool$' \
+     "$hdr" && grep -q '^echo installed$' "$hdr" || FAIL "%s" "$(cat "$hdr")"
 
 expect_check pass "$WORK/SHA256SUMS-fedora" "$WORK/release" \
              "the RPMs the manifest was made from pass"
@@ -158,15 +144,11 @@ expect_check fail "$WORK/SHA256SUMS-fedora" "$WORK/byte-rpm" \
 mkdir -p "$WORK/torn"
 head -c 2000 "$WORK"/release/example-agent-*.rpm \
      >"$WORK/torn/example-agent-1.0-1.noarch.rpm"
+TEST "an RPM that does not unpack fails with a FAIL line"
 if "$TOOL" check "$WORK/SHA256SUMS-fedora" "$WORK/torn" \
-           >"$WORK/check.log" 2>&1; then
-    fail_msg "an RPM that does not unpack fails with a FAIL line"
-    cat "$WORK/check.log"
-elif grep -q '^FAIL: .* does not unpack$' "$WORK/check.log"; then
-    pass_msg "an RPM that does not unpack fails with a FAIL line"
-else
-    fail_msg "an RPM that does not unpack fails with a FAIL line"
-    cat "$WORK/check.log"
+           >"$WORK/check.log" 2>&1 ||
+           ! grep -q '^FAIL: .* does not unpack$' "$WORK/check.log"; then
+    FAIL "%s" "$(cat "$WORK/check.log")"
 fi
 
 build_rpm example-agent "$WORK/payload" "$WORK/mode-rpm" 4755
@@ -189,7 +171,7 @@ build_rpm example-agent "$WORK/badsig" "$WORK/badsig-rpm"
 "$TOOL" stage "$WORK/badsig-rpm" "$WORK/badsig-stage"
 "$TOOL" manifest "$WORK/badsig-stage" "$WORK/badsig.sums"
 expect_check fail "$WORK/badsig.sums" "$WORK/badsig-rpm" \
-             "a signature its key does not verify fails, even in its own manifest"
+             "a bad signature fails, even in its own manifest"
 
 cp -a "$WORK/payload" "$WORK/rebuild"
 sign_payload "$WORK/rebuild" "$WORK/rebuild.key"
@@ -197,13 +179,9 @@ build_rpm example-agent "$WORK/rebuild" "$WORK/rebuild-rpm"
 build_rpm example-sdk "$WORK/rebuild" "$WORK/rebuild-rpm"
 "$TOOL" stage "$WORK/rebuild-rpm" "$WORK/rebuild-stage"
 "$TOOL" manifest "$WORK/rebuild-stage" "$WORK/rebuild.sums"
-if "$TOOL" compare "$WORK/SHA256SUMS-fedora" "$WORK/rebuild.sums" \
-           >"$WORK/compare.log" 2>&1; then
-    pass_msg "compare accepts a rebuild signed with another key"
-else
-    fail_msg "compare accepts a rebuild signed with another key"
-    cat "$WORK/compare.log"
-fi
+TEST "compare accepts a rebuild signed with another key"
+"$TOOL" compare "$WORK/SHA256SUMS-fedora" "$WORK/rebuild.sums" \
+        >"$WORK/compare.log" 2>&1 || FAIL "%s" "$(cat "$WORK/compare.log")"
 expect_check fail "$WORK/SHA256SUMS-fedora" "$WORK/rebuild-rpm" \
              "check refuses the rebuild's own signature and key"
 
@@ -212,15 +190,8 @@ build_rpm example-agent "$WORK/byte" "$WORK/rebuild-byte-rpm"
 build_rpm example-sdk "$WORK/rebuild" "$WORK/rebuild-byte-rpm"
 "$TOOL" stage "$WORK/rebuild-byte-rpm" "$WORK/rebuild-byte-stage"
 "$TOOL" manifest "$WORK/rebuild-byte-stage" "$WORK/rebuild-byte.sums"
-if "$TOOL" compare "$WORK/SHA256SUMS-fedora" "$WORK/rebuild-byte.sums" \
-           >"$WORK/compare.log" 2>&1; then
-    fail_msg "compare refuses a rebuild with one changed byte"
-    cat "$WORK/compare.log"
-else
-    pass_msg "compare refuses a rebuild with one changed byte"
-fi
+TEST "compare refuses a rebuild with one changed byte"
+"$TOOL" compare "$WORK/SHA256SUMS-fedora" "$WORK/rebuild-byte.sums" \
+        >"$WORK/compare.log" 2>&1 && FAIL "%s" "$(cat "$WORK/compare.log")"
 
-if [[ $fail -ne 0 ]]; then
-    echo "verify-rpm-release: a check accepted what it must refuse" >&2
-    exit 1
-fi
+test_end

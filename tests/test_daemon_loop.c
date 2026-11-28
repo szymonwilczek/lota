@@ -33,6 +33,8 @@
 #include "../src/agent/sdnotify.h"
 #include "../src/agent/watchdog.h"
 
+#include "test.h"
+
 /* What the loop calls besides epoll_wait(), none of it reached here */
 int agent_reload_config(const char *config_path, struct lota_config *cfg,
 			int *mode, bool *strict_mmap, bool *strict_exec,
@@ -260,26 +262,6 @@ void journal_print(const char *file, int line, const char *func, int priority,
 	(void)fmt;
 }
 
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-55s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(fmt, ...)                                    \
-	do {                                              \
-		printf("FAIL: " fmt "\n", ##__VA_ARGS__); \
-	} while (0)
-
 static void test_drop_delta_first_observation_reports_total(void)
 {
 	TEST("drop_delta: first observation reports full counter");
@@ -294,7 +276,6 @@ static void test_drop_delta_first_observation_reports_total(void)
 		FAIL("baseline not updated, last=%lu", (unsigned long)last);
 		return;
 	}
-	PASS();
 }
 
 static void test_drop_delta_quiet_when_unchanged(void)
@@ -307,7 +288,6 @@ static void test_drop_delta_quiet_when_unchanged(void)
 		     (unsigned long)delta, (unsigned long)last);
 		return;
 	}
-	PASS();
 }
 
 static void test_drop_delta_reports_only_increment(void)
@@ -320,7 +300,6 @@ static void test_drop_delta_reports_only_increment(void)
 		     (unsigned long)delta, (unsigned long)last);
 		return;
 	}
-	PASS();
 }
 
 static void test_drop_delta_resets_on_counter_rollback(void)
@@ -344,7 +323,6 @@ static void test_drop_delta_resets_on_counter_rollback(void)
 		     (unsigned long)delta, (unsigned long)last);
 		return;
 	}
-	PASS();
 }
 
 static void test_drop_delta_null_last_returns_zero(void)
@@ -354,7 +332,6 @@ static void test_drop_delta_null_last_returns_zero(void)
 		FAIL("expected 0 on NULL last");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -389,7 +366,6 @@ static void test_drop_delta_flood_scenario(void)
 		     (unsigned long)delta);
 		return;
 	}
-	PASS();
 }
 
 /* A daemon whose loop failed must not report a clean stop */
@@ -407,13 +383,11 @@ static void test_failed_epoll_wait_is_an_error(void)
 	ret = agent_run_event_loop(&ctx);
 	if (ret != -EBADF)
 		FAIL("returned %d", ret);
-	else
-		PASS();
 }
 
 int main(void)
 {
-	printf("=== LOTA daemon_loop unit tests ===\n\n");
+	test_begin("daemon loop");
 
 	test_drop_delta_first_observation_reports_total();
 	test_drop_delta_quiet_when_unchanged();
@@ -423,6 +397,5 @@ int main(void)
 	test_drop_delta_flood_scenario();
 	test_failed_epoll_wait_is_an_error();
 
-	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
-	return (tests_passed == tests_run) ? 0 : 1;
+	return test_end();
 }

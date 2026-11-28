@@ -944,7 +944,7 @@ func TestIntegrationAPI_AttestationCounters(t *testing.T) {
 		t.Errorf("registered_clients: got %d, want 1", resp.RegisteredClients)
 	}
 
-	t.Log("✓ Stats counters correctly reflect successful attestation")
+	t.Log("Stats counters correctly reflect successful attestation")
 }
 
 func TestIntegrationAPI_FailedAttestationCounter(t *testing.T) {
@@ -980,12 +980,12 @@ func TestIntegrationAPI_FailedAttestationCounter(t *testing.T) {
 		t.Errorf("successful_attestations: got %d, want 0", deref(resp.SuccessfulAttests))
 	}
 
-	t.Log("✓ Failure counter correctly incremented for malformed report")
+	t.Log("Failure counter correctly incremented for malformed report")
 }
 
 func TestIntegrationAPI_NonceConsumedVisibleInStats(t *testing.T) {
 	t.Log("INTEGRATION: Verify nonce lifecycle visible through /api/v1/stats")
-	t.Log("Challenge → pending +1, attestation → pending -1, used_nonces +1")
+	t.Log("Challenge -> pending +1, attestation -> pending -1, used_nonces +1")
 
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "nonce-lifecycle"
@@ -1025,7 +1025,7 @@ func TestIntegrationAPI_NonceConsumedVisibleInStats(t *testing.T) {
 		}
 	})
 
-	t.Log("✓ Nonce lifecycle (pending -> consumed -> used) visible in stats")
+	t.Log("Nonce lifecycle (pending -> consumed -> used) visible in stats")
 }
 
 func TestIntegrationAPI_ReplayAttackVisibleInStats(t *testing.T) {
@@ -1068,7 +1068,7 @@ func TestIntegrationAPI_ReplayAttackVisibleInStats(t *testing.T) {
 		}
 	})
 
-	t.Log("✓ Replay attack correctly tracked: 1 success + 1 failure in stats")
+	t.Log("Replay attack correctly tracked: 1 success + 1 failure in stats")
 }
 
 func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
@@ -1119,7 +1119,7 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 	if len(prefix) > 16 {
 		prefix = prefix[:16]
 	}
-	t.Logf("✓ Client info fully populated: attests=%d, pcr14=%s...",
+	t.Logf("Client info fully populated: attests=%d, pcr14=%s...",
 		resp.AttestCount, prefix)
 }
 
@@ -1173,7 +1173,7 @@ func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
 		}
 	})
 
-	t.Logf("✓ 5 attestations tracked: counter=%d, attests=%d",
+	t.Logf("5 attestations tracked: counter=%d, attests=%d",
 		resp.MonotonicCounter, resp.AttestCount)
 }
 
@@ -1215,11 +1215,11 @@ func TestIntegrationAPI_MultipleClientsListed(t *testing.T) {
 		}
 	}
 
-	t.Logf("✓ All %d attested clients visible in client list", resp.Count)
+	t.Logf("All %d attested clients visible in client list", resp.Count)
 }
 
 func TestIntegrationAPI_InvalidSignatureVisibleInStats(t *testing.T) {
-	t.Log("INTEGRATION: Invalid TPM signature → failure counter via API")
+	t.Log("INTEGRATION: Invalid TPM signature -> failure counter via API")
 	t.Log("CRITICAL SECURITY: Wrong key must be detected and tracked")
 
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
@@ -1257,11 +1257,11 @@ func TestIntegrationAPI_InvalidSignatureVisibleInStats(t *testing.T) {
 		}
 	})
 
-	t.Log("✓ Invalid signature correctly tracked as failure in stats")
+	t.Log("Invalid signature correctly tracked as failure in stats")
 }
 
 func TestIntegrationAPI_PCR14TamperingVisibleInStats(t *testing.T) {
-	t.Log("INTEGRATION: PCR14 baseline violation → failure counter via API")
+	t.Log("INTEGRATION: PCR14 baseline violation -> failure counter via API")
 	t.Log("CRITICAL SECURITY: Agent tampering must be tracked in monitoring")
 
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
@@ -1291,7 +1291,7 @@ func TestIntegrationAPI_PCR14TamperingVisibleInStats(t *testing.T) {
 		}
 	})
 
-	t.Log("✓ PCR14 tampering correctly tracked as failure")
+	t.Log("PCR14 tampering correctly tracked as failure")
 }
 
 func TestIntegrationAPI_PrometheusAfterAttestations(t *testing.T) {
@@ -1322,7 +1322,7 @@ func TestIntegrationAPI_PrometheusAfterAttestations(t *testing.T) {
 	assertMetric(t, body, "lota_registered_clients", "2")
 	assertMetric(t, body, "lota_loaded_policies", "1")
 
-	t.Log("✓ Prometheus metrics accurately reflect 3 success + 1 failure")
+	t.Log("Prometheus metrics accurately reflect 3 success + 1 failure")
 }
 
 func TestIntegrationAPI_PendingChallengesNotLeak(t *testing.T) {
@@ -1365,7 +1365,7 @@ func TestIntegrationAPI_PendingChallengesNotLeak(t *testing.T) {
 		}
 	})
 
-	t.Log("✓ Pending challenges correctly decrement on each verification")
+	t.Log("Pending challenges correctly decrement on each verification")
 }
 
 func TestIntegrationAPI_ConcurrentAttestationsTracked(t *testing.T) {
@@ -1420,7 +1420,7 @@ func TestIntegrationAPI_ConcurrentAttestationsTracked(t *testing.T) {
 		t.Errorf("client list: %d, want %d", list.Count, numClients)
 	}
 
-	t.Logf("✓ %d concurrent attestations tracked: %d registered, %d attested",
+	t.Logf("%d concurrent attestations tracked: %d registered, %d attested",
 		numClients, list.Count, successes)
 }
 
@@ -1469,7 +1469,7 @@ func TestIntegrationAPI_MixedSuccessFailureRatio(t *testing.T) {
 	assertMetric(t, body, "lota_attestations_success_total", "3")
 	assertMetric(t, body, "lota_attestations_failed_total", "2")
 
-	t.Log("✓ Mixed ratio 3:2 (success:failure) consistent across stats and metrics")
+	t.Log("Mixed ratio 3:2 (success:failure) consistent across stats and metrics")
 }
 
 // fetches /api/v1/stats and runs assertions on the decoded response

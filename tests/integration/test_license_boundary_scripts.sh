@@ -20,33 +20,24 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "license boundary"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 GATE=scripts/check-license-boundary.sh
 
 if [[ ! -x "$REPO_DIR/$GATE" ]]; then
-	echo "[license-boundary-scripts] missing gate: $GATE" >&2
-	exit 2
+	FAIL "missing gate: %s" "$GATE"
+	test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 TREE="$WORK_DIR/tree"
 SITE="$WORK_DIR/site"
-failures=0
-
-check() {
-	local msg="$1"
-	shift
-	if "$@"; then
-		echo "PASS: $msg"
-	else
-		echo "FAIL: $msg"
-		failures=$((failures + 1))
-	fi
-}
 
 # file PATH SPDX [LINE...]: a tracked file with the given license tag
 file() {
@@ -101,55 +92,51 @@ fails_with() {
 }
 
 fixture
-check "a clean tree passes and reads the package license" \
-	passes_with "1 documentation packages"
+TEST "a clean tree passes and reads the package license"
+passes_with "1 documentation packages" || FAIL
 
 fixture
 file Documentation/gplext.py GPL-2.0-only "X = 1"
 file Documentation/conf.py MIT "import gplext"
-check "an MIT Python file importing a GPL one fails" \
-	fails_with "imports gplext (Documentation/gplext.py)"
+TEST "an MIT Python file importing a GPL one fails"
+fails_with "imports gplext (Documentation/gplext.py)" || FAIL
 
 fixture
 file Documentation/ext/__init__.py GPL-2.0-only "X = 1"
 file Documentation/conf.py MIT "from ext import X"
-check "an MIT Python file importing a GPL package fails" \
-	fails_with "imports ext (Documentation/ext/__init__.py)"
+TEST "an MIT Python file importing a GPL package fails"
+fails_with "imports ext (Documentation/ext/__init__.py)" || FAIL
 
 fixture
 file scripts/kdoc GPL-2.0-only "print(1)"
 file Documentation/conf.py MIT "import subprocess" \
 	"subprocess.run(['scripts/kdoc'])"
-check "an MIT file running a GPL script by path fails" \
-	fails_with "names scripts/kdoc"
+TEST "an MIT file running a GPL script by path fails"
+fails_with "names scripts/kdoc" || FAIL
 
 fixture
 file scripts/tool "" "print(1)"
-check "a script without a license tag fails" \
-	fails_with "scripts/tool: no SPDX-License-Identifier"
+TEST "a script without a license tag fails"
+fails_with "scripts/tool: no SPDX-License-Identifier" || FAIL
 
 fixture
 package docpkg GPL-2.0-or-later
-check "a GPL documentation package fails" \
-	fails_with "docpkg is licensed 'GPL-2.0-or-later'"
+TEST "a GPL documentation package fails"
+fails_with "docpkg is licensed 'GPL-2.0-or-later'" || FAIL
 
 fixture
 package docpkg "MIT AND LicenseRef-Proprietary"
-check "a package with a non-permissive term fails" \
-	fails_with "docpkg is licensed"
+TEST "a package with a non-permissive term fails"
+fails_with "docpkg is licensed" || FAIL
 
 fixture
 rm -rf "$SITE/docpkg-1.0.dist-info"
-check "a missing package is reported as not checked" \
-	passes_with "not checked (not installed: docpkg)"
+TEST "a missing package is reported as not checked"
+passes_with "not checked (not installed: docpkg)" || FAIL
 
 fixture
 rm -rf "$SITE/docpkg-1.0.dist-info"
-check "--doc-packages fails on a missing package" \
-	fails_with "not installed, license unread: docpkg" --doc-packages
+TEST "--doc-packages fails on a missing package"
+fails_with "not installed, license unread: docpkg" --doc-packages || FAIL
 
-if ((failures != 0)); then
-	echo "[license-boundary-scripts] $failures case(s) failed" >&2
-	exit 1
-fi
-echo "[license-boundary-scripts] all cases passed"
+test_end

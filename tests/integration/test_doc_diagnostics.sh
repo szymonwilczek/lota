@@ -19,25 +19,15 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "doc diagnostics"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-	echo "PASS: $msg"
-    else
-	echo "FAIL: $msg" >&2
-	failures=$((failures + 1))
-    fi
-}
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 # file PATH: write stdin to PATH under the scratch repository
 file() {
@@ -55,7 +45,7 @@ gate() {
 
 passes() {
     if ! gate "$1"; then
-	cat "$WORK_DIR/log" >&2
+	FAIL "%s" "$(cat "$WORK_DIR/log")"
 	return 1
     fi
 }
@@ -112,29 +102,25 @@ file packaging/nfpm/scripts/postinstall.sh <<'EOF'
 echo "Package scripts print their text"
 EOF
 
-check "a message after a '\"' character literal passes" \
-      passes "Install finished without errors."
-check "a comment after a '\"' character literal fails" \
-      fails "Comment words are never printed"
-check "a message no source prints fails" \
-      fails "Install never ran at all"
-check "a Go raw string after a '\`' rune passes" \
-      passes "Usage shows every raw line"
-check "a Go message after a '\"' rune passes" \
-      passes "Rune quotes leave this message whole"
-check "a message in installer/ passes" \
-      passes "Installer messages count as well"
-check "a message in include/ passes" \
-      passes "Header messages count as well"
-check "an example shell script passes verbatim" \
-      passes "Example scripts print their text"
-check "an example Python program passes verbatim" \
-      passes "Example programs print their text"
-check "a package script passes verbatim" \
-      passes "Package scripts print their text"
+TEST "a message after a '\"' character literal passes"
+passes "Install finished without errors." || FAIL
+TEST "a comment after a '\"' character literal fails"
+fails "Comment words are never printed" || FAIL
+TEST "a message no source prints fails"
+fails "Install never ran at all" || FAIL
+TEST "a Go raw string after a '\`' rune passes"
+passes "Usage shows every raw line" || FAIL
+TEST "a Go message after a '\"' rune passes"
+passes "Rune quotes leave this message whole" || FAIL
+TEST "a message in installer/ passes"
+passes "Installer messages count as well" || FAIL
+TEST "a message in include/ passes"
+passes "Header messages count as well" || FAIL
+TEST "an example shell script passes verbatim"
+passes "Example scripts print their text" || FAIL
+TEST "an example Python program passes verbatim"
+passes "Example programs print their text" || FAIL
+TEST "a package script passes verbatim"
+passes "Package scripts print their text" || FAIL
 
-if ((failures != 0)); then
-    echo "[doc-diagnostics] $failures case(s) failed" >&2
-    exit 1
-fi
-echo "[doc-diagnostics] all cases passed"
+test_end

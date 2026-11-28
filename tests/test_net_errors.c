@@ -21,17 +21,7 @@
 #include "../src/agent/net.h"
 #include "../src/agent/tpm.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 static void test_outcomes_are_distinct(void)
 {
@@ -40,23 +30,32 @@ static void test_outcomes_are_distinct(void)
 	int eof = net_transport_error(SSL_ERROR_SYSCALL, 0);
 	int proto = net_transport_error(SSL_ERROR_SSL, 0);
 
-	CHECK(closed != proto,
-	      "a peer that closed and a protocol failure are different codes");
-	CHECK(closed != eof,
-	      "a peer that closed and one that vanished are different codes");
-	CHECK(reset != proto,
-	      "a reset connection and a protocol failure are different codes");
-	CHECK(closed < 0 && reset < 0 && eof < 0 && proto < 0,
-	      "every transport outcome is a negative code");
+	TEST("a peer that closed and a protocol failure are different codes");
+	if (closed == proto)
+		FAIL("expected: closed != proto");
+	TEST("a peer that closed and one that vanished are different codes");
+	if (closed == eof)
+		FAIL("expected: closed != eof");
+	TEST("a reset connection and a protocol failure are different codes");
+	if (reset == proto)
+		FAIL("expected: reset != proto");
+	TEST("every transport outcome is a negative code");
+	if (!(closed < 0 && reset < 0 && eof < 0 && proto < 0))
+		FAIL("expected: closed < 0 && reset < 0 && eof < 0 && proto < "
+		     "0");
 }
 
 /* SSL_ERROR_SYSCALL failed below TLS: the socket errno is the answer */
 static void test_socket_errno_survives(void)
 {
-	CHECK(net_transport_error(SSL_ERROR_SYSCALL, ECONNRESET) == -ECONNRESET,
-	      "a reset connection is reported as the reset it was");
-	CHECK(net_transport_error(SSL_ERROR_SYSCALL, ETIMEDOUT) == -ETIMEDOUT,
-	      "a timed-out socket is reported as the timeout it was");
+	TEST("a reset connection is reported as the reset it was");
+	if (net_transport_error(SSL_ERROR_SYSCALL, ECONNRESET) != -ECONNRESET)
+		FAIL("expected: net_transport_error(SSL_ERROR_SYSCALL, "
+		     "ECONNRESET) == -ECONNRESET");
+	TEST("a timed-out socket is reported as the timeout it was");
+	if (net_transport_error(SSL_ERROR_SYSCALL, ETIMEDOUT) != -ETIMEDOUT)
+		FAIL("expected: net_transport_error(SSL_ERROR_SYSCALL, "
+		     "ETIMEDOUT) == -ETIMEDOUT");
 }
 
 /* compared with strerror(EIO), not an English string: it is localised */
@@ -76,10 +75,12 @@ static void test_nothing_reads_as_a_disk_fault(void)
 	for (i = 0; i < sizeof(outcomes) / sizeof(outcomes[0]); i++) {
 		const char *reason = attest_failure_reason(outcomes[i]);
 
-		CHECK(reason && reason[0],
-		      "every transport outcome renders to something");
-		CHECK(reason && strcmp(reason, eio) != 0,
-		      "no transport outcome renders as the C library's EIO");
+		TEST("every transport outcome renders to something");
+		if (!(reason && reason[0]))
+			FAIL("expected: reason && reason[0]");
+		TEST("no transport outcome renders as the C library's EIO");
+		if (!(reason && strcmp(reason, eio) != 0))
+			FAIL("expected: reason && strcmp(reason, eio) != 0");
 	}
 }
 
@@ -97,10 +98,12 @@ static void test_renderings_are_distinct(void)
 	snprintf(proto, sizeof(proto), "%s",
 		 attest_failure_reason(net_transport_error(SSL_ERROR_SSL, 0)));
 
-	CHECK(strcmp(closed, proto) != 0,
-	      "a peer that closed and a protocol failure read differently");
-	CHECK(strcmp(closed, eof) != 0,
-	      "a peer that closed and one that vanished read differently");
+	TEST("a peer that closed and a protocol failure read differently");
+	if (strcmp(closed, proto) == 0)
+		FAIL("expected: strcmp(closed, proto) != 0");
+	TEST("a peer that closed and one that vanished read differently");
+	if (strcmp(closed, eof) == 0)
+		FAIL("expected: strcmp(closed, eof) != 0");
 }
 
 /* the transport codes must not shadow the TPM ones */
@@ -112,10 +115,12 @@ static void test_tpm_codes_still_render(void)
 
 	snprintf(posix, sizeof(posix), "%s", strerror(EACCES));
 
-	CHECK(locked && strstr(locked, "lockout"),
-	      "a dictionary-attack lockout is still named");
-	CHECK(eacces && strcmp(eacces, posix) == 0,
-	      "an ordinary errno still renders as the C library renders it");
+	TEST("a dictionary-attack lockout is still named");
+	if (!(locked && strstr(locked, "lockout")))
+		FAIL("expected: locked && strstr(locked, \"lockout\")");
+	TEST("an ordinary errno still renders as the C library renders it");
+	if (!(eacces && strcmp(eacces, posix) == 0))
+		FAIL("expected: eacces && strcmp(eacces, posix) == 0");
 }
 
 /*
@@ -132,8 +137,9 @@ static void test_bring_up_survives_a_dead_peer(void)
 	memset(&old, 0, sizeof(old));
 	sigaction(SIGPIPE, NULL, &old);
 
-	CHECK(old.sa_handler == SIG_IGN,
-	      "network bring-up leaves a write to a dead peer survivable");
+	TEST("network bring-up leaves a write to a dead peer survivable");
+	if (old.sa_handler != SIG_IGN)
+		FAIL("expected: old.sa_handler == SIG_IGN");
 
 	/* whatever the answer, the rest of this file does exactly that */
 	signal(SIGPIPE, SIG_IGN);
@@ -212,8 +218,7 @@ static void test_handshake_is_not_unreachable(void)
 	int handshake, refused;
 
 	if (port < 0) {
-		fprintf(stderr, "FAIL: could not raise a loopback listener\n");
-		g_failures++;
+		FAIL("could not raise a loopback listener");
 		return;
 	}
 
@@ -221,22 +226,27 @@ static void test_handshake_is_not_unreachable(void)
 	if (child > 0)
 		waitpid(child, NULL, 0);
 
-	CHECK(handshake < 0, "a peer that speaks no TLS fails the connect");
-	CHECK(net_err_name(handshake) != NULL,
-	      "a failed handshake is named by the transport vocabulary");
+	TEST("a peer that speaks no TLS fails the connect");
+	if (handshake >= 0)
+		FAIL("expected: handshake < 0");
+	TEST("a failed handshake is named by the transport vocabulary");
+	if (net_err_name(handshake) == NULL)
+		FAIL("expected: net_err_name(handshake) != NULL");
 
 	port = loopback_port(0, &child);
 	refused = connect_to(port);
 
-	CHECK(refused == -ECONNREFUSED,
-	      "a port nothing listens on is still reported as refused");
-	CHECK(handshake != refused,
-	      "a failed handshake and a refused connect are different codes");
+	TEST("a port nothing listens on is still reported as refused");
+	if (refused != -ECONNREFUSED)
+		FAIL("expected: refused == -ECONNREFUSED");
+	TEST("a failed handshake and a refused connect are different codes");
+	if (handshake == refused)
+		FAIL("expected: handshake != refused");
 }
 
 int main(void)
 {
-	printf("=== transport failure naming tests ===\n");
+	test_begin("net errors");
 	test_outcomes_are_distinct();
 	test_socket_errno_survives();
 	test_nothing_reads_as_a_disk_fault();
@@ -245,10 +255,5 @@ int main(void)
 	test_bring_up_survives_a_dead_peer();
 	test_handshake_is_not_unreachable();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll transport failure naming tests passed\n");
-	return 0;
+	return test_end();
 }

@@ -13,17 +13,7 @@
 
 #include "../include/lota_devt.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 /*
  * kernel stores dev_t as major = dev >> 20, minor = dev & 0xFFFFF
@@ -32,18 +22,25 @@ static int g_failures;
  */
 static void test_kernel_mkdev_layout(void)
 {
-	CHECK(LOTA_DEVT_MKDEV(1, 1) == 0x100001ULL,
-	      "MKDEV(1,1) is the kernel /dev/mem layout");
-	CHECK(LOTA_DEVT_MAJOR(0x100001ULL) == 1,
-	      "MAJOR decodes /dev/mem major as 1");
-	CHECK(LOTA_DEVT_MINOR(0x100001ULL) == 1,
-	      "MINOR decodes /dev/mem minor as 1");
-	CHECK(LOTA_DEVT_MAJOR(LOTA_DEVT_MKDEV(1, 2)) == 1 &&
-		      LOTA_DEVT_MINOR(LOTA_DEVT_MKDEV(1, 2)) == 2,
-	      "MKDEV(1,2) round-trips (/dev/kmem)");
-	CHECK(LOTA_DEVT_MAJOR(LOTA_DEVT_MKDEV(1, 4)) == 1 &&
-		      LOTA_DEVT_MINOR(LOTA_DEVT_MKDEV(1, 4)) == 4,
-	      "MKDEV(1,4) round-trips (/dev/port)");
+	TEST("MKDEV(1,1) is the kernel /dev/mem layout");
+	if (LOTA_DEVT_MKDEV(1, 1) != 0x100001ULL)
+		FAIL("expected: LOTA_DEVT_MKDEV(1, 1) == 0x100001ULL");
+	TEST("MAJOR decodes /dev/mem major as 1");
+	if (LOTA_DEVT_MAJOR(0x100001ULL) != 1)
+		FAIL("expected: LOTA_DEVT_MAJOR(0x100001ULL) == 1");
+	TEST("MINOR decodes /dev/mem minor as 1");
+	if (LOTA_DEVT_MINOR(0x100001ULL) != 1)
+		FAIL("expected: LOTA_DEVT_MINOR(0x100001ULL) == 1");
+	TEST("MKDEV(1,2) round-trips (/dev/kmem)");
+	if (!(LOTA_DEVT_MAJOR(LOTA_DEVT_MKDEV(1, 2)) == 1 &&
+	      LOTA_DEVT_MINOR(LOTA_DEVT_MKDEV(1, 2)) == 2))
+		FAIL("expected: LOTA_DEVT_MAJOR(LOTA_DEVT_MKDEV(1, 2)) == 1 "
+		     "&& LOTA_DEVT_MINOR(LOTA_DEVT_MKDEV(1, 2)) == 2");
+	TEST("MKDEV(1,4) round-trips (/dev/port)");
+	if (!(LOTA_DEVT_MAJOR(LOTA_DEVT_MKDEV(1, 4)) == 1 &&
+	      LOTA_DEVT_MINOR(LOTA_DEVT_MKDEV(1, 4)) == 4))
+		FAIL("expected: LOTA_DEVT_MAJOR(LOTA_DEVT_MKDEV(1, 4)) == 1 "
+		     "&& LOTA_DEVT_MINOR(LOTA_DEVT_MKDEV(1, 4)) == 4");
 }
 
 static void test_mkdev_round_trip(void)
@@ -66,22 +63,19 @@ static void test_mkdev_round_trip(void)
 		snprintf(msg, sizeof(msg),
 			 "MKDEV(%u,%u) round-trips through MAJOR/MINOR",
 			 cases[i].major, cases[i].minor);
-		CHECK(LOTA_DEVT_MAJOR(dev) == cases[i].major &&
-			      LOTA_DEVT_MINOR(dev) == cases[i].minor,
-		      msg);
+		TEST(msg);
+		if (!(LOTA_DEVT_MAJOR(dev) == cases[i].major &&
+		      LOTA_DEVT_MINOR(dev) == cases[i].minor))
+			FAIL("expected: LOTA_DEVT_MAJOR(dev) == cases[i].major && "
+			     "LOTA_DEVT_MINOR(dev) == cases[i].minor");
 	}
 }
 
 int main(void)
 {
-	printf("=== dev_t encoding tests ===\n");
+	test_begin("devt");
 	test_kernel_mkdev_layout();
 	test_mkdev_round_trip();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll dev_t encoding tests passed\n");
-	return 0;
+	return test_end();
 }

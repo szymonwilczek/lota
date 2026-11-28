@@ -4,7 +4,6 @@
  * Unit tests for the free-text fields of a lota-bench session.
  */
 
-#include <stdio.h>
 #include <string.h>
 
 #include "test.h"
@@ -28,7 +27,6 @@ static void test_plain(void)
 		FAIL("changed");
 		return;
 	}
-	PASS();
 }
 
 static void test_refused_bytes(void)
@@ -42,7 +40,6 @@ static void test_refused_bytes(void)
 		FAIL("byte kept");
 		return;
 	}
-	PASS();
 }
 
 static void test_blanks(void)
@@ -53,7 +50,6 @@ static void test_blanks(void)
 		FAIL("blank kept");
 		return;
 	}
-	PASS();
 }
 
 static void test_cut(void)
@@ -78,7 +74,6 @@ static void test_cut(void)
 		FAIL("blank at the cut");
 		return;
 	}
-	PASS();
 }
 
 static void test_len_bounds_input(void)
@@ -91,7 +86,6 @@ static void test_len_bounds_input(void)
 		FAIL("read past len");
 		return;
 	}
-	PASS();
 }
 
 static void test_ok(void)
@@ -109,12 +103,11 @@ static void test_ok(void)
 		FAIL("wrong verdict");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("lota-bench fields:\n");
+	test_begin("bench field");
 
 	test_plain();
 	test_refused_bytes();
@@ -123,6 +116,5 @@ int main(void)
 	test_len_bounds_input();
 	test_ok();
 
-	printf("%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

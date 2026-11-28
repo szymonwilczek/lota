@@ -73,8 +73,7 @@ static void setup_tmpdir(void)
 {
 	snprintf(tmpdir, sizeof(tmpdir), "/tmp/lota_test_config_XXXXXX");
 	if (!mkdtemp(tmpdir)) {
-		fprintf(stderr, "Failed to create temp dir: %s\n",
-			strerror(errno));
+		FAIL("Failed to create temp dir: %s", strerror(errno));
 		exit(1);
 	}
 }
@@ -203,14 +202,12 @@ static void test_config_init_defaults(void)
 		FAIL("policy_pubkey not empty");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_init_null(void)
 {
 	TEST("config_init with NULL does not crash");
 	config_init(NULL);
-	PASS();
 }
 
 static void test_config_load_nonexistent(void)
@@ -224,10 +221,9 @@ static void test_config_load_nonexistent(void)
 	if (ret != -ENOENT) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -ENOENT, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_null_cfg(void)
@@ -240,7 +236,6 @@ static void test_config_load_null_cfg(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_empty_file(void)
@@ -257,7 +252,7 @@ static void test_config_load_empty_file(void)
 	if (ret != 0) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	/* defaults should be unchanged */
@@ -265,7 +260,6 @@ static void test_config_load_empty_file(void)
 		FAIL("server changed after empty file");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_comments_only(void)
@@ -284,7 +278,6 @@ static void test_config_load_comments_only(void)
 		FAIL("expected 0");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_basic_values(void)
@@ -311,7 +304,7 @@ static void test_config_load_basic_values(void)
 	if (ret != 0) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	if (strcmp(cfg.server, "10.0.0.1") != 0) {
@@ -358,7 +351,6 @@ static void test_config_load_basic_values(void)
 		FAIL("log_level mismatch");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_string_fields(void)
@@ -404,7 +396,6 @@ static void test_config_load_string_fields(void)
 		FAIL("policy_pubkey mismatch");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_hyphen_keys(void)
@@ -486,7 +477,6 @@ static void test_config_load_hyphen_keys(void)
 		FAIL("log-level");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_trust_libs_multiple(void)
@@ -510,7 +500,7 @@ static void test_config_load_trust_libs_multiple(void)
 		char msg[64];
 		snprintf(msg, sizeof(msg), "count=%d, expected 3",
 			 cfg.trust_lib_count);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	if (strcmp(cfg.trust_libs[0], "/usr/lib/libc.so.6") != 0) {
@@ -525,7 +515,6 @@ static void test_config_load_trust_libs_multiple(void)
 		FAIL("trust_libs[2]");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_protect_pids_multiple(void)
@@ -554,7 +543,6 @@ static void test_config_load_protect_pids_multiple(void)
 		FAIL("pid values");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_container_listener_uids_multiple(void)
@@ -584,7 +572,6 @@ static void test_config_load_container_listener_uids_multiple(void)
 		FAIL("uid values");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_container_listener_uid_duplicate(void)
@@ -603,7 +590,6 @@ static void test_config_load_container_listener_uid_duplicate(void)
 		FAIL("expected non-zero return on duplicate UID");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_container_listener_uid_overflow(void)
@@ -631,7 +617,6 @@ static void test_config_load_container_listener_uid_overflow(void)
 		FAIL("expected non-zero return on overflow");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_container_listener_uid_invalid(void)
@@ -649,7 +634,6 @@ static void test_config_load_container_listener_uid_invalid(void)
 		FAIL("expected non-zero return on non-numeric UID");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_boolean_variants(void)
@@ -673,7 +657,6 @@ static void test_config_load_boolean_variants(void)
 		FAIL("not all true");
 		return;
 	}
-	PASS();
 
 	TEST("config_load boolean: false/no/0 -> false");
 	write_config("bool_false.conf", "strict_mmap = false\n"
@@ -693,7 +676,6 @@ static void test_config_load_boolean_variants(void)
 		FAIL("not all false");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_invalid_boolean(void)
@@ -710,10 +692,9 @@ static void test_config_load_invalid_boolean(void)
 	if (ret != -EINVAL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_bench(void)
@@ -760,7 +741,6 @@ static void test_config_load_bench(void)
 		FAIL("bench = maybe accepted");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_invalid_mode(void)
@@ -777,7 +757,7 @@ static void test_config_load_invalid_mode(void)
 	if (ret != -EINVAL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 
@@ -795,8 +775,6 @@ static void test_config_load_invalid_mode(void)
 		FAIL("mode = maintenance is not a mode");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_config_load_invalid_log_level(void)
@@ -811,7 +789,7 @@ static void test_config_load_invalid_log_level(void)
 
 	for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
 		if (config_log_priority(names[i]) != prios[i]) {
-			FAIL(names[i]);
+			FAIL("%s", names[i]);
 			return;
 		}
 	}
@@ -841,8 +819,6 @@ static void test_config_load_invalid_log_level(void)
 		FAIL("log_level = warn refused");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_config_load_value_too_long(void)
@@ -900,8 +876,6 @@ static void test_config_load_value_too_long(void)
 		FAIL("a profile verifier that fits is refused or changed");
 		return;
 	}
-
-	PASS();
 }
 
 /* fgets keeps one byte for the newline and one for the NUL */
@@ -961,7 +935,7 @@ static void test_config_load_line_limit(void)
 	snprintf(want, sizeof(want), ":1: line exceeds %d characters\n",
 		 LOTA_CONFIG_MAX_LINE - 2);
 	if (!strstr(log, want)) {
-		FAIL(log);
+		FAIL("%s", log);
 		return;
 	}
 
@@ -975,7 +949,7 @@ static void test_config_load_line_limit(void)
 	memset(prof.ca_cert + 1, 'a', anchor - 1);
 	prof.ca_cert[anchor] = '\0';
 	if (config_profile_defect(&prof, why, sizeof(why)) != 0) {
-		FAIL(why);
+		FAIL("%s", why);
 		return;
 	}
 	prof.ca_cert[anchor] = 'a';
@@ -985,11 +959,9 @@ static void test_config_load_line_limit(void)
 		 LOTA_CONFIG_MAX_LINE - 1, LOTA_CONFIG_MAX_LINE - 2);
 	if (config_profile_defect(&prof, why, sizeof(why)) != -EILSEQ ||
 	    !strstr(why, want)) {
-		FAIL(why);
+		FAIL("%s", why);
 		return;
 	}
-
-	PASS();
 }
 
 static void test_config_load_whitespace_trimming(void)
@@ -1021,7 +993,6 @@ static void test_config_load_whitespace_trimming(void)
 		FAIL("mode != enforce");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_unknown_keys(void)
@@ -1040,7 +1011,7 @@ static void test_config_load_unknown_keys(void)
 	if (ret != -EINVAL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	/* valid keys should still be applied */
@@ -1052,7 +1023,6 @@ static void test_config_load_unknown_keys(void)
 		FAIL("port not set");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_malformed_lines(void)
@@ -1071,7 +1041,7 @@ static void test_config_load_malformed_lines(void)
 	if (ret != -EINVAL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	/* valid keys should still be applied despite the error */
@@ -1083,7 +1053,6 @@ static void test_config_load_malformed_lines(void)
 		FAIL("port not set after malformed line");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_empty_key(void)
@@ -1101,7 +1070,6 @@ static void test_config_load_empty_key(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_empty_value(void)
@@ -1138,7 +1106,6 @@ static void test_config_load_empty_value(void)
 		FAIL("an empty allow_verity entry loads");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_port_bounds(void)
@@ -1155,17 +1122,16 @@ static void test_config_load_port_bounds(void)
 	if (ret != -EINVAL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	/* port should remain at default because 99999 > 65535 */
 	if (cfg.port != 8443) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "port=%d, expected 8443", cfg.port);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 
 	TEST("config_load rejects port = 0");
 	write_config("port_zero.conf", "port = 0\n");
@@ -1175,14 +1141,13 @@ static void test_config_load_port_bounds(void)
 	if (ret != -EINVAL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	if (cfg.port != 8443) {
 		FAIL("port changed to 0");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1207,14 +1172,13 @@ static void test_config_load_attest_interval_bounds(void)
 	if (ret != 0) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	if (cfg.attest_interval != MAX_ATTEST_INTERVAL) {
 		FAIL("interval not applied");
 		return;
 	}
-	PASS();
 
 	TEST("config_load rejects attest_interval above the ceiling");
 	snprintf(content, sizeof(content), "attest_interval = %d\n",
@@ -1226,14 +1190,13 @@ static void test_config_load_attest_interval_bounds(void)
 	if (ret != -EINVAL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	if (cfg.attest_interval != 0) {
 		FAIL("out-of-range interval was applied");
 		return;
 	}
-	PASS();
 
 	TEST("config_load rejects attest_interval below the floor");
 	snprintf(content, sizeof(content), "attest_interval = %d\n",
@@ -1245,10 +1208,9 @@ static void test_config_load_attest_interval_bounds(void)
 	if (ret != -EINVAL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 
 	TEST("config_load accepts attest_interval = 0 (one-shot)");
 	write_config("interval_zero.conf", "attest_interval = 0\n");
@@ -1258,10 +1220,9 @@ static void test_config_load_attest_interval_bounds(void)
 	if (ret != 0) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_refuses_aik_ttl(void)
@@ -1277,7 +1238,6 @@ static void test_config_load_refuses_aik_ttl(void)
 		FAIL("aik_ttl was accepted");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_refuses_signing_key(void)
@@ -1293,7 +1253,6 @@ static void test_config_load_refuses_signing_key(void)
 		FAIL("signing_key was accepted");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_profiles(void)
@@ -1323,7 +1282,7 @@ static void test_config_load_profiles(void)
 	if (ret != 0) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	if (cfg.profile_count != 2) {
@@ -1366,7 +1325,6 @@ static void test_config_load_profiles(void)
 		FAIL("a profile should default to session-gated reporting");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1408,7 +1366,6 @@ static void test_config_profile_reporting(void)
 		FAIL("an unknown reporting mode was accepted");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_profile_incomplete(void)
@@ -1427,10 +1384,9 @@ static void test_config_load_profile_incomplete(void)
 	if (ret != -EINVAL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 
 	TEST("config_load rejects a profile with no verifier");
 	write_config("profile_noverifier.conf",
@@ -1444,7 +1400,6 @@ static void test_config_load_profile_incomplete(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 
 	TEST("config_load accepts a publisher who runs no verifier");
 	/* light path:
@@ -1465,7 +1420,6 @@ static void test_config_load_profile_incomplete(void)
 		FAIL("verifier = none did not record a token-only publisher");
 		return;
 	}
-	PASS();
 
 	TEST("config_load rejects verifier = none with a verifier port");
 	write_config("profile_tokenonly_port.conf",
@@ -1493,7 +1447,6 @@ static void test_config_load_profile_incomplete(void)
 		FAIL("the default verifier port beside none was accepted");
 		return;
 	}
-	PASS();
 
 	TEST("config_load rejects an empty profile section");
 	write_config("profile_empty.conf", "[profile \"alpha\"]\n");
@@ -1504,7 +1457,6 @@ static void test_config_load_profile_incomplete(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_profile_malformed(void)
@@ -1532,14 +1484,13 @@ static void test_config_load_profile_malformed(void)
 			char msg[64];
 			snprintf(msg, sizeof(msg), "expected -EINVAL, got %d",
 				 ret);
-			FAIL(msg);
+			FAIL("%s", msg);
 			return;
 		}
 		if (cfg.profile_count != 0) {
 			FAIL("malformed header opened a profile");
 			return;
 		}
-		PASS();
 	}
 
 	TEST("config_load rejects a duplicate profile name");
@@ -1562,7 +1513,6 @@ static void test_config_load_profile_malformed(void)
 		FAIL("duplicate name opened a second profile");
 		return;
 	}
-	PASS();
 
 	TEST("config_load rejects a top-level key inside a profile");
 	write_config("profile_toplevel.conf", "[profile \"alpha\"]\n"
@@ -1577,7 +1527,6 @@ static void test_config_load_profile_malformed(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 
 	TEST("config_load rejects a per-profile interval above the ceiling");
 	{
@@ -1598,7 +1547,6 @@ static void test_config_load_profile_malformed(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_profile_overflow(void)
@@ -1630,14 +1578,13 @@ static void test_config_load_profile_overflow(void)
 	if (ret != -EINVAL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	if (cfg.profile_count != LOTA_CONFIG_MAX_PROFILES) {
 		FAIL("profile_count past the cap");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_rejects_group_writable(void)
@@ -1660,11 +1607,9 @@ static void test_config_load_rejects_group_writable(void)
 	if (ret != -EPERM) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -EPERM, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-
-	PASS();
 }
 
 static void test_config_load_rejects_symlink(void)
@@ -1690,11 +1635,9 @@ static void test_config_load_rejects_symlink(void)
 	if (ret != -ELOOP) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -ELOOP, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-
-	PASS();
 }
 
 static void test_config_load_rejects_fifo(void)
@@ -1719,11 +1662,9 @@ static void test_config_load_rejects_fifo(void)
 	if (ret != -EINVAL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -1770,10 +1711,9 @@ static void test_config_profile_pin_sha256(void)
 	if (ret != 0) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 
 	/* a writer that cannot say the pin writes a host that stops pinning */
 	TEST("config_dump writes each profile's own pin");
@@ -1809,7 +1749,6 @@ static void test_config_profile_pin_sha256(void)
 		FAIL("the dump dropped the profile pins");
 		return;
 	}
-	PASS();
 
 	TEST("the dumped profile pins parse back");
 	config_init(&cfg);
@@ -1817,7 +1756,6 @@ static void test_config_profile_pin_sha256(void)
 		FAIL("the dump does not parse back");
 		return;
 	}
-	PASS();
 
 	/* a pin that is not 32 bytes of hex would pin nothing at all */
 	TEST("a malformed profile pin is refused");
@@ -1832,7 +1770,6 @@ static void test_config_profile_pin_sha256(void)
 		FAIL("a malformed pin was accepted");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1864,7 +1801,6 @@ static void test_config_host_pin_beside_profiles(void)
 		FAIL("a host-level pin was accepted beside profiles");
 		return;
 	}
-	PASS();
 
 	/* the single-verifier deployment keeps the key it always had */
 	TEST("a host-level pin without profiles still loads");
@@ -1880,7 +1816,6 @@ static void test_config_host_pin_beside_profiles(void)
 		FAIL("the single-verifier pin stopped working");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1934,7 +1869,6 @@ static void test_config_dump_keeps_server_unset(void)
 		FAIL("reloaded dump names a server");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_dump_roundtrip(void)
@@ -2011,7 +1945,7 @@ static void test_config_dump_roundtrip(void)
 	if (ret != 0) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "reload failed: %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 
@@ -2073,7 +2007,6 @@ static void test_config_dump_roundtrip(void)
 		FAIL("profile mismatch");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -2123,7 +2056,6 @@ static void test_config_dump_keeps_the_sealing_keys(void)
 		FAIL("seal_aik_auth_strict did not survive the dump");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -2221,7 +2153,7 @@ static void test_dump_prints_every_key_the_parser_takes(void)
 		     !ok && i < sizeof(exempt) / sizeof(exempt[0]); i++)
 			ok = strcmp(underscored, exempt[i].key) == 0;
 		if (!ok) {
-			printf("\n    the dump never prints %s ", key);
+			FAIL("the dump never prints %s", key);
 			missing++;
 		}
 	}
@@ -2231,7 +2163,6 @@ static void test_dump_prints_every_key_the_parser_takes(void)
 		FAIL("a key the parser accepts does not survive a dump");
 		return;
 	}
-	PASS();
 }
 
 /* join a dump's comment lines so checks ignore where they wrapped */
@@ -2301,7 +2232,6 @@ static void test_a_weaker_mode_names_the_flags_it_ignores(void)
 		FAIL("enforce mode runs every gate, so nothing is inert");
 		return;
 	}
-	PASS();
 }
 
 /* a flag that is off is not named */
@@ -2325,7 +2255,6 @@ static void test_only_the_flags_that_are_on_are_named(void)
 		FAIL("the one flag that is on was not the one reported");
 		return;
 	}
-	PASS();
 }
 
 /* the note must appear in --dump-config and the dump must still parse */
@@ -2369,8 +2298,7 @@ static void test_the_dump_marks_the_keys_the_mode_ignores(void)
 		};
 
 		if (!strstr(comments, keys[i])) {
-			printf("\n    the dump never says %s is inert ",
-			       keys[i]);
+			FAIL("the dump never says %s is inert", keys[i]);
 			FAIL("an inert key is printed as if it were applied");
 			return;
 		}
@@ -2408,7 +2336,6 @@ static void test_the_dump_marks_the_keys_the_mode_ignores(void)
 		FAIL("enforce mode marked a gate it does run");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_dump_null(void)
@@ -2420,7 +2347,6 @@ static void test_config_dump_null(void)
 	config_dump(NULL, stdout);
 	config_dump(&cfg, NULL);
 	config_dump(NULL, NULL);
-	PASS();
 }
 
 static void test_config_load_all_known_keys(void)
@@ -2459,7 +2385,7 @@ static void test_config_load_all_known_keys(void)
 	if (ret != 0) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	if (strcmp(cfg.server, "allhost") != 0) {
@@ -2534,7 +2460,6 @@ static void test_config_load_all_known_keys(void)
 		FAIL("log_level");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_override_order(void)
@@ -2563,7 +2488,6 @@ static void test_config_load_override_order(void)
 		FAIL("port should be 2222");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -2631,7 +2555,6 @@ static void test_policy_pubkey_resolve(void)
 
 	unlink(override_path);
 	unlink(packaged_path);
-	PASS();
 }
 
 static void test_config_load_mixed_comments(void)
@@ -2659,7 +2582,6 @@ static void test_config_load_mixed_comments(void)
 		FAIL("values not parsed correctly");
 		return;
 	}
-	PASS();
 }
 
 static void test_config_load_from_fd(void)
@@ -2686,7 +2608,7 @@ static void test_config_load_from_fd(void)
 	if (ret != 0) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 
@@ -2694,8 +2616,6 @@ static void test_config_load_from_fd(void)
 		FAIL("parsed values mismatch");
 		return;
 	}
-
-	PASS();
 }
 
 static int cli_parse_argv(const char *const *args, int n,
@@ -2742,19 +2662,18 @@ static void test_cli_config_spellings(void)
 		int n = forms[i][2] ? 3 : 2;
 
 		if (cli_parse_argv(forms[i], n, &opts, cfg) != 0) {
-			FAIL(forms[i][1]);
+			FAIL("%s", forms[i][1]);
 			config_free(cfg);
 			return;
 		}
 		if (strcmp(cfg->mode, "monitor") != 0 || !opts.config_path ||
 		    strcmp(opts.config_path, path) != 0) {
-			FAIL(forms[i][1]);
+			FAIL("%s", forms[i][1]);
 			config_free(cfg);
 			return;
 		}
 	}
 	config_free(cfg);
-	PASS();
 }
 
 static void test_cli_attest_interval_bounds(void)
@@ -2788,13 +2707,12 @@ static void test_cli_attest_interval_bounds(void)
 		if (cli_parse_argv(args, 5, &opts, cfg) != cases[i].ret ||
 		    (cases[i].ret == 0 &&
 		     opts.attest_interval != cases[i].interval)) {
-			FAIL(cases[i].arg);
+			FAIL("%s", cases[i].arg);
 			config_free(cfg);
 			return;
 		}
 	}
 	config_free(cfg);
-	PASS();
 }
 
 static void test_cli_trust_lib_path(void)
@@ -2822,13 +2740,12 @@ static void test_cli_trust_lib_path(void)
 
 		if (cli_parse_argv(verity, 5, &opts, cfg) != 1 ||
 		    cli_parse_argv(lib, 5, &opts, cfg) != 1) {
-			FAIL(bad[i]);
+			FAIL("%s", bad[i]);
 			config_free(cfg);
 			return;
 		}
 	}
 	config_free(cfg);
-	PASS();
 }
 
 static void test_cli_policy_pubkey_unreadable(void)
@@ -2885,10 +2802,9 @@ static void test_cli_policy_pubkey_unreadable(void)
 	}
 	if (!strstr(log, "/nonexistent/named.pub") ||
 	    !strstr(log, strerror(ENOENT))) {
-		FAIL(log);
+		FAIL("%s", log);
 		return;
 	}
-	PASS();
 }
 
 /* A host file the daemon would refuse does not stop the file commands */
@@ -2952,12 +2868,10 @@ static void test_cli_file_commands_skip_the_config(void)
 	if (rc == -2)
 		FAIL("the daemon accepted the key the file commands must skip");
 	else if (rc)
-		FAIL(rc == 1 ? "--gen-signing-key read the file" :
-		     rc == 2 ? "--sign-policy read the file" :
-		     rc == 3 ? "--verify-policy read the file" :
-			       "--help read the file");
-	else
-		PASS();
+		FAIL("%s", rc == 1 ? "--gen-signing-key read the file" :
+			   rc == 2 ? "--sign-policy read the file" :
+			   rc == 3 ? "--verify-policy read the file" :
+				     "--help read the file");
 }
 
 static void test_cli_dump_with_a_file_command_reads_the_config(void)
@@ -3005,8 +2919,6 @@ static void test_cli_dump_with_a_file_command_reads_the_config(void)
 		FAIL("the dump left out the file it was given");
 	else if (help_rc != -1)
 		FAIL("--help read the file next to --dump-config");
-	else
-		PASS();
 }
 
 static void test_cli_policy_pubkey_into_config(void)
@@ -3035,15 +2947,13 @@ static void test_cli_policy_pubkey_into_config(void)
 		FAIL("the command line is refused");
 	} else if (strcmp(cfg->policy_pubkey, key) != 0) {
 		FAIL("--policy-pubkey does not reach the snapshot");
-	} else {
-		PASS();
 	}
 	config_free(cfg);
 }
 
 int main(void)
 {
-	printf("=== LOTA Config Parser Tests ===\n\n");
+	test_begin("config");
 
 	setup_tmpdir();
 
@@ -3123,6 +3033,5 @@ int main(void)
 
 	cleanup_tmpdir();
 
-	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
-	return (tests_passed == tests_run) ? 0 : 1;
+	return test_end();
 }

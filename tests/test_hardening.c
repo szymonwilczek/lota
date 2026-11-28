@@ -50,7 +50,6 @@ static void test_tracer_pid_parser_accepts_zero(void)
 		FAIL("expected ret=0 tracer=0");
 		return;
 	}
-	PASS();
 }
 
 static void test_tracer_pid_parser_returns_pid_on_attach(void)
@@ -68,7 +67,6 @@ static void test_tracer_pid_parser_returns_pid_on_attach(void)
 		FAIL("expected tracer=98765");
 		return;
 	}
-	PASS();
 }
 
 static void test_tracer_pid_parser_rejects_garbage_suffix(void)
@@ -81,10 +79,9 @@ static void test_tracer_pid_parser_rejects_garbage_suffix(void)
 	if (ret != -EINVAL) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 static void test_tracer_pid_parser_rejects_missing_field(void)
@@ -99,7 +96,6 @@ static void test_tracer_pid_parser_rejects_missing_field(void)
 		FAIL("expected -ENOTSUP");
 		return;
 	}
-	PASS();
 }
 
 static void test_tracer_pid_parser_rejects_no_digits(void)
@@ -113,7 +109,6 @@ static void test_tracer_pid_parser_rejects_no_digits(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_tracer_pid_parser_rejects_overflow(void)
@@ -127,7 +122,6 @@ static void test_tracer_pid_parser_rejects_overflow(void)
 		FAIL("expected -ERANGE");
 		return;
 	}
-	PASS();
 }
 
 static void test_tracer_pid_parser_finds_field_after_dense_prefix(void)
@@ -154,7 +148,6 @@ static void test_tracer_pid_parser_finds_field_after_dense_prefix(void)
 		FAIL("expected ret=0 tracer=0 across the dense prefix");
 		return;
 	}
-	PASS();
 }
 
 /* run @body in a forked child, exit code 0 == success, non-zero == failure */
@@ -458,10 +451,9 @@ static void run_child_case(const char *name, int (*body)(void))
 	if (rc != 0) {
 		char buf[64];
 		snprintf(buf, sizeof(buf), "child exit=%d", rc);
-		FAIL(buf);
+		FAIL("%s", buf);
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -506,7 +498,6 @@ static void run_kill_case(const char *name, int (*body)(void))
 		return;
 	}
 	if (WIFSIGNALED(status) && WTERMSIG(status) == SIGSYS) {
-		PASS();
 		return;
 	}
 	if (WIFEXITED(status)) {
@@ -515,7 +506,7 @@ static void run_kill_case(const char *name, int (*body)(void))
 			buf, sizeof(buf),
 			"seccomp did NOT kill on denied syscall (child exit=%d)",
 			WEXITSTATUS(status));
-		FAIL(buf);
+		FAIL("%s", buf);
 		return;
 	}
 	FAIL("unexpected child termination");
@@ -559,7 +550,7 @@ static bool seccomp_filter_supported(void)
 
 int main(void)
 {
-	printf("\n=== Hardening Tests ===\n\n");
+	test_begin("hardening");
 
 	test_tracer_pid_parser_accepts_zero();
 	test_tracer_pid_parser_rejects_garbage_suffix();
@@ -613,11 +604,10 @@ int main(void)
 			"apply_daemon after basics installs seccomp filter",
 			child_apply_daemon_installs_seccomp);
 	} else {
-		printf("  SKIP: seccomp enforcement tests -- filter load is "
-		       "unsupported in this environment (e.g. QEMU user-mode "
-		       "emulation); a real kernel runs them\n");
+		TEST("seccomp enforcement");
+		SKIP("filter load is unsupported here (e.g. QEMU user-mode "
+		     "emulation); a real kernel runs it");
 	}
 
-	printf("\n  Result: %d/%d passed\n\n", tests_passed, tests_run);
-	return (tests_passed == tests_run) ? 0 : 1;
+	return test_end();
 }

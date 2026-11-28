@@ -67,8 +67,6 @@ static void test_mode_off_is_refused(void)
 
 	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) == 0)
 		FAIL("a non-blocking mode passed the gate");
-	else
-		PASS();
 }
 
 /* fix repairs a failing xattr and passes the access */
@@ -81,8 +79,6 @@ static void test_mode_fix_is_refused(void)
 
 	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) == 0)
 		FAIL("ima_appraise=fix passed the gate");
-	else
-		PASS();
 }
 
 static void test_last_mode_decides(void)
@@ -101,8 +97,6 @@ static void test_last_mode_decides(void)
 	write_file(cmdline_path, "ro ima_appraise=off ima_appraise=enforce\n");
 	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) != 0)
 		FAIL("off then enforce was refused");
-	else
-		PASS();
 }
 
 /* without the parameter the kernel stays in its default, enforce */
@@ -122,8 +116,6 @@ static void test_mode_absent_reads_the_scope(void)
 	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) !=
 	    -ENOENT)
 		FAIL("the default mode over no exec rule was not -ENOENT");
-	else
-		PASS();
 }
 
 /*
@@ -139,8 +131,6 @@ static void test_blocking_mode_with_empty_scope_is_refused(void)
 
 	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) == 0)
 		FAIL("a policy appraising no executable passed the gate");
-	else
-		PASS();
 }
 
 static void test_blocking_mode_with_exec_scope_passes(void)
@@ -152,8 +142,6 @@ static void test_blocking_mode_with_exec_scope_passes(void)
 
 	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) != 0)
 		FAIL("a host with the floor in place was refused");
-	else
-		PASS();
 }
 
 /* A rule naming no hook applies to every hook, exec included */
@@ -166,8 +154,6 @@ static void test_appraise_without_func_covers_exec(void)
 
 	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) != 0)
 		FAIL("a policy-wide appraise rule was not counted");
-	else
-		PASS();
 }
 
 /* dont_appraise is not appraise, however it reads to a substring match */
@@ -181,8 +167,6 @@ static void test_dont_appraise_is_not_appraise(void)
 
 	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) == 0)
 		FAIL("an exclusion rule was read as appraisal");
-	else
-		PASS();
 }
 
 /*
@@ -201,8 +185,6 @@ static void test_unreadable_scope_is_not_appraised(void)
 	if (bpf_loader_ima_appraisal_active(cmdline_path,
 					    "/nonexistent/ima/policy", 0) == 0)
 		FAIL("a scope nobody could read was answered as appraising");
-	else
-		PASS();
 
 	TEST("an unreadable scope says it was unreadable");
 
@@ -210,8 +192,6 @@ static void test_unreadable_scope_is_not_appraised(void)
 		    cmdline_path, "/nonexistent/ima/policy", 0) != -EACCES)
 		FAIL("an unreadable scope is not distinguishable from an "
 		     "empty one");
-	else
-		PASS();
 
 	TEST("a Secure Boot host does not appraise on an unreadable scope");
 
@@ -221,8 +201,6 @@ static void test_unreadable_scope_is_not_appraised(void)
 		    cmdline_path, "/nonexistent/ima/policy", 1) != -EACCES)
 		FAIL("the host the attest loop runs on was answered as "
 		     "appraising");
-	else
-		PASS();
 }
 
 /*
@@ -259,8 +237,6 @@ static void test_rule_shapes(void)
 		if (lota_ima_policy_rule_appraises_exec(cases[i].rule) !=
 		    cases[i].appraises_exec)
 			FAIL("the rule was read the other way round");
-		else
-			PASS();
 	}
 }
 
@@ -279,8 +255,6 @@ static void test_secureboot_ignores_the_cmdline_mode(void)
 
 	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 1) != 0)
 		FAIL("a host the kernel appraises in enforce was refused");
-	else
-		PASS();
 
 	TEST("a Secure Boot host still needs the scope");
 
@@ -289,8 +263,6 @@ static void test_secureboot_ignores_the_cmdline_mode(void)
 
 	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 1) == 0)
 		FAIL("a blocking mode over an empty scope passed");
-	else
-		PASS();
 }
 
 /* a volatile efivar holding @value */
@@ -302,7 +274,7 @@ static void write_efivar(const char *path, uint8_t value)
 	if (fd < 0)
 		return;
 	if (write(fd, var, sizeof(var)) != (ssize_t)sizeof(var))
-		fprintf(stderr, "short write to %s\n", path);
+		FAIL("short write to %s", path);
 	close(fd);
 }
 
@@ -345,8 +317,6 @@ static void test_secure_boot_judge(void)
 	}
 	if (bad >= 0)
 		FAIL("an efivar combination was judged wrong");
-	else
-		PASS();
 
 	TEST("the state is read from an efivarfs directory");
 	if (!mkdtemp(dir)) {
@@ -363,8 +333,6 @@ static void test_secure_boot_judge(void)
 		write_efivar(path, 1);
 		if (lota_secure_boot_read(dir) != LOTA_SECURE_BOOT_SETUP_MODE)
 			FAIL("SetupMode=1 was not read");
-		else
-			PASS();
 		unlink(path);
 	}
 	snprintf(path, sizeof(path), "%s/%s", dir, LOTA_EFIVAR_SECURE_BOOT);
@@ -400,7 +368,7 @@ static void test_cmdline_mode_as_the_kernel_reads_it(void)
 	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
 		if (lota_ima_cmdline_enforce(cases[i].cmdline) !=
 		    cases[i].enforce) {
-			FAIL(cases[i].cmdline);
+			FAIL("%s", cases[i].cmdline);
 			return;
 		}
 	}
@@ -411,8 +379,6 @@ static void test_cmdline_mode_as_the_kernel_reads_it(void)
 	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) !=
 	    -EPERM)
 		FAIL("an ima_appraise= past -- decided the gate");
-	else
-		PASS();
 }
 
 /* a raw BTF holding one int-returning function named @func */
@@ -453,31 +419,25 @@ static void test_appraise_built_from_btf(void)
 		FAIL("could not write the BTF");
 	else if (lota_ima_appraise_built(path) != 1)
 		FAIL("the function was not found");
-	else
-		PASS();
 
 	TEST("a kernel BTF without it, CONFIG_IMA_APPRAISE=n, does not");
 	if (write_btf(path, "ima_must_appraise_stub") != 0)
 		FAIL("could not write the BTF");
 	else if (lota_ima_appraise_built(path) != 0)
 		FAIL("a BTF without the function read as appraising");
-	else
-		PASS();
 
 	TEST("an unparsable kernel BTF is an error");
 	if (write_file(path, "not btf") != 0)
 		FAIL("could not write the file");
 	else if (lota_ima_appraise_built(path) >= 0)
 		FAIL("garbage read as a BTF");
-	else
-		PASS();
 
 	unlink(path);
 }
 
 int main(void)
 {
-	printf("=== IMA appraisal scope tests ===\n\n");
+	test_begin("ima policy scope");
 
 	snprintf(cmdline_path, sizeof(cmdline_path), "/tmp/lota-ima-cmd-%d",
 		 (int)getpid());
@@ -502,6 +462,5 @@ int main(void)
 	unlink(cmdline_path);
 	unlink(policy_path);
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

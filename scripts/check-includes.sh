@@ -26,7 +26,7 @@ cd "$(dirname "$0")/.."
 # systemd shuffles symbols between <systemd/sd-bus.h> and its sub-headers
 # across releases. exempt it.
 # This list mirrors the .clangd IgnoreHeader so the gate and the editor agree.
-IGNORE_HEADERS='SDL.*\.h,sys/types\.h,errno\.h,getopt\.h,unistd\.h,termios\.h,sys/time\.h,sys/socket\.h,systemd/sd-bus-protocol\.h'
+IGNORE_HEADERS='SDL.*\.h,sys/types\.h,errno\.h,getopt\.h,unistd\.h,termios\.h,sys/time\.h,sys/socket\.h,sys/mount\.h,systemd/sd-bus-protocol\.h'
 DB_DIR="build"
 DB="$DB_DIR/compile_commands.json"
 

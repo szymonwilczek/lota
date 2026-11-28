@@ -12,66 +12,54 @@
 // and never write past out_size.
 
 #include "../src/agent/path_validate.h"
+#include "test.h"
 
-#include <stdio.h>
 #include <string.h>
 
-static int check(const char *in, const char *want, size_t out_size)
+static void check(const char *name, const char *in, const char *want)
 {
 	char out[64];
 
-	if (out_size > sizeof(out)) {
-		fprintf(stderr, "FAIL: test buffer too small\n");
-		return 1;
-	}
-	lota_str_sanitize(in, out, out_size);
-	if (strcmp(out, want) != 0) {
-		fprintf(stderr, "FAIL: in=%p got='%s' want='%s'\n",
-			(const void *)in, out, want);
-		return 1;
-	}
-	return 0;
+	TEST(name);
+	lota_str_sanitize(in, out, sizeof(out));
+	if (strcmp(out, want) != 0)
+		FAIL("got '%s', want '%s'", out, want);
 }
 
 int main(void)
 {
-	int rc = 0;
+	test_begin("path sanitize");
 
 	/* forged log line: the newline must not survive */
-	rc |= check("evil\nlota: ERR fake", "evil lota: ERR fake", 64);
+	check("newline is folded", "evil\nlota: ERR fake",
+	      "evil lota: ERR fake");
 	/* ANSI escape (ESC = 0x1b) rewrites the terminal: fold it */
-	rc |= check("x\033[31mPWN\033[0m", "x [31mPWN [0m", 64);
+	check("ANSI escape is folded", "x\033[31mPWN\033[0m", "x [31mPWN [0m");
 	/* carriage return, tab and DEL are control bytes too */
-	rc |= check("a\rb\tc\177d", "a b c d", 64);
-	/* clean string is copied verbatim */
-	rc |= check("/usr/lib/libc.so.6", "/usr/lib/libc.so.6", 64);
-	/* NULL input yields an empty, terminated string */
-	rc |= check(NULL, "", 64);
+	check("CR, tab and DEL are folded", "a\rb\tc\177d", "a b c d");
+	check("clean string is copied verbatim", "/usr/lib/libc.so.6",
+	      "/usr/lib/libc.so.6");
+	check("NULL input yields an empty string", NULL, "");
 
 	/* truncation: out_size bounds the copy and still terminates */
 	{
 		char out[4];
 
+		TEST("out_size bounds the copy and terminates");
 		lota_str_sanitize("abcdef", out, sizeof(out));
-		if (strcmp(out, "abc") != 0) {
-			fprintf(stderr,
-				"FAIL: truncation got='%s' want='abc'\n", out);
-			rc = 1;
-		}
+		if (strcmp(out, "abc") != 0)
+			FAIL("got '%s', want 'abc'", out);
 	}
 
 	/* out_size == 0 must not write at all */
 	{
 		char guard[2] = { 'Z', 'Z' };
 
+		TEST("out_size 0 writes nothing");
 		lota_str_sanitize("abc", guard, 0);
-		if (guard[0] != 'Z' || guard[1] != 'Z') {
-			fprintf(stderr, "FAIL: out_size==0 wrote to buffer\n");
-			rc = 1;
-		}
+		if (guard[0] != 'Z' || guard[1] != 'Z')
+			FAIL("buffer written");
 	}
 
-	if (rc == 0)
-		printf("path sanitize: ok\n");
-	return rc;
+	return test_end();
 }

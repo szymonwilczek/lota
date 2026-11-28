@@ -18,6 +18,8 @@ runs them; the CI jobs that do so are in :doc:`ci`.
    * - ``make test-unit`` (``make test``)
      - the C unit tests, the integration scripts and the cross-language
        checks, after ``make all``
+   * - ``make test-go``
+     - the Go tests of every Go module
    * - ``go test ./...`` in a Go module
      - that module's Go tests
    * - ``make SANITIZE=address,undefined test-unit``
@@ -41,27 +43,39 @@ Unit and integration tests
 ``make test-unit`` builds ``all`` and every test program, then runs:
 
 * every program built from ``tests/test_*.c``, except those listed in
-  ``TEST_MANUAL`` (`Tests that need a live system`_). The loop stops at the
-  first program that exits non-zero.
+  ``TEST_MANUAL`` (`Tests that need a live system`_).
 * the scripts under ``tests/integration/`` that run without root or a
   running agent. A script whose tool is missing (``openssl``, ``python3``,
   ``go``, ``clang``, ``pkg-config``, ``sphinx-build``, ``softhsm2-util``)
-  is not run, and the target prints ``SKIP:`` with the reason.
+  is reported as skipped.
 * two cross-language checks. ``tests/cross_lang/test_gen.go`` signs a token
   with the Go server SDK and ``test_cross_lang_verify`` verifies it with the
   C one. ``test_cross_lang_report_gen`` writes an attestation report with
   the agent's serializer and ``tests/cross_lang/report_verify.go`` parses
   it with the verifier's. Both need ``go``.
 
-The Go tests are not part of ``make test-unit``.
+The Go tests are not part of ``make test-unit``; ``make test-go`` runs them.
 
 A script reads the build directory from ``LOTA_BUILD_DIR``, which the make
 recipe exports. A script that drives one binary also takes its path from the
 environment, such as ``LOTA_INSTALL_BIN`` for ``lota-install`` or
 ``LOTA_TRUST_PONG`` for the ``trust_pong`` example.
 
+Test output
+-----------
+
+Every program and script runs, whatever the one before it returned.
+``make test-unit`` collects the results in
+``$(BUILD_DIR)/test-summary.tsv``, ``make test-go`` in
+``$(BUILD_DIR)/test-go-summary.tsv``, and each ends with
+``tests/lib/summary.sh``, which prints the totals and every failed test and
+fails the target. ``LOTA_TEST_COLOR`` is ``always``, ``never`` or ``auto``.
+
 Adding a C test
 ---------------
+
+A test program reports through ``TEST()``, ``FAIL()`` and ``SKIP()`` of
+``tests/test.h``; its header shows their use.
 
 The ``Makefile`` builds every ``tests/test_*.c`` into
 ``$(BUILD_DIR)/test_<name>``. A test that needs more than its own source
@@ -76,6 +90,15 @@ declares it in the test section::
 A new test is run by ``make test-unit`` unless it is added to
 ``TEST_MANUAL``, and under valgrind only once it is added to
 ``VALGRIND_UNIT_BINS``.
+
+Adding an integration test
+--------------------------
+
+A script reports through ``tests/lib/test.sh``, the shell form of
+``tests/test.h``; its header shows its use. A script run by
+``make test-unit`` goes in the recipe through ``$(call test_run,...)``, and
+a missing tool is reported through
+``$(call test_skip,<group>,<path>,<reason>)``.
 
 Tests that need a live system
 -----------------------------
@@ -131,7 +154,9 @@ Go tests
 
 Each Go module (``src/verifier``, ``src/attestca``, ``sdk/server``,
 ``src/crl``, ``src/fleetctl`` and the two example modules) is tested on its
-own with ``go test ./...`` in its directory.
+own with ``go test ./...`` in its directory. ``make test-go`` runs every
+module through ``tests/lib/go-test.sh``, passing ``GO_TEST_FLAGS`` to
+``go test``.
 
 Postgres-backed tests
 ---------------------

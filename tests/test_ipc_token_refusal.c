@@ -505,11 +505,9 @@ static void test_a_standing_refusal_is_written_once(struct ipc_context *ctx)
 		snprintf(msg, sizeof(msg),
 			 "fifteen refused rounds wrote %d lines",
 			 journal_lines);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-
-	PASS();
 }
 
 /* The answer stands per connection: a second title is news */
@@ -540,11 +538,9 @@ static void test_a_second_connection_is_its_own_news(struct ipc_context *ctx)
 		snprintf(msg, sizeof(msg),
 			 "a new connection's refusal wrote %d lines",
 			 journal_lines);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-
-	PASS();
 }
 
 int main(void)
@@ -552,17 +548,17 @@ int main(void)
 	struct ipc_context ctx;
 	int listen_fd;
 
-	printf("=== What the journal says about a refused token ===\n\n");
+	test_begin("ipc token refusal");
 
 	listen_fd = listener_open();
 	if (listen_fd < 0) {
-		printf("SKIP: cannot create a Unix socket in /tmp (%s)\n",
-		       strerror(-listen_fd));
+		SKIP("cannot create a Unix socket in /tmp (%s)",
+		     strerror(-listen_fd));
 		return 0;
 	}
 
 	if (ipc_init_activated(&ctx, listen_fd) < 0) {
-		printf("SKIP: ipc_init_activated failed\n");
+		SKIP("ipc_init_activated failed");
 		close(listen_fd);
 		unlink(test_socket);
 		return 0;
@@ -576,6 +572,5 @@ int main(void)
 	ipc_cleanup(&ctx);
 	unlink(test_socket);
 
-	printf("\n%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

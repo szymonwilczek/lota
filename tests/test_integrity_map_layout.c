@@ -18,7 +18,6 @@
 
 #include <errno.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <sys/resource.h>
 #include <unistd.h>
 
@@ -50,8 +49,6 @@ static void test_the_trees_object_matches_this_build(void)
 		FAIL("the tree's object does not carry the struct it is built with");
 	else if (key_size != sizeof(uint32_t))
 		FAIL("the tree's object does not key the map on a u32");
-	else
-		PASS();
 }
 
 /* The wider value is what makes the read overrun the agent's struct. */
@@ -68,8 +65,6 @@ static void test_a_wider_value_is_seen_for_what_it_is(void)
 		FAIL("the fixture object could not be read");
 	else if (value_size <= sizeof(struct integrity_data))
 		FAIL("the fixture does not carry the wider value it exists for");
-	else
-		PASS();
 }
 
 /*
@@ -81,8 +76,6 @@ static void test_a_wider_value_is_refused(void)
 	TEST("an object whose map does not match this agent is refused");
 	if (bpf_loader_check_object_integrity_layout(LEGACY_BPF_OBJ) >= 0)
 		FAIL("an object that overruns the agent's struct was accepted");
-	else
-		PASS();
 }
 
 static void test_a_matching_object_is_accepted(void)
@@ -90,8 +83,6 @@ static void test_a_matching_object_is_accepted(void)
 	TEST("an object whose map matches this agent is accepted");
 	if (bpf_loader_check_object_integrity_layout(TREE_BPF_OBJ) < 0)
 		FAIL("the object this agent was built with was refused");
-	else
-		PASS();
 }
 
 /*
@@ -103,8 +94,6 @@ static void test_an_absent_map_is_refused(void)
 	TEST("an object carrying no integrity map is refused");
 	if (bpf_loader_check_object_integrity_layout("/dev/null") >= 0)
 		FAIL("an object with no integrity map was accepted");
-	else
-		PASS();
 }
 
 /*
@@ -132,13 +121,11 @@ static void test_an_unopened_object_names_its_errno(void)
 
 	if (ret != -EMFILE)
 		FAIL("descriptor exhaustion did not return -EMFILE");
-	else
-		PASS();
 }
 
 int main(void)
 {
-	printf("=== enforcement object integrity map layout tests ===\n\n");
+	test_begin("integrity map layout");
 
 	test_the_trees_object_matches_this_build();
 	test_a_wider_value_is_seen_for_what_it_is();
@@ -147,6 +134,5 @@ int main(void)
 	test_an_unopened_object_names_its_errno();
 	test_an_absent_map_is_refused();
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

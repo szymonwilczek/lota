@@ -84,11 +84,7 @@ jobs:
 
       - name: Build Go database
         if: matrix.language == 'go'
-        run: |
-          set -eu
-          for mod in src/verifier src/attestca sdk/server src/crl examples/demo_server src/fleetctl; do
-            (cd "$mod" && go test ./...)
-          done
+        run: make test-go
 
       - name: Analyze
         uses: github/codeql-action/analyze@v4

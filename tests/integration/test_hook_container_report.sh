@@ -19,6 +19,9 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "hook container report"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
@@ -28,8 +31,8 @@ TARGET="$(dirname "$HOOK_LIB")/hook_preload_target"
 
 for artifact in "$HOOK_LIB" "$TARGET"; do
     if [[ ! -f "$artifact" ]]; then
-	echo "[hook-container-report] missing artifact: $artifact" >&2
-	exit 2
+	FAIL "missing artifact: %s" "$artifact"
+	test_end
     fi
 done
 
@@ -38,20 +41,7 @@ SAN_RT=$(ldd "$TARGET" |
 	     awk '$1 ~ /^lib(a|t|ub)san\.so/ { printf "%s ", $3 }')
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-	echo "PASS: $msg"
-    else
-	echo "FAIL: $msg"
-	failures=$((failures + 1))
-    fi
-}
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 says() { grep -qi -- "$2" <<<"$1"; }
 denies() { ! grep -qi -- "$2" <<<"$1"; }
@@ -76,50 +66,46 @@ GAME="$WORK_DIR/game/fake-title"
 mkdir -p "$WORK_DIR/game"
 cp "$TARGET" "$GAME"
 
-echo "=== the hook on output the host cannot reach ==="
-
 RUNTIME="$WORK_DIR/run"
 mkdir -p "$RUNTIME"
 
 # 1. Unshared token directory: warned, naming the directory.
 run_hook "$RUNTIME" container=pressure-vessel
-check "a container-private token directory is reported" \
-      says "$err" "container"
-check "the directory that has to be shared is named" \
-      says "$err" "$RUNTIME/lota-hook"
-check "the warning says the host cannot read it" \
-      says "$err" "host"
-check "the wrapper that arranges it is named" \
-      says "$err" "lota-proton-hook"
+TEST "a container-private token directory is reported"
+says "$err" "container" || FAIL "%s" "$err"
+TEST "the directory that has to be shared is named"
+says "$err" "$RUNTIME/lota-hook" || FAIL "%s" "$err"
+TEST "the warning says the host cannot read it"
+says "$err" "host" || FAIL "%s" "$err"
+TEST "the wrapper that arranges it is named"
+says "$err" "lota-proton-hook" || FAIL "%s" "$err"
 
 # 2. Any container manager, not only pressure-vessel.
 run_hook "$RUNTIME" container=docker
-check "another container manager is reported too" says "$err" "container"
+TEST "another container manager is reported too"
+says "$err" "container" || FAIL "%s" "$err"
 
 # 3. PRESSURE_VESSEL_* is set on the host too (the wrapper exports one),
 #    so it does not mean a container.
 run_hook "$RUNTIME" \
 	 PRESSURE_VESSEL_FILESYSTEMS_RW="$RUNTIME/lota-hook:$RUNTIME/lota" \
 	 PRESSURE_VESSEL_RUNTIME=/run/pressure-vessel/runtime
-check "the container's own settings are not a container" \
-      denies "$err" "inside this container"
+TEST "the container's own settings are not a container"
+denies "$err" "inside this container" || FAIL "%s" "$err"
 
 # 4. A host launch is not warned about.
 run_hook "$RUNTIME"
-check "a host launch is not warned about" denies "$err" "container"
+TEST "a host launch is not warned about"
+denies "$err" "container" || FAIL "%s" "$err"
 
 # 5. LOTA_HOOK_DISABLE=1: nothing runs, nothing is reported.
 run_hook "$RUNTIME" container=pressure-vessel LOTA_HOOK_DISABLE=1
-check "DISABLE=1: nothing is reported" denies "$err" "container"
+TEST "DISABLE=1: nothing is reported"
+denies "$err" "container" || FAIL "%s" "$err"
 
 # 6. Warn level: silent suppresses it.
 run_hook "$RUNTIME" container=pressure-vessel LOTA_HOOK_LOG_LEVEL=silent
-check "silent: nothing is reported" denies "$err" "container"
+TEST "silent: nothing is reported"
+denies "$err" "container" || FAIL "%s" "$err"
 
-echo ""
-if [[ $failures -eq 0 ]]; then
-    echo "[hook-container-report] OK"
-    exit 0
-fi
-echo "[hook-container-report] $failures check(s) failed" >&2
-exit 1
+test_end

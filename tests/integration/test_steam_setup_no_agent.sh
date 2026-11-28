@@ -19,6 +19,9 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "steam setup no agent"
+
 # the checks grep the script's messages
 export LC_ALL=C
 
@@ -26,25 +29,12 @@ REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 SETUP="$REPO_DIR/scripts/lota-steam-setup"
 
 if [[ ! -x "$SETUP" ]]; then
-    echo "[steam-setup-no-agent] missing artifact: $SETUP" >&2
-    exit 2
+    FAIL "missing artifact: %s" "$SETUP"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-	echo "PASS: $msg"
-    else
-	echo "FAIL: $msg"
-	failures=$((failures + 1))
-    fi
-}
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 says() { grep -qi -- "$2" <<<"$1"; }
 denies() { ! grep -qi -- "$2" <<<"$1"; }
@@ -55,22 +45,14 @@ rc=0
 out=$(LOTA_AGENT_SOCKET="$WORK_DIR/absent.sock" \
 	               XDG_RUNTIME_DIR="$WORK_DIR/run" "$SETUP" --verify 2>&1) || rc=$?
 
-check "a missing agent socket is not a pass" \
-      test "$rc" -ne 0
-check "the missing socket is named" \
-      says "$out" "LOTA agent socket not found at $WORK_DIR/absent.sock"
-check "the player is not told to start the agent by hand" \
-      denies "$out" "lota-agent --daemon"
-check "the player is sent to the installer, which says what brings it back" \
-      says "$out" "sudo lota-install"
+TEST "a missing agent socket is not a pass"
+test "$rc" -ne 0 || FAIL "exit %d: %s" "$rc" "$out"
+TEST "the missing socket is named"
+says "$out" "LOTA agent socket not found at $WORK_DIR/absent.sock" ||
+    FAIL "%s" "$out"
+TEST "the player is not told to start the agent by hand"
+denies "$out" "lota-agent --daemon" || FAIL "%s" "$out"
+TEST "the player is sent to the installer to bring the agent back"
+says "$out" "sudo lota-install" || FAIL "%s" "$out"
 
-if [[ $failures -gt 0 ]]; then
-    echo ""
-    echo "--- --verify output ---"
-    printf '%s\n' "$out"
-    echo ""
-    echo "[steam-setup-no-agent] $failures check(s) failed"
-    exit 1
-fi
-
-echo "[steam-setup-no-agent] all checks passed"
+test_end

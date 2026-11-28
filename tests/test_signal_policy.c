@@ -14,17 +14,7 @@
 
 #include "../include/lota.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 #define DENIED(sig, is_agent) lota_signal_denied((sig), (is_agent), 0)
 
@@ -38,32 +28,58 @@ static int g_failures;
  */
 static void test_refuses_what_can_end_the_agent(void)
 {
-	CHECK(DENIED(SIGTERM, 1), "refuses SIGTERM to the agent");
-	CHECK(DENIED(SIGKILL, 1), "refuses SIGKILL to the agent");
-	CHECK(DENIED(SIGSTOP, 1), "refuses SIGSTOP to the agent");
-	CHECK(DENIED(SIGINT, 1),
-	      "refuses an interactive interrupt to the agent");
-	CHECK(DENIED(SIGUSR1, 1), "refuses SIGUSR1 to the agent");
+	TEST("refuses SIGTERM to the agent");
+	if (!DENIED(SIGTERM, 1))
+		FAIL("expected: DENIED(SIGTERM, 1)");
+	TEST("refuses SIGKILL to the agent");
+	if (!DENIED(SIGKILL, 1))
+		FAIL("expected: DENIED(SIGKILL, 1)");
+	TEST("refuses SIGSTOP to the agent");
+	if (!DENIED(SIGSTOP, 1))
+		FAIL("expected: DENIED(SIGSTOP, 1)");
+	TEST("refuses an interactive interrupt to the agent");
+	if (!DENIED(SIGINT, 1))
+		FAIL("expected: DENIED(SIGINT, 1)");
+	TEST("refuses SIGUSR1 to the agent");
+	if (!DENIED(SIGUSR1, 1))
+		FAIL("expected: DENIED(SIGUSR1, 1)");
 }
 
 /* A probe asks whether the agent is there; SIGHUP is its own reload */
 static void test_the_signals_the_agent_takes(void)
 {
-	CHECK(!DENIED(0, 1), "delivers a probe aimed at the agent");
-	CHECK(!DENIED(SIGHUP, 1),
-	      "delivers SIGHUP to the agent, which is its reload");
+	TEST("delivers a probe aimed at the agent");
+	if (DENIED(0, 1))
+		FAIL("expected: !DENIED(0, 1)");
+	TEST("delivers SIGHUP to the agent, which is its reload");
+	if (DENIED(SIGHUP, 1))
+		FAIL("expected: !DENIED(SIGHUP, 1)");
 }
 
 /* A title that hung has to die from the terminal or the task manager */
 static void test_a_protected_process_can_be_ended(void)
 {
-	CHECK(!DENIED(SIGKILL, 0), "delivers SIGKILL to a protected process");
-	CHECK(!DENIED(SIGTERM, 0), "delivers SIGTERM to a protected process");
-	CHECK(!DENIED(SIGINT, 0), "delivers SIGINT to a protected process");
-	CHECK(!DENIED(SIGHUP, 0), "delivers SIGHUP to a protected process");
-	CHECK(!DENIED(SIGUSR1, 0), "delivers SIGUSR1 to a protected process");
-	CHECK(!DENIED(SIGCONT, 0), "delivers SIGCONT to a protected process");
-	CHECK(!DENIED(0, 0), "delivers a probe to a protected process");
+	TEST("delivers SIGKILL to a protected process");
+	if (DENIED(SIGKILL, 0))
+		FAIL("expected: !DENIED(SIGKILL, 0)");
+	TEST("delivers SIGTERM to a protected process");
+	if (DENIED(SIGTERM, 0))
+		FAIL("expected: !DENIED(SIGTERM, 0)");
+	TEST("delivers SIGINT to a protected process");
+	if (DENIED(SIGINT, 0))
+		FAIL("expected: !DENIED(SIGINT, 0)");
+	TEST("delivers SIGHUP to a protected process");
+	if (DENIED(SIGHUP, 0))
+		FAIL("expected: !DENIED(SIGHUP, 0)");
+	TEST("delivers SIGUSR1 to a protected process");
+	if (DENIED(SIGUSR1, 0))
+		FAIL("expected: !DENIED(SIGUSR1, 0)");
+	TEST("delivers SIGCONT to a protected process");
+	if (DENIED(SIGCONT, 0))
+		FAIL("expected: !DENIED(SIGCONT, 0)");
+	TEST("delivers a probe to a protected process");
+	if (DENIED(0, 0))
+		FAIL("expected: !DENIED(0, 0)");
 }
 
 /* Stopping the title or dumping its memory is what a cheat gains from */
@@ -75,72 +91,101 @@ static void test_a_protected_process_is_not_frozen_or_dumped(void)
 	};
 
 	for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
-		CHECK(DENIED(refused[i], 0), strsignal(refused[i]));
-		CHECK(!DENIED_INSIDE(refused[i]),
-		      "the same signal passes inside the instance");
+		TEST(strsignal(refused[i]));
+		if (!DENIED(refused[i], 0))
+			FAIL("expected: DENIED(refused[i], 0)");
+		TEST("the same signal passes inside the instance");
+		if (DENIED_INSIDE(refused[i]))
+			FAIL("expected: !DENIED_INSIDE(refused[i])");
 	}
 }
 
 /* the sender is unknown there, so it counts as outside; 0 is the default SIGIO */
 static void test_sigio_counts_as_outside(void)
 {
-	CHECK(lota_sigio_denied(SIGSTOP, 0),
-	      "refuses SIGSTOP through F_SETOWN to a protected process");
-	CHECK(lota_sigio_denied(SIGSEGV, 0),
-	      "refuses SIGSEGV through F_SETOWN to a protected process");
-	CHECK(!lota_sigio_denied(0, 0), "passes SIGIO to a protected process");
-	CHECK(!lota_sigio_denied(SIGRTMIN, 0),
-	      "passes a realtime signal to a protected process");
-	CHECK(lota_sigio_denied(0, 1), "refuses SIGIO to the agent");
-	CHECK(lota_sigio_denied(SIGKILL, 1),
-	      "refuses SIGKILL through F_SETOWN to the agent");
+	TEST("refuses SIGSTOP through F_SETOWN to a protected process");
+	if (!lota_sigio_denied(SIGSTOP, 0))
+		FAIL("expected: lota_sigio_denied(SIGSTOP, 0)");
+	TEST("refuses SIGSEGV through F_SETOWN to a protected process");
+	if (!lota_sigio_denied(SIGSEGV, 0))
+		FAIL("expected: lota_sigio_denied(SIGSEGV, 0)");
+	TEST("passes SIGIO to a protected process");
+	if (lota_sigio_denied(0, 0))
+		FAIL("expected: !lota_sigio_denied(0, 0)");
+	TEST("passes a realtime signal to a protected process");
+	if (lota_sigio_denied(SIGRTMIN, 0))
+		FAIL("expected: !lota_sigio_denied(SIGRTMIN, 0)");
+	TEST("refuses SIGIO to the agent");
+	if (!lota_sigio_denied(0, 1))
+		FAIL("expected: lota_sigio_denied(0, 1)");
+	TEST("refuses SIGKILL through F_SETOWN to the agent");
+	if (!lota_sigio_denied(SIGKILL, 1))
+		FAIL("expected: lota_sigio_denied(SIGKILL, 1)");
 }
 
 /* Numbers outside the mask's range are never an index into it */
 static void test_numbers_outside_the_mask(void)
 {
-	CHECK(!DENIED(-1, 0), "a negative number is not refused by the mask");
-	CHECK(!DENIED(SIGRTMIN, 0), "a realtime signal is not in the mask");
-	CHECK(!DENIED(64, 0), "the last signal number is not in the mask");
+	TEST("a negative number is not refused by the mask");
+	if (DENIED(-1, 0))
+		FAIL("expected: !DENIED(-1, 0)");
+	TEST("a realtime signal is not in the mask");
+	if (DENIED(SIGRTMIN, 0))
+		FAIL("expected: !DENIED(SIGRTMIN, 0)");
+	TEST("the last signal number is not in the mask");
+	if (DENIED(64, 0))
+		FAIL("expected: !DENIED(64, 0)");
 }
 
 /* Header mirrors the signal number because the object has no uapi */
 static void test_the_mirrored_signal_number(void)
 {
-	CHECK(LOTA_SIG_HUP == SIGHUP,
-	      "the mirrored SIGHUP matches the system's");
-	CHECK(LOTA_SIG_KILL == SIGKILL,
-	      "the mirrored SIGKILL matches the system's");
+	TEST("the mirrored SIGHUP matches the system's");
+	if (LOTA_SIG_HUP != SIGHUP)
+		FAIL("expected: LOTA_SIG_HUP == SIGHUP");
+	TEST("the mirrored SIGKILL matches the system's");
+	if (LOTA_SIG_KILL != SIGKILL)
+		FAIL("expected: LOTA_SIG_KILL == SIGKILL");
 }
 
 /* A refusal is recorded whatever the signal */
 static void test_a_refusal_is_always_recorded(void)
 {
-	CHECK(RECORDS(SIGTERM, 1) == LOTA_EVENT_KILL_BLOCKED,
-	      "a refused SIGTERM is recorded as a refusal");
-	CHECK(RECORDS(SIGKILL, 1) == LOTA_EVENT_KILL_BLOCKED,
-	      "a refused SIGKILL is recorded as a refusal");
-	CHECK(RECORDS(SIGSTOP, 1) == LOTA_EVENT_KILL_BLOCKED,
-	      "a refused SIGSTOP is recorded as a refusal");
-	CHECK(RECORDS(SIGHUP, 1) == LOTA_EVENT_KILL_BLOCKED,
-	      "a refused SIGHUP is recorded as a refusal");
+	TEST("a refused SIGTERM is recorded as a refusal");
+	if (RECORDS(SIGTERM, 1) != LOTA_EVENT_KILL_BLOCKED)
+		FAIL("expected: RECORDS(SIGTERM, 1) == LOTA_EVENT_KILL_BLOCKED");
+	TEST("a refused SIGKILL is recorded as a refusal");
+	if (RECORDS(SIGKILL, 1) != LOTA_EVENT_KILL_BLOCKED)
+		FAIL("expected: RECORDS(SIGKILL, 1) == LOTA_EVENT_KILL_BLOCKED");
+	TEST("a refused SIGSTOP is recorded as a refusal");
+	if (RECORDS(SIGSTOP, 1) != LOTA_EVENT_KILL_BLOCKED)
+		FAIL("expected: RECORDS(SIGSTOP, 1) == LOTA_EVENT_KILL_BLOCKED");
+	TEST("a refused SIGHUP is recorded as a refusal");
+	if (RECORDS(SIGHUP, 1) != LOTA_EVENT_KILL_BLOCKED)
+		FAIL("expected: RECORDS(SIGHUP, 1) == LOTA_EVENT_KILL_BLOCKED");
 }
 
 /* Every delivered signal but a probe is still recorded */
 static void test_a_delivered_signal_is_still_recorded(void)
 {
-	CHECK(RECORDS(SIGTERM, 0) == LOTA_EVENT_KILL,
-	      "a delivered SIGTERM is recorded");
-	CHECK(RECORDS(SIGKILL, 0) == LOTA_EVENT_KILL,
-	      "a delivered SIGKILL is recorded");
-	CHECK(RECORDS(SIGSTOP, 0) == LOTA_EVENT_KILL,
-	      "a delivered SIGSTOP is recorded");
-	CHECK(RECORDS(SIGINT, 0) == LOTA_EVENT_KILL,
-	      "a delivered interactive interrupt is recorded");
-	CHECK(RECORDS(SIGHUP, 0) == LOTA_EVENT_KILL,
-	      "the agent's own reload signal is recorded");
-	CHECK(RECORDS(SIGUSR1, 0) == LOTA_EVENT_KILL,
-	      "a signal the policy has no opinion about is recorded");
+	TEST("a delivered SIGTERM is recorded");
+	if (RECORDS(SIGTERM, 0) != LOTA_EVENT_KILL)
+		FAIL("expected: RECORDS(SIGTERM, 0) == LOTA_EVENT_KILL");
+	TEST("a delivered SIGKILL is recorded");
+	if (RECORDS(SIGKILL, 0) != LOTA_EVENT_KILL)
+		FAIL("expected: RECORDS(SIGKILL, 0) == LOTA_EVENT_KILL");
+	TEST("a delivered SIGSTOP is recorded");
+	if (RECORDS(SIGSTOP, 0) != LOTA_EVENT_KILL)
+		FAIL("expected: RECORDS(SIGSTOP, 0) == LOTA_EVENT_KILL");
+	TEST("a delivered interactive interrupt is recorded");
+	if (RECORDS(SIGINT, 0) != LOTA_EVENT_KILL)
+		FAIL("expected: RECORDS(SIGINT, 0) == LOTA_EVENT_KILL");
+	TEST("the agent's own reload signal is recorded");
+	if (RECORDS(SIGHUP, 0) != LOTA_EVENT_KILL)
+		FAIL("expected: RECORDS(SIGHUP, 0) == LOTA_EVENT_KILL");
+	TEST("a signal the policy has no opinion about is recorded");
+	if (RECORDS(SIGUSR1, 0) != LOTA_EVENT_KILL)
+		FAIL("expected: RECORDS(SIGUSR1, 0) == LOTA_EVENT_KILL");
 }
 
 /*
@@ -149,14 +194,17 @@ static void test_a_delivered_signal_is_still_recorded(void)
  */
 static void test_a_permitted_probe_is_not_recorded(void)
 {
-	CHECK(RECORDS(0, 0) == 0, "a permitted probe records nothing");
+	TEST("a permitted probe records nothing");
+	if (RECORDS(0, 0) != 0)
+		FAIL("expected: RECORDS(0, 0) == 0");
 }
 
 /* Suppression follows the verdict: a refused probe is still recorded */
 static void test_suppression_follows_the_verdict(void)
 {
-	CHECK(RECORDS(0, 1) == LOTA_EVENT_KILL_BLOCKED,
-	      "a refused probe is still recorded");
+	TEST("a refused probe is still recorded");
+	if (RECORDS(0, 1) != LOTA_EVENT_KILL_BLOCKED)
+		FAIL("expected: RECORDS(0, 1) == LOTA_EVENT_KILL_BLOCKED");
 }
 
 /* Verdict, then the event it records, in the hook's order */
@@ -165,55 +213,74 @@ static void test_the_two_decisions_together(void)
 	int sig;
 
 	sig = 0;
-	CHECK(RECORDS(sig, DENIED(sig, 1)) == 0,
-	      "a probe at the agent is delivered and records nothing");
+	TEST("a probe at the agent is delivered and records nothing");
+	if (RECORDS(sig, DENIED(sig, 1)) != 0)
+		FAIL("expected: RECORDS(sig, DENIED(sig, 1)) == 0");
 
 	sig = SIGKILL;
-	CHECK(RECORDS(sig, DENIED(sig, 1)) == LOTA_EVENT_KILL_BLOCKED,
-	      "SIGKILL at the agent is refused and recorded");
+	TEST("SIGKILL at the agent is refused and recorded");
+	if (RECORDS(sig, DENIED(sig, 1)) != LOTA_EVENT_KILL_BLOCKED)
+		FAIL("expected: RECORDS(sig, DENIED(sig, 1)) == "
+		     "LOTA_EVENT_KILL_BLOCKED");
 
 	sig = SIGHUP;
-	CHECK(RECORDS(sig, DENIED(sig, 1)) == LOTA_EVENT_KILL,
-	      "the agent's reload is delivered and recorded");
+	TEST("the agent's reload is delivered and recorded");
+	if (RECORDS(sig, DENIED(sig, 1)) != LOTA_EVENT_KILL)
+		FAIL("expected: RECORDS(sig, DENIED(sig, 1)) == "
+		     "LOTA_EVENT_KILL");
 
 	sig = SIGKILL;
-	CHECK(RECORDS(sig, DENIED(sig, 0)) == LOTA_EVENT_KILL,
-	      "SIGKILL at a protected task is delivered and recorded");
+	TEST("SIGKILL at a protected task is delivered and recorded");
+	if (RECORDS(sig, DENIED(sig, 0)) != LOTA_EVENT_KILL)
+		FAIL("expected: RECORDS(sig, DENIED(sig, 0)) == "
+		     "LOTA_EVENT_KILL");
 
 	sig = 0;
-	CHECK(RECORDS(sig, DENIED(sig, 0)) == 0,
-	      "a probe at a protected task records nothing");
+	TEST("a probe at a protected task records nothing");
+	if (RECORDS(sig, DENIED(sig, 0)) != 0)
+		FAIL("expected: RECORDS(sig, DENIED(sig, 0)) == 0");
 }
 
 /* cgroup.kill ends the cgroup past the signal hook, so it is SIGKILL's twin */
 static void test_the_cgroup_kill_guard(void)
 {
-	CHECK(lota_kill_guard_denied(1, 1, 0),
-	      "a write open of a guarded cgroup.kill is refused");
-	CHECK(!lota_kill_guard_denied(1, 1, 1),
-	      "the agent and the admin identity may write it");
-	CHECK(!lota_kill_guard_denied(0, 1, 0), "a read ends nobody");
-	CHECK(!lota_kill_guard_denied(1, 0, 0),
-	      "a cgroup.kill nobody guards is not refused");
+	TEST("a write open of a guarded cgroup.kill is refused");
+	if (!lota_kill_guard_denied(1, 1, 0))
+		FAIL("expected: lota_kill_guard_denied(1, 1, 0)");
+	TEST("the agent and the admin identity may write it");
+	if (lota_kill_guard_denied(1, 1, 1))
+		FAIL("expected: !lota_kill_guard_denied(1, 1, 1)");
+	TEST("a read ends nobody");
+	if (lota_kill_guard_denied(0, 1, 0))
+		FAIL("expected: !lota_kill_guard_denied(0, 1, 0)");
+	TEST("a cgroup.kill nobody guards is not refused");
+	if (lota_kill_guard_denied(1, 0, 0))
+		FAIL("expected: !lota_kill_guard_denied(1, 0, 0)");
 }
 
 /* the open period counts while a thread stands, and only then */
 static void test_stopped_time(void)
 {
-	CHECK(lota_stopped_ns(0, 0, 0, 500) == 0, "never stopped: nothing");
-	CHECK(lota_stopped_ns(70, 0, 100, 500) == 70,
-	      "none standing: the ended periods alone");
-	CHECK(lota_stopped_ns(70, 1, 100, 500) == 470,
-	      "one standing: its period counts");
-	CHECK(lota_stopped_ns(70, 8, 100, 500) == 470,
-	      "eight standing: the same period, not eight");
-	CHECK(lota_stopped_ns(70, 1, 500, 100) == 70,
-	      "clock behind the stop: no wrap");
+	TEST("never stopped: nothing");
+	if (lota_stopped_ns(0, 0, 0, 500) != 0)
+		FAIL("expected: lota_stopped_ns(0, 0, 0, 500) == 0");
+	TEST("none standing: the ended periods alone");
+	if (lota_stopped_ns(70, 0, 100, 500) != 70)
+		FAIL("expected: lota_stopped_ns(70, 0, 100, 500) == 70");
+	TEST("one standing: its period counts");
+	if (lota_stopped_ns(70, 1, 100, 500) != 470)
+		FAIL("expected: lota_stopped_ns(70, 1, 100, 500) == 470");
+	TEST("eight standing: the same period, not eight");
+	if (lota_stopped_ns(70, 8, 100, 500) != 470)
+		FAIL("expected: lota_stopped_ns(70, 8, 100, 500) == 470");
+	TEST("clock behind the stop: no wrap");
+	if (lota_stopped_ns(70, 1, 500, 100) != 70)
+		FAIL("expected: lota_stopped_ns(70, 1, 500, 100) == 70");
 }
 
 int main(void)
 {
-	printf("=== signal delivery policy tests ===\n\n");
+	test_begin("signal policy");
 
 	test_refuses_what_can_end_the_agent();
 	test_the_signals_the_agent_takes();
@@ -230,6 +297,5 @@ int main(void)
 	test_the_cgroup_kill_guard();
 	test_stopped_time();
 
-	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

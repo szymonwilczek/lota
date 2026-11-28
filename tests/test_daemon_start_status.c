@@ -25,21 +25,11 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "test.h"
+
 #ifndef AGENT_BIN_PATH
 #define AGENT_BIN_PATH "build/lota-agent"
 #endif
-
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
 
 /*
  * Run the agent with the given arguments, with its output discarded,
@@ -81,7 +71,7 @@ int main(void)
 	int held_fd;
 	int status;
 
-	printf("=== what --daemon reports about a refused start ===\n");
+	test_begin("daemon start status");
 
 	snprintf(pid_path, sizeof(pid_path), "/tmp/lota_dss_%d.pid",
 		 (int)getpid());
@@ -92,7 +82,7 @@ int main(void)
 	 */
 	held_fd = open(pid_path, O_RDWR | O_CREAT, 0644);
 	if (held_fd < 0 || flock(held_fd, LOCK_EX | LOCK_NB) < 0) {
-		fprintf(stderr, "FAIL: could not hold %s\n", pid_path);
+		FAIL("could not hold %s", pid_path);
 		return 1;
 	}
 
@@ -104,22 +94,21 @@ int main(void)
 
 	status = run_agent(argv);
 
-	CHECK(status >= 0 && WIFEXITED(status),
-	      "a daemonised start that is refused terminates normally");
-	CHECK(status >= 0 && WIFEXITED(status) && WEXITSTATUS(status) != 0,
-	      "a daemonised start that is refused exits non-zero");
-	CHECK(status >= 0 && WIFEXITED(status) && WEXITSTATUS(status) != 127,
-	      "the agent binary under test was found and run");
+	TEST("a daemonised start that is refused terminates normally");
+	if (!(status >= 0 && WIFEXITED(status)))
+		FAIL("expected: status >= 0 && WIFEXITED(status)");
+	TEST("a daemonised start that is refused exits non-zero");
+	if (!(status >= 0 && WIFEXITED(status) && WEXITSTATUS(status) != 0))
+		FAIL("expected: status >= 0 && WIFEXITED(status) && "
+		     "WEXITSTATUS(status) != 0");
+	TEST("the agent binary under test was found and run");
+	if (!(status >= 0 && WIFEXITED(status) && WEXITSTATUS(status) != 127))
+		FAIL("expected: status >= 0 && WIFEXITED(status) && "
+		     "WEXITSTATUS(status) != 127");
 
 	flock(held_fd, LOCK_UN);
 	close(held_fd);
 	unlink(pid_path);
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d check(s) failed\n", g_failures);
-		return 1;
-	}
-
-	printf("\nAll daemon start status checks passed\n");
-	return 0;
+	return test_end();
 }

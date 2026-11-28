@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  LOTA_TEST_COLOR: always
+
 # cancel superseded runs of this workflow on the same ref to bound
 # concurrent job usage; let pushes to main run to completion
 concurrency:
@@ -85,6 +88,14 @@ jobs:
 
       - name: Run unit tests
         run: make CLANG=clang-22 test-unit
+
+      - name: Test summary
+        if: always()
+        run: |
+          [ -f build/test-summary.tsv ] || exit 0
+          { echo '```text'
+            LOTA_TEST_COLOR=never tests/lib/summary.sh build/test-summary.tsv
+            echo '```'; } >>"$GITHUB_STEP_SUMMARY" || true
 
   format:
     name: clang-format
@@ -416,6 +427,7 @@ jobs:
             scripts/check-abi.sh \
             scripts/check-package-manifests.sh \
             scripts/check-test-build-dir.sh \
+            scripts/check-test-names.sh \
             scripts/verify-rpm-release.sh \
             examples/demo/setup.sh \
             examples/ci-gate/run.sh \
@@ -505,6 +517,18 @@ jobs:
 
       - name: Check the tests read the build directory the build used
         run: make check-test-build-dir
+
+  test-names:
+    name: test names
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check every test name and group header fits its columns
+        run: make check-test-names
 
   license-boundary:
     name: license-boundary
@@ -774,6 +798,14 @@ jobs:
       - name: Run unit tests
         run: make test-unit
 
+      - name: Test summary
+        if: always()
+        run: |
+          [ -f build/test-summary.tsv ] || exit 0
+          { echo '```text'
+            LOTA_TEST_COLOR=never tests/lib/summary.sh build/test-summary.tsv
+            echo '```'; } >>"$GITHUB_STEP_SUMMARY" || true
+
   sanitizers:
     name: asan-ubsan-unit
     runs-on: ubuntu-24.04
@@ -824,6 +856,14 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1
         run: make SANITIZE=address,undefined test-unit
 
+      - name: Test summary
+        if: always()
+        run: |
+          [ -f build/test-summary.tsv ] || exit 0
+          { echo '```text'
+            LOTA_TEST_COLOR=never tests/lib/summary.sh build/test-summary.tsv
+            echo '```'; } >>"$GITHUB_STEP_SUMMARY" || true
+
   sanitizers-thread:
     name: tsan-unit
     runs-on: ubuntu-24.04
@@ -872,6 +912,14 @@ jobs:
         env:
           TSAN_OPTIONS: halt_on_error=1
         run: make SANITIZE=thread test-unit
+
+      - name: Test summary
+        if: always()
+        run: |
+          [ -f build/test-summary.tsv ] || exit 0
+          { echo '```text'
+            LOTA_TEST_COLOR=never tests/lib/summary.sh build/test-summary.tsv
+            echo '```'; } >>"$GITHUB_STEP_SUMMARY" || true
 
   valgrind:
     name: valgrind-unit
@@ -958,6 +1006,14 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1
         run: make SANITIZE=address,undefined test-unit
 
+      - name: Test summary
+        if: always()
+        run: |
+          [ -f build/test-summary.tsv ] || exit 0
+          { echo '```text'
+            LOTA_TEST_COLOR=never tests/lib/summary.sh build/test-summary.tsv
+            echo '```'; } >>"$GITHUB_STEP_SUMMARY" || true
+
       - name: Memcheck unit tests
         run: |
           make clean
@@ -1011,6 +1067,14 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
           UBSAN_OPTIONS: print_stacktrace=1
         run: make CC=clang SANITIZE=address,undefined test-unit
+
+      - name: Test summary
+        if: always()
+        run: |
+          [ -f build/test-summary.tsv ] || exit 0
+          { echo '```text'
+            LOTA_TEST_COLOR=never tests/lib/summary.sh build/test-summary.tsv
+            echo '```'; } >>"$GITHUB_STEP_SUMMARY" || true
 
   sanitizers-full-build:
     name: asan-ubsan-full-build-clang

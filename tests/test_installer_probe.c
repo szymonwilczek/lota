@@ -52,7 +52,7 @@ static void test_pcr14_baseline_path_is_the_shipped_one(void)
 		char msg[256];
 
 		snprintf(msg, sizeof(msg), "baseline path is %s", path);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	/* a relative path would follow whichever directory started us */
@@ -60,7 +60,6 @@ static void test_pcr14_baseline_path_is_the_shipped_one(void)
 		FAIL("the baseline path is not absolute");
 		return;
 	}
-	PASS();
 }
 
 /* Cross-component KAT taken from live UEFI Secure Boot host:
@@ -110,7 +109,6 @@ static void test_pcr14_lock_value_baseline_aware(void)
 		FAIL("derived value ignores the persisted baseline");
 		return;
 	}
-	PASS();
 
 	TEST("PCR14 lock value falls back to a zero baseline when absent");
 	if (probe_hex_to_bytes(lock_kat_hex, zero_expect,
@@ -123,7 +121,6 @@ static void test_pcr14_lock_value_baseline_aware(void)
 		FAIL("absent baseline should derive the zero-based constant");
 		return;
 	}
-	PASS();
 
 	TEST("PCR14 lock value reads a baseline one byte too long as absent");
 	{
@@ -139,7 +136,6 @@ static void test_pcr14_lock_value_baseline_aware(void)
 		FAIL("a 33-byte baseline was taken from its first 32 bytes");
 		return;
 	}
-	PASS();
 }
 
 static void test_hex_to_bytes(void)
@@ -153,7 +149,6 @@ static void test_hex_to_bytes(void)
 		FAIL("mixed-case parse");
 		return;
 	}
-	PASS();
 
 	TEST("hex parser rejects bad length and non-hex chars");
 	if (probe_hex_to_bytes("deadbe", out, sizeof(out)) != -EINVAL ||
@@ -162,7 +157,6 @@ static void test_hex_to_bytes(void)
 		FAIL("bad input accepted");
 		return;
 	}
-	PASS();
 }
 
 static void test_cmdline_ima(void)
@@ -173,14 +167,12 @@ static void test_cmdline_ima(void)
 		FAIL("enforce rejected");
 		return;
 	}
-	PASS();
 
 	TEST("absent ima_appraise leaves the kernel default, enforce");
 	if (probe_cmdline_ima_ok("ro root=UUID=x rhgb quiet") != 0) {
 		FAIL("the default mode rejected");
 		return;
 	}
-	PASS();
 
 	TEST("fix, log and off fail the floor");
 	if (probe_cmdline_ima_ok("ima_appraise=fix") != -EPERM ||
@@ -189,7 +181,6 @@ static void test_cmdline_ima(void)
 		FAIL("non-enforcing mode accepted");
 		return;
 	}
-	PASS();
 
 	TEST("last ima_appraise token wins, as in the kernel");
 	if (probe_cmdline_ima_ok("ima_appraise=log ima_appraise=enforce") !=
@@ -199,7 +190,6 @@ static void test_cmdline_ima(void)
 		FAIL("an earlier token decided");
 		return;
 	}
-	PASS();
 
 	TEST("ima_appraise= past -- and unknown values read as in the kernel");
 	if (probe_cmdline_ima_ok("ima_appraise=off -- ima_appraise=enforce") !=
@@ -209,14 +199,12 @@ static void test_cmdline_ima(void)
 		FAIL("the mode differs from the kernel's");
 		return;
 	}
-	PASS();
 
 	TEST("prefix tokens do not match (ima_appraise_x=off)");
 	if (probe_cmdline_ima_ok("ima_appraise_x=off") != 0) {
 		FAIL("prefix matched");
 		return;
 	}
-	PASS();
 }
 
 static void test_cmdline_token(void)
@@ -229,7 +217,6 @@ static void test_cmdline_token(void)
 		FAIL("token matching");
 		return;
 	}
-	PASS();
 }
 
 static void write_text_file(const char *dir, const char *name, const char *val)
@@ -264,7 +251,6 @@ static void test_esrt_present(void)
 		FAIL("nonexistent base should be 0");
 		return;
 	}
-	PASS();
 
 	mkdir(base, 0755);
 	snprintf(dir, sizeof(dir), "%s/entry0", base);
@@ -276,7 +262,6 @@ static void test_esrt_present(void)
 		FAIL("device-only should be 0");
 		goto cleanup;
 	}
-	PASS();
 
 	snprintf(dir, sizeof(dir), "%s/entry1", base);
 	mkdir(dir, 0755);
@@ -287,7 +272,6 @@ static void test_esrt_present(void)
 		FAIL("system fw entry should be 1");
 		goto cleanup;
 	}
-	PASS();
 
 cleanup:
 	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", base);
@@ -310,7 +294,6 @@ static void test_machine_description(void)
 		FAIL("empty DMI tree produced a description");
 		goto cleanup;
 	}
-	PASS();
 
 	TEST("vendor and product are joined as DMI spells them");
 	write_text_file(dir, "sys_vendor", "Example Corp\n");
@@ -320,7 +303,6 @@ static void test_machine_description(void)
 		FAIL("description is not the two DMI fields");
 		goto cleanup;
 	}
-	PASS();
 
 	TEST("an unfilled DMI field is left out, not read back");
 	/* boards ship these placeholders unfilled;
@@ -337,7 +319,6 @@ static void test_machine_description(void)
 		FAIL("two placeholders still produced a description");
 		goto cleanup;
 	}
-	PASS();
 
 cleanup:
 	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
@@ -385,7 +366,7 @@ static void test_efivar_payload(void)
 	 * Telling the second case to do the first is the kind of confidently
 	 * wrong step this project refuses to ship.
 	 */
-	TEST("UEFI is detected from the firmware directory, not from SecureBoot");
+	TEST("UEFI is detected from the firmware directory, not SecureBoot");
 	if (probe_firmware_is_uefi_at(dir) != 1) {
 		FAIL("an existing firmware directory not read as UEFI");
 		goto cleanup;
@@ -399,7 +380,6 @@ static void test_efivar_payload(void)
 			goto cleanup;
 		}
 	}
-	PASS();
 
 	TEST("efivar flag reads past the attribute header");
 	write_efivar(dir, "on", &one, sizeof(one));
@@ -414,7 +394,6 @@ static void test_efivar_payload(void)
 		FAIL("clear flag not read as 0");
 		goto cleanup;
 	}
-	PASS();
 
 	TEST("a header-only or missing variable is not read as a value");
 	write_efivar(dir, "empty", &one, 0);
@@ -428,7 +407,6 @@ static void test_efivar_payload(void)
 		FAIL("missing variable not reported as -ENOENT");
 		goto cleanup;
 	}
-	PASS();
 
 	TEST("OsIndicationsSupported is masked to the boot-to-setup bit");
 	write_efivar(dir, "mask", mask, sizeof(mask));
@@ -443,7 +421,6 @@ static void test_efivar_payload(void)
 		FAIL("other bits read as boot-to-setup support");
 		goto cleanup;
 	}
-	PASS();
 
 cleanup:
 	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
@@ -468,7 +445,7 @@ static void test_secureboot_remediation_when_the_request_fails(void)
 	cmd = strstr(msg, "systemctl reboot --firmware-setup");
 	screen = strstr(msg, "startup screen");
 	if (!cmd || !screen || !strstr(msg, "vendor logo")) {
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	if (screen < cmd) {
@@ -479,7 +456,6 @@ static void test_secureboot_remediation_when_the_request_fails(void)
 		FAIL("the refusal a full store gives is not named");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -499,10 +475,9 @@ static void test_secureboot_remediation_fits_a_note(void)
 	len = strlen(msg);
 	if (len + 1 >= sizeof(msg) ||
 	    strcmp(msg + len - 19, "'mokutil --import'.") != 0) {
-		FAIL(msg + (len > 60 ? len - 60 : 0));
+		FAIL("%s", msg + (len > 60 ? len - 60 : 0));
 		return;
 	}
-	PASS();
 }
 
 static void test_secureboot_remediation(void)
@@ -517,7 +492,6 @@ static void test_secureboot_remediation(void)
 		FAIL("boot-to-setup command missing");
 		return;
 	}
-	PASS();
 
 	TEST("the machine DMI names is echoed back");
 	if (!strstr(msg, "Example Corp Example Board X1")) {
@@ -529,7 +503,6 @@ static void test_secureboot_remediation(void)
 		FAIL("no description left no instructions either");
 		return;
 	}
-	PASS();
 
 	TEST("firmware without boot-to-setup defers to its startup screen");
 	/* key differs between firmware revisions of one model,
@@ -544,14 +517,12 @@ static void test_secureboot_remediation(void)
 		FAIL("no route into setup offered as the fallback");
 		return;
 	}
-	PASS();
 
 	TEST("every case names the setting and where it sits");
 	if (!strstr(msg, "Secure Boot") || !strstr(msg, "Security or Boot")) {
 		FAIL("the setting was not named");
 		return;
 	}
-	PASS();
 
 	TEST("setup mode adds the factory-keys step");
 	probe_secureboot_remediation("Example Corp", 0, 1, 1, msg, sizeof(msg));
@@ -564,7 +535,6 @@ static void test_secureboot_remediation(void)
 		FAIL("user mode told to restore keys it already has");
 		return;
 	}
-	PASS();
 
 	TEST("a guest is sent to its OVMF image");
 	probe_secureboot_remediation("QEMU Standard PC", 1, 0, 1, msg,
@@ -575,7 +545,6 @@ static void test_secureboot_remediation(void)
 		FAIL("guest given the physical-machine advice");
 		return;
 	}
-	PASS();
 
 	TEST("an unreadable probe reads as 'could not tell', not as yes");
 	/* -errno from either efivar must not claim setup mode or promise
@@ -587,7 +556,6 @@ static void test_secureboot_remediation(void)
 		FAIL("a failed probe was read as a positive answer");
 		return;
 	}
-	PASS();
 
 	TEST("the worst-case message fits a stage note whole");
 	probe_secureboot_remediation("Example Corp Example Board X1", 0, 1, 0,
@@ -596,7 +564,6 @@ static void test_secureboot_remediation(void)
 		FAIL("message fills STAGE_NOTE_CAP and is cut short");
 		return;
 	}
-	PASS();
 
 	TEST("a short buffer truncates without overrunning");
 	memset(small, 'X', sizeof(small));
@@ -610,7 +577,6 @@ static void test_secureboot_remediation(void)
 		FAIL("wrote past the buffer it was given");
 		return;
 	}
-	PASS();
 }
 
 static void test_auto_bringup_opt_in(void)
@@ -629,7 +595,6 @@ static void test_auto_bringup_opt_in(void)
 		FAIL("bring-up opted in with nothing saying so");
 		goto cleanup;
 	}
-	PASS();
 
 	TEST("the marker file opts this host in");
 	write_text_file(dir, "auto-bringup", "");
@@ -637,7 +602,6 @@ static void test_auto_bringup_opt_in(void)
 		FAIL("marker file ignored");
 		goto cleanup;
 	}
-	PASS();
 
 	TEST("only an exact 1 in the environment counts as consent");
 	unlink(marker);
@@ -659,7 +623,6 @@ static void test_auto_bringup_opt_in(void)
 		FAIL("a non-1 value read as consent");
 		goto cleanup;
 	}
-	PASS();
 
 cleanup:
 	unsetenv("LOTA_AUTO_BRINGUP");
@@ -682,10 +645,9 @@ static void test_selinux_unmet_note(void)
 	if (probe_selinux_unmet_note(&u, note, sizeof(note)) != 1 ||
 	    !strstr(note, "CA port 8444") || !strstr(note, "semanage port") ||
 	    strstr(note, "binary") || strstr(note, "TPM")) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	PASS();
 
 	TEST("selinux: each unmet check is named");
 	memset(&u, 0, sizeof(u));
@@ -695,10 +657,9 @@ static void test_selinux_unmet_note(void)
 	if (probe_selinux_unmet_note(&u, note, sizeof(note)) != 3 ||
 	    !strstr(note, "TPM device") || !strstr(note, "config directory") ||
 	    !strstr(note, "verifier port 8443") || strstr(note, "state")) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	PASS();
 
 	TEST("selinux: a port that cannot be checked is unmet");
 	memset(&u, 0, sizeof(u));
@@ -706,19 +667,17 @@ static void test_selinux_unmet_note(void)
 	if (probe_selinux_unmet_note(&u, note, sizeof(note)) != 1 ||
 	    !strstr(note, "Cannot check the port labels: semanage is not "
 			  "installed.")) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	PASS();
 
 	TEST("selinux: every check met is no note");
 	memset(&u, 0, sizeof(u));
 	if (probe_selinux_unmet_note(&u, note, sizeof(note)) != 0 ||
 	    note[0] != '\0') {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	PASS();
 }
 
 static void test_port_needs_label(void)
@@ -761,7 +720,6 @@ static void test_port_needs_label(void)
 		FAIL("not a port number");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -775,65 +733,53 @@ static void test_manifest_line(void)
 	char out[64];
 
 	TEST("a manifest line yields its path");
-	if (probe_manifest_line("/usr/lib64/libc.so.6\n", out, sizeof(out)) ==
-		    1 &&
-	    strcmp(out, "/usr/lib64/libc.so.6") == 0)
-		PASS();
-	else
+	if (!(probe_manifest_line("/usr/lib64/libc.so.6\n", out, sizeof(out)) ==
+		      1 &&
+	      strcmp(out, "/usr/lib64/libc.so.6") == 0))
 		FAIL("path not parsed");
 
 	TEST("surrounding whitespace is trimmed");
-	if (probe_manifest_line("  /usr/bin/title \t\n", out, sizeof(out)) ==
-		    1 &&
-	    strcmp(out, "/usr/bin/title") == 0)
-		PASS();
-	else
+	if (!(probe_manifest_line("  /usr/bin/title \t\n", out, sizeof(out)) ==
+		      1 &&
+	      strcmp(out, "/usr/bin/title") == 0))
 		FAIL("whitespace kept");
 
 	TEST("a comment and a blank line are skipped");
-	if (probe_manifest_line("# /usr/bin/title\n", out, sizeof(out)) == 0 &&
-	    probe_manifest_line("   \n", out, sizeof(out)) == 0 &&
-	    probe_manifest_line("", out, sizeof(out)) == 0)
-		PASS();
-	else
+	if (!(probe_manifest_line("# /usr/bin/title\n", out, sizeof(out)) ==
+		      0 &&
+	      probe_manifest_line("   \n", out, sizeof(out)) == 0 &&
+	      probe_manifest_line("", out, sizeof(out)) == 0))
 		FAIL("comment or blank line taken as a path");
 
 	TEST("a relative path is refused");
-	if (probe_manifest_line("lib/libfoo.so\n", out, sizeof(out)) ==
-		    -EINVAL &&
-	    probe_manifest_line("../../etc/shadow\n", out, sizeof(out)) ==
-		    -EINVAL)
-		PASS();
-	else
+	if (!(probe_manifest_line("lib/libfoo.so\n", out, sizeof(out)) ==
+		      -EINVAL &&
+	      probe_manifest_line("../../etc/shadow\n", out, sizeof(out)) ==
+		      -EINVAL))
 		FAIL("accepted a relative path");
 
 	TEST("an absolute path carrying '..' is refused");
-	if (probe_manifest_line("/usr/../etc/shadow\n", out, sizeof(out)) ==
-		    -EINVAL &&
-	    probe_manifest_line("/usr/lib64/..\n", out, sizeof(out)) ==
-		    -EINVAL &&
-	    probe_manifest_line("/..\n", out, sizeof(out)) == -EINVAL)
-		PASS();
-	else
+	if (!(probe_manifest_line("/usr/../etc/shadow\n", out, sizeof(out)) ==
+		      -EINVAL &&
+	      probe_manifest_line("/usr/lib64/..\n", out, sizeof(out)) ==
+		      -EINVAL &&
+	      probe_manifest_line("/..\n", out, sizeof(out)) == -EINVAL))
 		FAIL("accepted a path walking out with '..'");
 
 	TEST("a name that merely starts with dots is kept");
-	if (probe_manifest_line("/opt/title/..data/lib.so\n", out,
-				sizeof(out)) == 1 &&
-	    strcmp(out, "/opt/title/..data/lib.so") == 0 &&
-	    probe_manifest_line("/opt/title/.hidden\n", out, sizeof(out)) == 1)
-		PASS();
-	else
+	if (!(probe_manifest_line("/opt/title/..data/lib.so\n", out,
+				  sizeof(out)) == 1 &&
+	      strcmp(out, "/opt/title/..data/lib.so") == 0 &&
+	      probe_manifest_line("/opt/title/.hidden\n", out, sizeof(out)) ==
+		      1))
 		FAIL("refused a legitimate dotted name");
 
 	TEST("a path longer than the buffer is refused");
 	{
 		char small[8];
-		if (probe_manifest_line("/usr/lib64/libc.so.6\n", small,
-					sizeof(small)) == -EINVAL &&
-		    small[0] == '\0')
-			PASS();
-		else
+		if (!(probe_manifest_line("/usr/lib64/libc.so.6\n", small,
+					  sizeof(small)) == -EINVAL &&
+		      small[0] == '\0'))
 			FAIL("overran the buffer");
 	}
 }
@@ -898,7 +844,6 @@ static void test_installed_kernels(void)
 		FAIL("expected the two kernels that have an image");
 		goto cleanup;
 	}
-	PASS();
 
 	TEST("each entry names the image the lock has to be in");
 	{
@@ -922,7 +867,6 @@ static void test_installed_kernels(void)
 			goto cleanup;
 		}
 	}
-	PASS();
 
 	TEST("a host with no modules tree enumerates nothing, not an error");
 	rc = probe_installed_kernels_at("/nonexistent/modules",
@@ -932,7 +876,6 @@ static void test_installed_kernels(void)
 		FAIL("absence should read as no kernels");
 		goto cleanup;
 	}
-	PASS();
 
 cleanup:
 	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", root);
@@ -966,7 +909,6 @@ static void test_barrier_stage_verdicts(void)
 		FAIL("the note blames LOTA state that does not exist");
 		return;
 	}
-	PASS();
 
 	TEST("a genuinely stale commitment keeps its wording");
 	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 0, 0, 0, note,
@@ -978,7 +920,6 @@ static void test_barrier_stage_verdicts(void)
 		FAIL("the stale case lost its explanation");
 		return;
 	}
-	PASS();
 
 	TEST("a running agent's own commitment is satisfied");
 	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 1, 0, 0, note,
@@ -986,7 +927,6 @@ static void test_barrier_stage_verdicts(void)
 		FAIL("this boot's commitment is the satisfied state");
 		return;
 	}
-	PASS();
 
 	TEST("the lock value alone is satisfied");
 	if (probe_pcr14_barrier_stage(PROBE_PCR14_LOCK_ONLY, 1, 0, 0, 0, note,
@@ -994,7 +934,6 @@ static void test_barrier_stage_verdicts(void)
 		FAIL("a locked register is what this stage waits for");
 		return;
 	}
-	PASS();
 
 	TEST("an agent that already refused is not sent to another reboot");
 	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 0, 1, 0, note,
@@ -1006,7 +945,6 @@ static void test_barrier_stage_verdicts(void)
 		FAIL("the note does not say where the refusal is written");
 		return;
 	}
-	PASS();
 
 	TEST("a running agent is not read as a failed one");
 	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 1, 1, 0, note,
@@ -1014,7 +952,6 @@ static void test_barrier_stage_verdicts(void)
 		FAIL("an earlier failed start outweighed the running agent");
 		return;
 	}
-	PASS();
 
 	TEST("a pristine register still says the lock has not run");
 	if (probe_pcr14_barrier_stage(PROBE_PCR14_ZERO, 0, 0, 0, 0, note,
@@ -1022,7 +959,6 @@ static void test_barrier_stage_verdicts(void)
 		FAIL("no lock this boot needs a reboot");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1077,8 +1013,6 @@ static void test_agent_paused_reader(void)
 	}
 	if (probe_agent_paused_at(path, spent) != PROBE_AGENT_PAUSED)
 		FAIL("the agent's own pause record is not recognised");
-	else
-		PASS();
 
 	TEST("a commitment spent by a failed run is not read as a pause");
 	if (write_snapshot(path, spent,
@@ -1086,8 +1020,6 @@ static void test_agent_paused_reader(void)
 				   LOTA_CLOCK_STATE_FLAG_ERROR_POISON) != 0 ||
 	    probe_agent_paused_at(path, spent) != PROBE_AGENT_SPENT_BY_ERROR)
 		FAIL("a failed run's poison reads as a pause");
-	else
-		PASS();
 	if (write_snapshot(path, spent,
 			   LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK |
 				   LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON) !=
@@ -1099,16 +1031,12 @@ static void test_agent_paused_reader(void)
 	TEST("a register moved on since the pause is not a pause");
 	if (probe_agent_paused_at(path, other) != 0)
 		FAIL("a later extend still reads as paused");
-	else
-		PASS();
 
 	TEST("a snapshot without the pause flag is not a pause");
 	if (write_snapshot(path, spent, LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK) !=
 		    0 ||
 	    probe_agent_paused_at(path, spent) != 0)
 		FAIL("an ordinary commitment reads as paused");
-	else
-		PASS();
 
 	TEST("a short or missing snapshot is not a pause");
 	fd = open(path, O_WRONLY | O_TRUNC);
@@ -1125,8 +1053,6 @@ static void test_agent_paused_reader(void)
 	unlink(path);
 	if (probe_agent_paused_at(path, spent) != 0)
 		FAIL("no snapshot reads as paused");
-	else
-		PASS();
 }
 
 static int barrier_says(int agent_active, int agent_failed, int agent_paused,
@@ -1138,11 +1064,11 @@ static int barrier_says(int agent_active, int agent_failed, int agent_paused,
 	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, agent_active,
 				      agent_failed, agent_paused, note,
 				      sizeof(note)) != want) {
-		FAIL(note);
+		FAIL("%s", note);
 		return 0;
 	}
 	if ((has && !strstr(note, has)) || (lacks && strstr(note, lacks))) {
-		FAIL(note);
+		FAIL("%s", note);
 		return 0;
 	}
 	return 1;
@@ -1151,25 +1077,20 @@ static int barrier_says(int agent_active, int agent_failed, int agent_paused,
 static void test_barrier_after_a_pause(void)
 {
 	TEST("a paused agent's refused start is cleared by a reboot");
-	if (barrier_says(0, 1, 1, STAGE_REBOOT, "--resume", "does not clear"))
-		PASS();
+	barrier_says(0, 1, 1, STAGE_REBOOT, "--resume", "does not clear");
 
 	TEST("a paused agent nobody restarted is not stale state");
-	if (barrier_says(0, 0, 1, STAGE_REBOOT, "paused", "earlier agent run"))
-		PASS();
+	barrier_says(0, 0, 1, STAGE_REBOOT, "paused", "earlier agent run");
 
 	TEST("a refusal without a pause still names the log");
-	if (barrier_says(0, 1, 0, STAGE_BLOCKED, "journalctl", NULL))
-		PASS();
+	barrier_says(0, 1, 0, STAGE_BLOCKED, "journalctl", NULL);
 
 	TEST("a commitment spent by an error points to the log, not --resume");
-	if (barrier_says(0, 1, PROBE_AGENT_SPENT_BY_ERROR, STAGE_BLOCKED,
-			 "journalctl", "paused"))
-		PASS();
+	barrier_says(0, 1, PROBE_AGENT_SPENT_BY_ERROR, STAGE_BLOCKED,
+		     "journalctl", "paused");
 
 	TEST("a running agent outweighs an old pause record");
-	if (barrier_says(1, 0, 1, STAGE_DONE, NULL, NULL))
-		PASS();
+	barrier_says(1, 0, 1, STAGE_DONE, NULL, NULL);
 }
 
 /*
@@ -1188,7 +1109,6 @@ static void test_conf_profile_count(void)
 		FAIL("wrong count");
 		return;
 	}
-	PASS();
 
 	TEST("a configuration naming no publisher counts none");
 	if (probe_conf_buf_profile_count("log_level = debug\n") != 0 ||
@@ -1197,7 +1117,6 @@ static void test_conf_profile_count(void)
 		FAIL("false positive");
 		return;
 	}
-	PASS();
 }
 
 static void test_read_text(void)
@@ -1214,7 +1133,6 @@ static void test_read_text(void)
 		FAIL("missing file not -ENOENT");
 		return;
 	}
-	PASS();
 
 	TEST("read_text: a file that fills the buffer exactly is read");
 	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -1228,7 +1146,6 @@ static void test_read_text(void)
 		FAIL("exact fit not read whole");
 		goto out;
 	}
-	PASS();
 
 	TEST("read_text: a file larger than the buffer is -EFBIG");
 	fd = open(path, O_WRONLY | O_APPEND);
@@ -1241,7 +1158,6 @@ static void test_read_text(void)
 		FAIL("oversized file not -EFBIG");
 		goto out;
 	}
-	PASS();
 
 	TEST("read_text: a directory is an error");
 	unlink(path);
@@ -1250,7 +1166,6 @@ static void test_read_text(void)
 		FAIL("directory read as text");
 		goto out;
 	}
-	PASS();
 out:
 	unlink(path);
 	rmdir(path);
@@ -1276,7 +1191,6 @@ static void test_selfcheck_plan(void)
 		FAIL("named verifier did not produce a round");
 		return;
 	}
-	PASS();
 
 	TEST("no verifier named leaves the round to the first title");
 	if (probe_selfcheck_plan(NULL, 0, false) !=
@@ -1285,15 +1199,13 @@ static void test_selfcheck_plan(void)
 		FAIL("an unnamed verifier was treated as named");
 		return;
 	}
-	PASS();
 
-	TEST("configured publishers are the target list, so no verifier is named");
+	TEST("configured publishers are the targets, so no verifier is named");
 	if (probe_selfcheck_plan("verifier.example", 5, false) !=
 	    SELFCHECK_PUBLISHERS_REPORT) {
 		FAIL("the self-check still names one verifier");
 		return;
 	}
-	PASS();
 
 	TEST("publishers decide even when no verifier was given");
 	if (probe_selfcheck_plan(NULL, 5, false) !=
@@ -1301,7 +1213,6 @@ static void test_selfcheck_plan(void)
 		FAIL("a host with publishers was told a title would do it");
 		return;
 	}
-	PASS();
 
 	/*
 	 * A fleet install records its verifier as a profile, and the loop is
@@ -1314,7 +1225,6 @@ static void test_selfcheck_plan(void)
 		FAIL("the fleet verifier was not waited on through the loop");
 		return;
 	}
-	PASS();
 
 	TEST("a fleet profile without a verifier has nobody to report to");
 	if (probe_selfcheck_plan(NULL, 1, true) !=
@@ -1322,7 +1232,6 @@ static void test_selfcheck_plan(void)
 		FAIL("a token-only fleet was waited on");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1356,7 +1265,6 @@ static void test_conf_profile_anchor(void)
 		FAIL("hyphenated key, comment or trailing blank");
 		return;
 	}
-	PASS();
 
 	TEST("a profile without an anchor, or past the last, has none");
 	if (probe_conf_buf_profile_anchor(conf, 2, out, sizeof(out)) != 0 ||
@@ -1365,7 +1273,6 @@ static void test_conf_profile_anchor(void)
 		FAIL("an anchor was invented");
 		return;
 	}
-	PASS();
 
 	TEST("the top-level anchor is not a profile's");
 	if (probe_conf_buf_profile_anchor("ca_cert = /etc/lota/top.pem\n", 0,
@@ -1373,7 +1280,6 @@ static void test_conf_profile_anchor(void)
 		FAIL("top-level key read as a profile");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1399,7 +1305,6 @@ static void test_conf_continuous_count(void)
 		FAIL("wrong count");
 		return;
 	}
-	PASS();
 
 	TEST("top-level keys are not a profile");
 	if (probe_conf_buf_continuous_count("reporting = continuous\n"
@@ -1408,7 +1313,6 @@ static void test_conf_continuous_count(void)
 		FAIL("false positive");
 		return;
 	}
-	PASS();
 }
 
 static void test_attest_status_covers(void)
@@ -1423,7 +1327,6 @@ static void test_attest_status_covers(void)
 		FAIL("attested status refused");
 		return;
 	}
-	PASS();
 
 	TEST("a status short of the expected count is not the fleet's");
 	if (probe_attest_status_covers(
@@ -1438,7 +1341,6 @@ static void test_attest_status_covers(void)
 		FAIL("unattested status accepted");
 		return;
 	}
-	PASS();
 
 	/*
 	 * A host that already attested to one publisher reads the same count
@@ -1461,7 +1363,6 @@ static void test_attest_status_covers(void)
 		FAIL("new round refused");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1489,8 +1390,6 @@ static void test_named_files(void)
 		note[0] = '\0';
 		if (probe_named_files(files, 2, note, sizeof(note)) != 0)
 			FAIL("a NULL path was treated as a missing file");
-		else
-			PASS();
 	}
 
 	fd = mkstemp(tmp);
@@ -1508,8 +1407,6 @@ static void test_named_files(void)
 		} else if (probe_named_files(files, 1, note, sizeof(note)) !=
 			   0) {
 			FAIL("a readable file was refused");
-		} else {
-			PASS();
 		}
 	}
 
@@ -1529,8 +1426,6 @@ static void test_named_files(void)
 			FAIL("the refusal does not name the flag");
 		else if (!strstr(note, "/nonexistent/lota-key.pub"))
 			FAIL("the refusal does not name the path");
-		else
-			PASS();
 	}
 
 	if (fd >= 0)
@@ -1569,8 +1464,6 @@ static void test_file_equals(void)
 		FAIL("cannot create a temporary file");
 	else if (probe_file_equals(tmp, body, sizeof(body)) != 1)
 		FAIL("equal bytes were reported as different");
-	else
-		PASS();
 
 	TEST("a file of another length does not match");
 	if (fd < 0)
@@ -1578,29 +1471,21 @@ static void test_file_equals(void)
 	else if (probe_file_equals(tmp, body, sizeof(body) - 1) != 0 ||
 		 probe_file_equals(tmp, body, 0) != 0)
 		FAIL("a length mismatch was reported as equal");
-	else
-		PASS();
 
 	TEST("one byte changed past the first read does not match");
 	if (fd < 0)
 		FAIL("cannot create a temporary file");
 	else if (probe_file_equals(tmp, other, sizeof(other)) != 0)
 		FAIL("a changed byte was reported as equal");
-	else
-		PASS();
 
 	TEST("a missing file is an error");
 	if (probe_file_equals("/nonexistent/lota-pcr14-lock", body,
 			      sizeof(body)) != -ENOENT)
 		FAIL("a missing file did not report ENOENT");
-	else
-		PASS();
 
 	TEST("a directory does not match");
 	if (probe_file_equals("/", body, 0) != 0)
 		FAIL("a directory was reported as equal");
-	else
-		PASS();
 
 	if (fd >= 0)
 		unlink(tmp);
@@ -1616,22 +1501,16 @@ static void test_ima_mode_blocking(void)
 	TEST("a Secure Boot host appraises whatever the cmdline says");
 	if (!probe_ima_mode_blocking(1, "ro quiet ima_appraise=off"))
 		FAIL("the discarded parameter decided the mode");
-	else
-		PASS();
 
 	TEST("a Secure Boot host with no parameter still appraises");
 	if (!probe_ima_mode_blocking(1, "ro quiet"))
 		FAIL("the kernel's own default was read as absent");
-	else
-		PASS();
 
 	TEST("without Secure Boot the parameter is the answer");
 	if (!probe_ima_mode_blocking(0, "ro quiet ima_appraise=enforce"))
 		FAIL("a honoured enforce mode was refused");
 	else if (probe_ima_mode_blocking(0, "ro quiet ima_appraise=fix"))
 		FAIL("a non-blocking mode passed");
-	else
-		PASS();
 }
 
 /*
@@ -1649,8 +1528,6 @@ static void test_ima_scope_stage_verdicts(void)
 					  .is_root = 1 };
 	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_DONE)
 		FAIL("an appraised scope was reported as work");
-	else
-		PASS();
 
 	TEST("an unappraised host is reported, not stopped");
 	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
@@ -1661,8 +1538,6 @@ static void test_ima_scope_stage_verdicts(void)
 		FAIL("the note does not name the bit that carries the state");
 	else if (!strstr(note, "signatures"))
 		FAIL("the note does not name what the host is missing");
-	else
-		PASS();
 
 	TEST("an unsigned host is told a rule set would refuse everything");
 	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
@@ -1675,8 +1550,6 @@ static void test_ima_scope_stage_verdicts(void)
 		     "appraises in");
 	else if (!strstr(note, "next boot would refuse them"))
 		FAIL("the note does not say what widening the scope costs");
-	else
-		PASS();
 
 	TEST("a host that already signs its executables is told so");
 	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
@@ -1686,8 +1559,6 @@ static void test_ima_scope_stage_verdicts(void)
 		FAIL("the verdict changed with the reason");
 	else if (strstr(note, "carry no signature"))
 		FAIL("a signing host was told it signs nothing");
-	else
-		PASS();
 
 	TEST("the longest report still fits the note");
 	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
@@ -1700,8 +1571,6 @@ static void test_ima_scope_stage_verdicts(void)
 		FAIL("the note was truncated, losing its last clause");
 	else if (!strstr(note, ".ima keyring"))
 		FAIL("the route out did not survive to the end of the note");
-	else
-		PASS();
 
 	TEST("a signed-policy host is told why a rule set cannot be loaded");
 	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
@@ -1711,8 +1580,6 @@ static void test_ima_scope_stage_verdicts(void)
 		FAIL("the verdict changed with the reason");
 	else if (!strstr(note, "POLICY_CHECK"))
 		FAIL("the note does not name the rule that refuses the write");
-	else
-		PASS();
 
 	TEST("a kernel without IMA appraisal is reported, not stopped");
 	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_EXEC,
@@ -1723,8 +1590,6 @@ static void test_ima_scope_stage_verdicts(void)
 	else if (!strstr(note, "no IMA appraisal") ||
 		 strstr(note, "tokens can say"))
 		FAIL("appraise read as appraisal on a kernel without it");
-	else
-		PASS();
 
 	TEST("a kernel publishing no policy is reported, not stopped");
 	scope = (struct probe_ima_scope){ .scope = -ENOTSUP, .is_root = 1 };
@@ -1732,8 +1597,6 @@ static void test_ima_scope_stage_verdicts(void)
 		FAIL("a host the agent starts on was blocked by the installer");
 	else if (!strstr(note, "cannot be checked"))
 		FAIL("the note does not say the scope went unchecked");
-	else
-		PASS();
 
 	TEST("an unprivileged read is a caller problem, not a host verdict");
 	scope = (struct probe_ima_scope){ .scope = -EACCES, .is_root = 0 };
@@ -1741,8 +1604,6 @@ static void test_ima_scope_stage_verdicts(void)
 		FAIL("a probe that could not look reported about the host");
 	else if (!strstr(note, "root"))
 		FAIL("the note does not say how to get an answer");
-	else
-		PASS();
 }
 
 /* The reader behind that verdict, over the two policies a host actually loads */
@@ -1774,8 +1635,6 @@ static void test_ima_policy_scope_reader(void)
 		FAIL("a measure-only policy was read as appraising exec");
 	else if (signed_policy != 1)
 		FAIL("the POLICY_CHECK rule was not seen");
-	else
-		PASS();
 
 	TEST("the built-in appraisal policy answers the scope question");
 	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -1793,15 +1652,11 @@ static void test_ima_policy_scope_reader(void)
 		FAIL("a rule naming no hook was not counted for exec");
 	else if (signed_policy != 0)
 		FAIL("a policy that signs nothing was reported as signing");
-	else
-		PASS();
 
 	TEST("a policy nothing publishes is told apart from an empty one");
 	if (probe_ima_policy_scope("/nonexistent/ima/policy", &signed_policy) !=
 	    -ENOENT)
 		FAIL("the read failure was not passed up as an errno");
-	else
-		PASS();
 
 	TEST("any appraise rule, on any hook, keeps enforce off the cmdline");
 	{
@@ -1841,8 +1696,6 @@ static void test_ima_policy_scope_reader(void)
 		else if (probe_ima_policy_appraises(
 				 "/nonexistent/ima/policy") != -ENOENT)
 			FAIL("an unreadable policy gave no errno");
-		else
-			PASS();
 	}
 
 	unlink(path);
@@ -1944,13 +1797,11 @@ static void test_cmdline_next_boot_verdicts(void)
 	else if (probe_cmdline_next_boot_stage(NULL, "ro", note,
 					       sizeof(note)) != STAGE_ERROR)
 		FAIL("a missing floor was not an error");
-	else
-		PASS();
 }
 
 int main(void)
 {
-	printf("installer probe helpers:\n");
+	test_begin("installer probe");
 
 	test_pcr14_baseline_path_is_the_shipped_one();
 	test_pcr14_lock_value_baseline_aware();
@@ -1984,6 +1835,5 @@ int main(void)
 	test_named_files();
 	test_file_equals();
 
-	printf("%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

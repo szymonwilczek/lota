@@ -11,7 +11,6 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
 
 #include "test.h"
 #include "../include/lota_ima_xattr.h"
@@ -36,7 +35,6 @@ static void test_signature_types_accepted(void)
 		FAIL("VERITY_DIGSIG not recognised as a signature");
 		return;
 	}
-	PASS();
 }
 
 static void test_bare_digest_rejected(void)
@@ -53,7 +51,6 @@ static void test_bare_digest_rejected(void)
 		FAIL("unsigned algo-tagged digest accepted as a signature");
 		return;
 	}
-	PASS();
 }
 
 static void test_empty_and_null_rejected(void)
@@ -69,7 +66,6 @@ static void test_empty_and_null_rejected(void)
 		FAIL("zero-length blob accepted");
 		return;
 	}
-	PASS();
 }
 
 static void test_unknown_type_rejected(void)
@@ -86,18 +82,16 @@ static void test_unknown_type_rejected(void)
 		FAIL("type 0xff accepted");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("IMA xattr signature predicate:\n");
+	test_begin("ima xattr");
 
 	test_signature_types_accepted();
 	test_bare_digest_rejected();
 	test_empty_and_null_rejected();
 	test_unknown_type_rejected();
 
-	printf("%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

@@ -11,64 +11,66 @@
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
-#include <stdio.h>
 
 #include "../src/agent/status_flags.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 int main(void)
 {
 	struct agent_boot_state st;
 	uint32_t flags;
 
-	printf("=== host status flag tests ===\n\n");
+	test_begin("status flags");
 
 	/* nothing verified:
 	 * every bit clear, which is the honest answer for host that has checked
 	 * nothing rather than a host that passed */
 	st = (struct agent_boot_state){ 0 };
-	CHECK(agent_status_flags(&st) == 0,
-	      "a host that verified nothing sets no bit");
+	TEST("a host that verified nothing sets no bit");
+	if (agent_status_flags(&st) != 0)
+		FAIL("expected: agent_status_flags(&st) == 0");
 
 	st = (struct agent_boot_state){ .tpm_ok = true };
-	CHECK(agent_status_flags(&st) == LOTA_STATUS_TPM_OK,
-	      "the TPM bit comes from the TPM probe");
+	TEST("the TPM bit comes from the TPM probe");
+	if (agent_status_flags(&st) != LOTA_STATUS_TPM_OK)
+		FAIL("expected: agent_status_flags(&st) == LOTA_STATUS_TPM_OK");
 
 	st = (struct agent_boot_state){ .iommu_ok = true };
-	CHECK(agent_status_flags(&st) == LOTA_STATUS_IOMMU_OK,
-	      "the IOMMU bit comes from the IOMMU probe");
+	TEST("the IOMMU bit comes from the IOMMU probe");
+	if (agent_status_flags(&st) != LOTA_STATUS_IOMMU_OK)
+		FAIL("expected: agent_status_flags(&st) == "
+		     "LOTA_STATUS_IOMMU_OK");
 
 	st = (struct agent_boot_state){ .bpf_loaded = true };
-	CHECK(agent_status_flags(&st) == LOTA_STATUS_BPF_LOADED,
-	      "the BPF bit comes from the loader");
+	TEST("the BPF bit comes from the loader");
+	if (agent_status_flags(&st) != LOTA_STATUS_BPF_LOADED)
+		FAIL("expected: agent_status_flags(&st) == "
+		     "LOTA_STATUS_BPF_LOADED");
 
 	st = (struct agent_boot_state){ .kernel_appraisal = true };
-	CHECK(agent_status_flags(&st) == LOTA_STATUS_KERNEL_APPRAISAL,
-	      "the appraisal bit comes from the IMA scope probe");
+	TEST("the appraisal bit comes from the IMA scope probe");
+	if (agent_status_flags(&st) != LOTA_STATUS_KERNEL_APPRAISAL)
+		FAIL("expected: agent_status_flags(&st) == "
+		     "LOTA_STATUS_KERNEL_APPRAISAL");
 
 	/* the one this file exists for */
 	st = (struct agent_boot_state){ .secure_boot = true };
-	CHECK(agent_status_flags(&st) == LOTA_STATUS_SECURE_BOOT,
-	      "the Secure Boot bit has a producer");
+	TEST("the Secure Boot bit has a producer");
+	if (agent_status_flags(&st) != LOTA_STATUS_SECURE_BOOT)
+		FAIL("expected: agent_status_flags(&st) == "
+		     "LOTA_STATUS_SECURE_BOOT");
 
 	st = (struct agent_boot_state){ .bench = true };
-	CHECK(agent_status_flags(&st) == LOTA_STATUS_BENCH,
-	      "the bench bit comes from --bench");
+	TEST("the bench bit comes from --bench");
+	if (agent_status_flags(&st) != LOTA_STATUS_BENCH)
+		FAIL("expected: agent_status_flags(&st) == LOTA_STATUS_BENCH");
 
 	st = (struct agent_boot_state){ .tpm_lockout = true };
-	CHECK(agent_status_flags(&st) == LOTA_STATUS_TPM_LOCKOUT,
-	      "the TPM lockout bit comes from the TPM context");
+	TEST("the TPM lockout bit comes from the TPM context");
+	if (agent_status_flags(&st) != LOTA_STATUS_TPM_LOCKOUT)
+		FAIL("expected: agent_status_flags(&st) == "
+		     "LOTA_STATUS_TPM_LOCKOUT");
 
 	st = (struct agent_boot_state){
 		.tpm_ok = true,
@@ -77,9 +79,12 @@ int main(void)
 		.secure_boot = true,
 	};
 	flags = agent_status_flags(&st);
-	CHECK(flags == (LOTA_STATUS_TPM_OK | LOTA_STATUS_IOMMU_OK |
-			LOTA_STATUS_BPF_LOADED | LOTA_STATUS_SECURE_BOOT),
-	      "a fully verified host sets exactly its four bits");
+	TEST("a fully verified host sets exactly its four bits");
+	if (flags != (LOTA_STATUS_TPM_OK | LOTA_STATUS_IOMMU_OK |
+		      LOTA_STATUS_BPF_LOADED | LOTA_STATUS_SECURE_BOOT))
+		FAIL("expected: flags == (LOTA_STATUS_TPM_OK | "
+		     "LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED | "
+		     "LOTA_STATUS_SECURE_BOOT)");
 
 	/*
 	 * attestation verdict is not in this word:
@@ -88,30 +93,40 @@ int main(void)
 	 * Producing it here would let host claim to be attested from local
 	 * state alone.
 	 */
-	CHECK(!(flags & LOTA_STATUS_ATTESTED),
-	      "the attested bit is not produced from local state");
+	TEST("the attested bit is not produced from local state");
+	if (flags & LOTA_STATUS_ATTESTED)
+		FAIL("expected: !(flags & LOTA_STATUS_ATTESTED)");
 
 	/*
 	 * Runtime coverage.
 	 * Host protecting nothing has measured nothing, and the publisher
 	 * control this bit serves asks for the opposite.
 	 */
-	CHECK(!lota_coverage_is_full(0, true),
-	      "a round with nothing to measure is not full coverage");
-	CHECK(!lota_coverage_is_full(0, false),
-	      "an empty round stays false however it is asked");
-	CHECK(lota_coverage_is_full(1, true),
-	      "one protected process with every object measured is full");
-	CHECK(!lota_coverage_is_full(3, false),
-	      "an object left unmeasured is not full coverage");
+	TEST("a round with nothing to measure is not full coverage");
+	if (lota_coverage_is_full(0, true))
+		FAIL("expected: !lota_coverage_is_full(0, true)");
+	TEST("an empty round stays false however it is asked");
+	if (lota_coverage_is_full(0, false))
+		FAIL("expected: !lota_coverage_is_full(0, false)");
+	TEST("one protected process with every object measured is full");
+	if (!lota_coverage_is_full(1, true))
+		FAIL("expected: lota_coverage_is_full(1, true)");
+	TEST("an object left unmeasured is not full coverage");
+	if (lota_coverage_is_full(3, false))
+		FAIL("expected: !lota_coverage_is_full(3, false)");
 
 	/* the fold puts that answer in the word both roads hand out */
-	CHECK(lota_status_fold_coverage(0, lota_coverage_is_full(1, true)) ==
-		      LOTA_STATUS_IMAGE_FULLY_MEASURED,
-	      "full coverage sets the bit");
-	CHECK(lota_status_fold_coverage(LOTA_STATUS_IMAGE_FULLY_MEASURED,
-					lota_coverage_is_full(0, true)) == 0,
-	      "an empty round clears a bit an earlier round set");
+	TEST("full coverage sets the bit");
+	if (lota_status_fold_coverage(0, lota_coverage_is_full(1, true)) !=
+	    LOTA_STATUS_IMAGE_FULLY_MEASURED)
+		FAIL("expected: lota_status_fold_coverage(0, "
+		     "lota_coverage_is_full(1, true)) == "
+		     "LOTA_STATUS_IMAGE_FULLY_MEASURED");
+	TEST("an empty round clears a bit an earlier round set");
+	if (lota_status_fold_coverage(LOTA_STATUS_IMAGE_FULLY_MEASURED,
+				      lota_coverage_is_full(0, true)) != 0)
+		FAIL("expected: lota_status_fold_coverage(LOTA_STATUS_IMAGE_FULLY_MEASURED, "
+		     "lota_coverage_is_full(0, true)) == 0");
 
 	/*
 	 * Policy.
@@ -124,37 +139,54 @@ int main(void)
 							false, true);
 		uint32_t loaded = LOTA_STATUS_BPF_LOADED;
 
-		CHECK(keys == (LOTA_STATUS_STRICT_MMAP |
-			       LOTA_STATUS_BLOCK_PTRACE),
-		      "each key maps to its own bit");
-		CHECK(lota_status_policy_keys(false, true, true, true, false) ==
-			      (LOTA_STATUS_STRICT_EXEC |
-			       LOTA_STATUS_STRICT_MODULES |
-			       LOTA_STATUS_BLOCK_ANON_EXEC),
-		      "the other three keys map to theirs");
+		TEST("each key maps to its own bit");
+		if (keys !=
+		    (LOTA_STATUS_STRICT_MMAP | LOTA_STATUS_BLOCK_PTRACE))
+			FAIL("expected: keys == (LOTA_STATUS_STRICT_MMAP | "
+			     "LOTA_STATUS_BLOCK_PTRACE)");
+		TEST("the other three keys map to theirs");
+		if (lota_status_policy_keys(false, true, true, true, false) !=
+		    (LOTA_STATUS_STRICT_EXEC | LOTA_STATUS_STRICT_MODULES |
+		     LOTA_STATUS_BLOCK_ANON_EXEC))
+			FAIL("expected: lota_status_policy_keys(false, true, true, "
+			     "true, false) == (LOTA_STATUS_STRICT_EXEC | "
+			     "LOTA_STATUS_STRICT_MODULES | "
+			     "LOTA_STATUS_BLOCK_ANON_EXEC)");
 
-		CHECK(lota_status_fold_policy(loaded, LOTA_MODE_ENFORCE,
-					      keys) ==
-			      (loaded | LOTA_STATUS_ENFORCE | keys),
-		      "enforce with the LSM loaded carries the mode and keys");
-		CHECK(lota_status_fold_policy(loaded, LOTA_MODE_ENFORCE, 0) ==
-			      (loaded | LOTA_STATUS_ENFORCE),
-		      "enforce with no key carries the mode alone");
-		CHECK(lota_status_fold_policy(loaded, LOTA_MODE_MONITOR,
-					      keys) == loaded,
-		      "monitor carries no key, set or not");
-		CHECK(lota_status_fold_policy(0, LOTA_MODE_ENFORCE, keys) == 0,
-		      "enforce without the LSM refuses nothing and says so");
-		CHECK(lota_status_fold_policy(
-			      loaded | LOTA_STATUS_ENFORCE | keys,
-			      LOTA_MODE_MONITOR, keys) == loaded,
-		      "a switch to monitor clears what enforce set");
-		CHECK(lota_status_fold_policy(loaded, LOTA_MODE_ENFORCE,
-					      LOTA_STATUS_ATTESTED) ==
-			      (loaded | LOTA_STATUS_ENFORCE),
-		      "a bit outside the policy is not taken as a key");
+		TEST("enforce with the LSM loaded carries the mode and keys");
+		if (lota_status_fold_policy(loaded, LOTA_MODE_ENFORCE, keys) !=
+		    (loaded | LOTA_STATUS_ENFORCE | keys))
+			FAIL("expected: lota_status_fold_policy(loaded, "
+			     "LOTA_MODE_ENFORCE, keys) == (loaded | "
+			     "LOTA_STATUS_ENFORCE | keys)");
+		TEST("enforce with no key carries the mode alone");
+		if (lota_status_fold_policy(loaded, LOTA_MODE_ENFORCE, 0) !=
+		    (loaded | LOTA_STATUS_ENFORCE))
+			FAIL("expected: lota_status_fold_policy(loaded, "
+			     "LOTA_MODE_ENFORCE, 0) == (loaded | LOTA_STATUS_ENFORCE)");
+		TEST("monitor carries no key, set or not");
+		if (lota_status_fold_policy(loaded, LOTA_MODE_MONITOR, keys) !=
+		    loaded)
+			FAIL("expected: lota_status_fold_policy(loaded, "
+			     "LOTA_MODE_MONITOR, keys) == loaded");
+		TEST("enforce without the LSM refuses nothing and says so");
+		if (lota_status_fold_policy(0, LOTA_MODE_ENFORCE, keys) != 0)
+			FAIL("expected: lota_status_fold_policy(0, LOTA_MODE_ENFORCE, "
+			     "keys) == 0");
+		TEST("a switch to monitor clears what enforce set");
+		if (lota_status_fold_policy(loaded | LOTA_STATUS_ENFORCE | keys,
+					    LOTA_MODE_MONITOR, keys) != loaded)
+			FAIL("expected: lota_status_fold_policy( loaded | "
+			     "LOTA_STATUS_ENFORCE | keys, LOTA_MODE_MONITOR, keys) == "
+			     "loaded");
+		TEST("a bit outside the policy is not taken as a key");
+		if (lota_status_fold_policy(loaded, LOTA_MODE_ENFORCE,
+					    LOTA_STATUS_ATTESTED) !=
+		    (loaded | LOTA_STATUS_ENFORCE))
+			FAIL("expected: lota_status_fold_policy(loaded, "
+			     "LOTA_MODE_ENFORCE, LOTA_STATUS_ATTESTED) == (loaded | "
+			     "LOTA_STATUS_ENFORCE)");
 	}
 
-	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

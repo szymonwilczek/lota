@@ -21,6 +21,9 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "steam setup unopenable"
+
 # The assertions grep the script's own messages.
 export LC_ALL=C
 
@@ -28,36 +31,23 @@ REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 SETUP="$REPO_DIR/scripts/lota-steam-setup"
 
 if [[ ! -x "$SETUP" ]]; then
-    echo "[steam-setup-unopenable] missing artifact: $SETUP" >&2
-    exit 2
+    FAIL "missing artifact: %s" "$SETUP"
+    test_end
 fi
 
 if [[ $EUID -eq 0 ]]; then
-    echo "SKIP: [steam-setup-unopenable] root opens every socket"
-    exit 0
+    SKIP "root opens every socket"
+    test_end
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
-    echo "SKIP: [steam-setup-unopenable] no python3 to create the sockets"
-    exit 0
+    SKIP "no python3 to create the sockets"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
 # rm needs the fenced directory searchable again
-trap 'chmod -R u+rwx "$WORK_DIR" 2>/dev/null; rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-	echo "PASS: $msg"
-    else
-	echo "FAIL: $msg"
-	failures=$((failures + 1))
-    fi
-}
+test_cleanup 'chmod -R u+rwx "$WORK_DIR" 2>/dev/null; rm -rf "$WORK_DIR"'
 
 says() { grep -qi -- "$2" <<<"$1"; }
 denies() { ! grep -qi -- "$2" <<<"$1"; }
@@ -76,10 +66,12 @@ chmod 0600 "$open_run/agent.sock" "$open_run/lota/lota.sock"
 open_out=$(LOTA_AGENT_SOCKET="$open_run/agent.sock" \
 	                    XDG_RUNTIME_DIR="$open_run" "$SETUP" --verify 2>&1) || true
 
-check "a socket this account can open is reported OK" \
-      says "$open_out" "\[OK\] *LOTA agent socket: $open_run/agent.sock"
-check "and so is a container socket it can open" \
-      says "$open_out" "\[OK\] *Container socket: $open_run/lota/lota.sock"
+TEST "a socket this account can open is reported OK"
+says "$open_out" "\[OK\] *LOTA agent socket: $open_run/agent.sock" ||
+    FAIL "%s" "$open_out"
+TEST "and so is a container socket it can open"
+says "$open_out" "\[OK\] *Container socket: $open_run/lota/lota.sock" ||
+    FAIL "%s" "$open_out"
 
 # The same two, fenced as the group fences an outsider
 shut_run="$WORK_DIR/shut"
@@ -92,30 +84,20 @@ shut_rc=0
 shut_out=$(LOTA_AGENT_SOCKET="$shut_run/agent.sock" \
 	                    XDG_RUNTIME_DIR="$shut_run" "$SETUP" --verify 2>&1) || shut_rc=$?
 
-check "the run is not a pass" \
-      test "$shut_rc" -ne 0
-check "an agent socket this account cannot open is not reported OK" \
-      denies "$shut_out" "\[OK\] *LOTA agent socket"
-check "it is reported as one this account cannot open" \
-      says "$shut_out" "agent socket exists but this account cannot open it"
-check "a socket behind a directory it cannot enter is not called missing" \
-      denies "$shut_out" "Container socket not found"
-check "nor is the account sent to register and reboot" \
-      denies "$shut_out" "register-uid"
-check "the directory it cannot look into is named" \
-      says "$shut_out" "cannot look inside $shut_run/lota"
-check "and the group that decides it" \
-      says "$shut_out" "handed to the 'lota' group"
+TEST "the run is not a pass"
+test "$shut_rc" -ne 0 || FAIL
+TEST "an agent socket this account cannot open is not reported OK"
+denies "$shut_out" "\[OK\] *LOTA agent socket" || FAIL "%s" "$shut_out"
+TEST "it is reported as one this account cannot open"
+says "$shut_out" "agent socket exists but this account cannot open it" ||
+    FAIL "%s" "$shut_out"
+TEST "a socket in a directory it cannot enter is not called missing"
+denies "$shut_out" "Container socket not found" || FAIL "%s" "$shut_out"
+TEST "nor is the account sent to register and reboot"
+denies "$shut_out" "register-uid" || FAIL "%s" "$shut_out"
+TEST "the directory it cannot look into is named"
+says "$shut_out" "cannot look inside $shut_run/lota" || FAIL "%s" "$shut_out"
+TEST "and the group that decides it"
+says "$shut_out" "handed to the 'lota' group" || FAIL "%s" "$shut_out"
 
-if [[ $failures -gt 0 ]]; then
-    echo ""
-    echo "--- usable sockets ---"
-    printf '%s\n' "$open_out"
-    echo "--- fenced sockets ---"
-    printf '%s\n' "$shut_out"
-    echo ""
-    echo "[steam-setup-unopenable] $failures check(s) failed"
-    exit 1
-fi
-
-echo "[steam-setup-unopenable] all checks passed"
+test_end

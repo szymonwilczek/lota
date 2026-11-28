@@ -562,7 +562,7 @@ func TestMigrationV2_RevocationsTable(t *testing.T) {
 		t.Fatal("Expected PRIMARY KEY violation")
 	}
 
-	t.Log("✓ revocations table with PK constraint works correctly")
+	t.Log("revocations table with PK constraint works correctly")
 }
 
 func TestMigrationV2_HardwareBansTable(t *testing.T) {
@@ -611,7 +611,7 @@ func TestMigrationV2_HardwareBansTable(t *testing.T) {
 		t.Fatal("SECURITY: Accepted hardware_id with wrong length!")
 	}
 
-	t.Log("✓ hardware_bans table keyed (tenant, hardware_id) with CHECK(length=32) works correctly")
+	t.Log("hardware_bans table keyed (tenant, hardware_id) with CHECK(length=32) works correctly")
 }
 
 func TestMigrationV2_AuditLogTable(t *testing.T) {
@@ -639,7 +639,7 @@ func TestMigrationV2_AuditLogTable(t *testing.T) {
 		t.Errorf("Expected max id 5, got %d", maxID)
 	}
 
-	t.Log("✓ audit_log table with AUTOINCREMENT and indexes works correctly")
+	t.Log("audit_log table with AUTOINCREMENT and indexes works correctly")
 }
 
 func TestSQLiteRevocationStore_Persistence(t *testing.T) {
@@ -673,7 +673,7 @@ func TestSQLiteRevocationStore_Persistence(t *testing.T) {
 		t.Errorf("Reason after reopen: got %q, want %q", entry.Reason, RevocationCheating)
 	}
 
-	t.Log("✓ Revocation persists across database reopens")
+	t.Log("Revocation persists across database reopens")
 }
 
 // A store that cannot answer is an error, not a clean client.
@@ -734,7 +734,7 @@ func TestSQLiteBanStore_Persistence(t *testing.T) {
 		t.Errorf("Reason after reopen: got %q, want %q", entry.Reason, RevocationCheating)
 	}
 
-	t.Log("✓ Hardware ban persists across database reopens")
+	t.Log("Hardware ban persists across database reopens")
 }
 
 // exercises the tenant recorded on revocation entries

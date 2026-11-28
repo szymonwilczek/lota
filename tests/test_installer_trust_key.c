@@ -69,14 +69,13 @@ static void test_configured_key_wins(void)
 	got = installer_trust_key(NULL, conf_key, override_key, packaged_key,
 				  &src);
 	if (!got || strcmp(got, conf_key) != 0) {
-		FAIL(got ? got : "(none)");
+		FAIL("%s", got ? got : "(none)");
 		return;
 	}
 	if (src != TRUST_KEY_CONFIGURED) {
 		FAIL("named the right file for the wrong reason");
 		return;
 	}
-	PASS();
 }
 
 /* a configured path that no longer exists is skipped */
@@ -89,14 +88,13 @@ static void test_a_configured_key_that_is_gone_falls_through(void)
 	got = installer_trust_key(NULL, "/nonexistent/configured.pub",
 				  override_key, packaged_key, &src);
 	if (!got || strcmp(got, override_key) != 0) {
-		FAIL(got ? got : "(none)");
+		FAIL("%s", got ? got : "(none)");
 		return;
 	}
 	if (src != TRUST_KEY_OVERRIDE) {
 		FAIL("wrong source");
 		return;
 	}
-	PASS();
 }
 
 /* the override beats the packaged key */
@@ -108,14 +106,13 @@ static void test_the_override_beats_the_package(void)
 	TEST("the operator's own key beats the packaged one");
 	got = installer_trust_key(NULL, NULL, override_key, packaged_key, &src);
 	if (!got || strcmp(got, override_key) != 0) {
-		FAIL(got ? got : "(none)");
+		FAIL("%s", got ? got : "(none)");
 		return;
 	}
 	if (src != TRUST_KEY_OVERRIDE) {
 		FAIL("wrong source");
 		return;
 	}
-	PASS();
 }
 
 /* --policy-pubkey beats every other source */
@@ -128,14 +125,13 @@ static void test_a_named_key_wins_over_everything(void)
 	got = installer_trust_key(packaged_key, conf_key, override_key,
 				  packaged_key, &src);
 	if (!got || strcmp(got, packaged_key) != 0) {
-		FAIL(got ? got : "(none)");
+		FAIL("%s", got ? got : "(none)");
 		return;
 	}
 	if (src != TRUST_KEY_NAMED) {
 		FAIL("wrong source");
 		return;
 	}
-	PASS();
 }
 
 /* no readable key yields TRUST_KEY_NONE and a message for it */
@@ -149,14 +145,13 @@ static void test_no_key_anywhere_is_said(void)
 				  "/nonexistent/b.pub", "/nonexistent/c.pub",
 				  &src);
 	if (got) {
-		FAIL(got);
+		FAIL("%s", got);
 		return;
 	}
 	if (src != TRUST_KEY_NONE) {
 		FAIL("wrong source");
 		return;
 	}
-	PASS();
 }
 
 /* every source has a distinct message */
@@ -184,7 +179,6 @@ static void test_every_source_says_where_it_came_from(void)
 			}
 		}
 	}
-	PASS();
 }
 
 static char note[4096];
@@ -209,7 +203,7 @@ static int offers_no_fallback(void)
 {
 	if (says("falls through") || says("out of the way") ||
 	    says("leave out")) {
-		FAIL(note);
+		FAIL("%s", note);
 		return 0;
 	}
 	if (!says("reinstall the agent package") ||
@@ -231,8 +225,7 @@ static void test_the_packaged_key_has_no_fallback(void)
 	}
 	refusal_for(packaged_key, TRUST_KEY_PACKAGED, NULL,
 		    "/nonexistent/policy.pub");
-	if (offers_no_fallback())
-		PASS();
+	offers_no_fallback();
 }
 
 /* policy_pubkey naming the packaged file is the packaged key:
@@ -242,8 +235,7 @@ static void test_a_configured_packaged_key_has_no_fallback(void)
 	TEST("policy_pubkey naming the packaged key: no fallback");
 	refusal_for(packaged_key, TRUST_KEY_CONFIGURED, packaged_key,
 		    "/nonexistent/policy.pub");
-	if (offers_no_fallback())
-		PASS();
+	offers_no_fallback();
 }
 
 /* The same file under another name is still the same file. */
@@ -261,8 +253,7 @@ static void test_a_link_to_the_packaged_key_has_no_fallback(void)
 	refusal_for(link_path, TRUST_KEY_CONFIGURED, link_path,
 		    "/nonexistent/policy.pub");
 	unlink(link_path);
-	if (offers_no_fallback())
-		PASS();
+	offers_no_fallback();
 }
 
 /* A configured key falls through to the operator's key when there is one,
@@ -272,14 +263,13 @@ static void test_a_configured_key_falls_through_to_the_override(void)
 	TEST("a configured key falls through to the override");
 	refusal_for(conf_key, TRUST_KEY_CONFIGURED, conf_key, override_key);
 	if (!says("remove policy_pubkey from") || !says(override_key)) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
 	if (says(packaged_key)) {
 		FAIL("names the packaged key, which the agent would not reach");
 		return;
 	}
-	PASS();
 }
 
 /* The operator's key falls through to the packaged one. */
@@ -288,10 +278,9 @@ static void test_the_override_falls_through_to_the_package(void)
 	TEST("the operator's key falls through to the packaged one");
 	refusal_for(override_key, TRUST_KEY_OVERRIDE, NULL, override_key);
 	if (!says("move it out of the way") || !says(packaged_key)) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	PASS();
 }
 
 /* A named key is dropped from the command line, not moved. */
@@ -301,10 +290,9 @@ static void test_a_named_key_falls_back_to_what_the_agent_resolves(void)
 	refusal_for("/nonexistent/named.pub", TRUST_KEY_NAMED, conf_key,
 		    override_key);
 	if (!says("leave out --policy-pubkey") || !says(conf_key)) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	PASS();
 }
 
 /* the agent takes the last line in either spelling, readable or not */
@@ -324,10 +312,9 @@ static void test_the_conf_line_is_the_agents_last_one(void)
 	}
 	rc = installer_conf_pubkey(conf_path, key, sizeof(key));
 	if (rc != 1 || !strstr(key, "/gone.pub")) {
-		FAIL(key);
+		FAIL("%s", key);
 		return;
 	}
-	PASS();
 
 	TEST("policy_pubkey: none without a line or a file");
 	if (write_conf("log_level = info\n") ||
@@ -340,7 +327,6 @@ static void test_the_conf_line_is_the_agents_last_one(void)
 		FAIL("a missing file is an error");
 		return;
 	}
-	PASS();
 
 	TEST("policy_pubkey: a file the agent refuses is an error");
 	if (write_conf("no_such_key = 1\n") ||
@@ -349,7 +335,6 @@ static void test_the_conf_line_is_the_agents_last_one(void)
 		return;
 	}
 	unlink(conf_path);
-	PASS();
 }
 
 /* without the line the stage is pending, even when the key is the fallback */
@@ -361,29 +346,26 @@ static void test_a_named_key_needs_its_line(void)
 				  sizeof(note)) != STAGE_PENDING ||
 	    !says("still needs the policy_pubkey line") ||
 	    !says(override_key)) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	PASS();
 
 	TEST("--policy-pubkey named by the line is done");
 	if (installer_trust_named(conf_key, conf_key, override_key,
 				  packaged_key, note,
 				  sizeof(note)) != STAGE_DONE) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	PASS();
 
 	TEST("--policy-pubkey with a line naming another key is pending");
 	if (installer_trust_named(override_key, conf_key, override_key,
 				  packaged_key, note,
 				  sizeof(note)) != STAGE_PENDING ||
 	    !says(conf_key)) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	PASS();
 
 	TEST("--policy-pubkey with a line naming a gone key says so");
 	if (installer_trust_named(conf_key, "/nonexistent/gone.pub",
@@ -391,10 +373,9 @@ static void test_a_named_key_needs_its_line(void)
 				  sizeof(note)) != STAGE_PENDING ||
 	    !says("/nonexistent/gone.pub, which is not readable") ||
 	    !says(override_key)) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	PASS();
 }
 
 /* the line goes above the profiles, and the agent reads it back */
@@ -416,21 +397,19 @@ static void test_the_line_is_written_where_the_agent_reads_it(void)
 	}
 	if (installer_conf_pubkey(conf_path, key, sizeof(key)) != 1 ||
 	    strcmp(key, override_key) != 0) {
-		FAIL(key);
+		FAIL("%s", key);
 		return;
 	}
-	PASS();
 
 	TEST("policy_pubkey written to a missing configuration");
 	unlink(conf_path);
 	if (installer_conf_set_pubkey(conf_path, conf_key) != 0 ||
 	    installer_conf_pubkey(conf_path, key, sizeof(key)) != 1 ||
 	    strcmp(key, conf_key) != 0) {
-		FAIL(key);
+		FAIL("%s", key);
 		return;
 	}
 	unlink(conf_path);
-	PASS();
 }
 
 int main(void)
@@ -454,7 +433,7 @@ int main(void)
 	};
 	size_t i;
 
-	printf("\n=== lota-install: the key the enforcement check names ===\n");
+	test_begin("installer trust key");
 
 	if (!mkdtemp(dir)) {
 		perror("mkdtemp");
@@ -478,6 +457,5 @@ int main(void)
 	unlink(packaged_key);
 	rmdir(dir);
 
-	printf("\nPassed: %d / %d\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

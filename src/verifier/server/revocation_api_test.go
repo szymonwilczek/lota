@@ -618,7 +618,7 @@ func TestIntegrationAPI_RevokedClientBlockedFromAttestation(t *testing.T) {
 		t.Errorf("Expected revocation_reason 'cheating', got %q", info.RevocationReason)
 	}
 
-	t.Log("✓ Revoked client correctly rejected from attestation")
+	t.Log("Revoked client correctly rejected from attestation")
 }
 
 func TestIntegrationAPI_UnrevokedClientCanAttest(t *testing.T) {
@@ -661,7 +661,7 @@ func TestIntegrationAPI_UnrevokedClientCanAttest(t *testing.T) {
 		t.Fatalf("Expected VerifyOK after unrevoke, got %d", code)
 	}
 
-	t.Log("✓ Client can attest again after unrevoke")
+	t.Log("Client can attest again after unrevoke")
 }
 
 func TestIntegrationAPI_BannedHardwareBlocksAttestation(t *testing.T) {
@@ -711,7 +711,7 @@ func TestIntegrationAPI_BannedHardwareBlocksAttestation(t *testing.T) {
 		}
 	})
 
-	t.Log("✓ Banned hardware correctly rejected from attestation")
+	t.Log("Banned hardware correctly rejected from attestation")
 }
 
 func TestIntegrationAPI_PrometheusRevocationMetrics(t *testing.T) {
@@ -737,7 +737,7 @@ func TestIntegrationAPI_PrometheusRevocationMetrics(t *testing.T) {
 		}
 	}
 
-	t.Log("✓ All revocation/ban Prometheus metrics present")
+	t.Log("All revocation/ban Prometheus metrics present")
 }
 
 func TestAuth_MissingTokenReturns401(t *testing.T) {
@@ -786,7 +786,7 @@ func TestAuth_MissingTokenReturns401(t *testing.T) {
 		})
 	}
 
-	t.Log("✓ All mutating endpoints reject requests without token")
+	t.Log("All mutating endpoints reject requests without token")
 }
 
 func TestAuth_WrongTokenReturns403(t *testing.T) {
@@ -811,7 +811,7 @@ func TestAuth_WrongTokenReturns403(t *testing.T) {
 		t.Errorf("Unexpected error message: %q", resp.Error)
 	}
 
-	t.Log("✓ Wrong API key correctly rejected")
+	t.Log("Wrong API key correctly rejected")
 }
 
 func TestAuth_NoKeyConfiguredReturns403(t *testing.T) {
@@ -836,7 +836,7 @@ func TestAuth_NoKeyConfiguredReturns403(t *testing.T) {
 		t.Errorf("Unexpected error message: %q", resp.Error)
 	}
 
-	t.Log("✓ Admin endpoints correctly disabled without key")
+	t.Log("Admin endpoints correctly disabled without key")
 }
 
 func TestAuth_OnlyHealthIsUnconditionallyPublic(t *testing.T) {
@@ -873,7 +873,7 @@ func TestAuth_OnlyHealthIsUnconditionallyPublic(t *testing.T) {
 		})
 	}
 
-	t.Log("✓ /health stays public; stats and metrics require auth")
+	t.Log("/health stays public; stats and metrics require auth")
 }
 
 func TestAuth_ValidTokenAllowsMutation(t *testing.T) {
@@ -892,7 +892,7 @@ func TestAuth_ValidTokenAllowsMutation(t *testing.T) {
 		t.Fatalf("Expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	t.Log("✓ Valid token grants access to admin endpoints")
+	t.Log("Valid token grants access to admin endpoints")
 }
 
 func TestAuth_BearerPrefixCaseInsensitive(t *testing.T) {
@@ -945,7 +945,7 @@ func TestAuth_ReaderKeyRequiredForSensitiveEndpoints(t *testing.T) {
 		})
 	}
 
-	t.Log("✓ All sensitive read-only endpoints reject unauthenticated requests")
+	t.Log("All sensitive read-only endpoints reject unauthenticated requests")
 }
 
 func TestAuth_ReaderKeyGrantsReadAccess(t *testing.T) {
@@ -976,7 +976,7 @@ func TestAuth_ReaderKeyGrantsReadAccess(t *testing.T) {
 		})
 	}
 
-	t.Log("✓ Reader key grants access to all sensitive read-only endpoints")
+	t.Log("Reader key grants access to all sensitive read-only endpoints")
 }
 
 func TestAuth_AdminKeyGrantsReadAccess(t *testing.T) {
@@ -1007,7 +1007,7 @@ func TestAuth_AdminKeyGrantsReadAccess(t *testing.T) {
 		})
 	}
 
-	t.Log("✓ Admin key grants access to all sensitive read-only endpoints")
+	t.Log("Admin key grants access to all sensitive read-only endpoints")
 }
 
 func TestAuth_ReaderKeyCannotMutate(t *testing.T) {
@@ -1045,7 +1045,7 @@ func TestAuth_ReaderKeyCannotMutate(t *testing.T) {
 		})
 	}
 
-	t.Log("✓ Reader key correctly denied on all mutating endpoints")
+	t.Log("Reader key correctly denied on all mutating endpoints")
 }
 
 func TestAuth_WrongReaderKeyReturns403(t *testing.T) {
@@ -1068,7 +1068,7 @@ func TestAuth_WrongReaderKeyReturns403(t *testing.T) {
 		t.Errorf("Unexpected error message: %q", resp.Error)
 	}
 
-	t.Log("✓ Wrong reader key correctly rejected")
+	t.Log("Wrong reader key correctly rejected")
 }
 
 func TestAuth_NoReaderKeyMakesEndpointsPublic(t *testing.T) {
@@ -1098,7 +1098,7 @@ func TestAuth_NoReaderKeyMakesEndpointsPublic(t *testing.T) {
 		})
 	}
 
-	t.Log("✓ Sensitive endpoints are public when no reader key configured")
+	t.Log("Sensitive endpoints are public when no reader key configured")
 }
 
 func TestAuth_AdminKeyAloneProtectsReads(t *testing.T) {
@@ -1141,7 +1141,7 @@ func TestAuth_AdminKeyAloneProtectsReads(t *testing.T) {
 		})
 	}
 
-	t.Log("✓ Admin key gates the sensitive read tier and is accepted on it")
+	t.Log("Admin key gates the sensitive read tier and is accepted on it")
 }
 
 func TestAuth_PublicEndpointsAlwaysPublic(t *testing.T) {
@@ -1178,7 +1178,7 @@ func TestAuth_PublicEndpointsAlwaysPublic(t *testing.T) {
 		})
 	}
 
-	t.Log("✓ Public endpoints accessible in all key configurations")
+	t.Log("Public endpoints accessible in all key configurations")
 }
 
 func TestAuth_ReaderBearerCaseInsensitive(t *testing.T) {
@@ -1200,5 +1200,5 @@ func TestAuth_ReaderBearerCaseInsensitive(t *testing.T) {
 		})
 	}
 
-	t.Log("✓ Reader auth accepts case-insensitive Bearer prefix")
+	t.Log("Reader auth accepts case-insensitive Bearer prefix")
 }

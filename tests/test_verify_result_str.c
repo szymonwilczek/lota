@@ -22,17 +22,7 @@
 #include "../src/agent/config.h"
 #include "../src/agent/net.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 /* Every code the verifier can send, by the number it sends it as.
  * Written as literals rather than through the macros so a code the agent
@@ -50,7 +40,7 @@ int main(void)
 {
 	uint32_t code, other;
 
-	printf("=== verifier verdict naming tests ===\n\n");
+	test_begin("verify result str");
 
 	/* whatever the default reads, it is what an unnamed code falls to */
 	g_default = net_result_str(0xFFFFFFFFu);
@@ -61,7 +51,9 @@ int main(void)
 		snprintf(msg, sizeof(msg),
 			 "verdict %u is named rather than reported as unknown",
 			 code);
-		CHECK(is_named(code), msg);
+		TEST(msg);
+		if (!is_named(code))
+			FAIL("expected: is_named(code)");
 	}
 
 	/* two codes sharing a sentence is two states an operator cannot tell
@@ -75,9 +67,11 @@ int main(void)
 			snprintf(msg, sizeof(msg),
 				 "verdicts %u and %u read differently", code,
 				 other);
-			CHECK(strcmp(net_result_str(code),
-				     net_result_str(other)) != 0,
-			      msg);
+			TEST(msg);
+			if (strcmp(net_result_str(code),
+				   net_result_str(other)) == 0)
+				FAIL("expected: strcmp(net_result_str(code), "
+				     "net_result_str(other)) != 0");
 		}
 	}
 
@@ -86,43 +80,64 @@ int main(void)
 	 * and the firmware/Secure Boot baseline, and the host cannot tell
 	 * which, so the sentence must name all three.
 	 */
-	CHECK(strstr(net_result_str(6), "agent") != NULL &&
-		      strstr(net_result_str(6), "PCR 14") != NULL &&
-		      strstr(net_result_str(6), "firmware") != NULL,
-	      "verdict 6 names every measurement it is sent for");
+	TEST("verdict 6 names every measurement it is sent for");
+	if (!(strstr(net_result_str(6), "agent") != NULL &&
+	      strstr(net_result_str(6), "PCR 14") != NULL &&
+	      strstr(net_result_str(6), "firmware") != NULL))
+		FAIL("expected: strstr(net_result_str(6), \"agent\") != NULL "
+		     "&& strstr(net_result_str(6), \"PCR 14\") != NULL && "
+		     "strstr(net_result_str(6), \"firmware\") != NULL");
 
 	/* the two an administrator causes on purpose say so,
 	 * so the machine is not read as broken when it is obeying */
-	CHECK(strstr(net_result_str(7), "revoked") != NULL,
-	      "verdict 7 names the revocation");
-	CHECK(strstr(net_result_str(8), "banned") != NULL,
-	      "verdict 8 names the ban");
+	TEST("verdict 7 names the revocation");
+	if (strstr(net_result_str(7), "revoked") == NULL)
+		FAIL("expected: strstr(net_result_str(7), \"revoked\") != NULL");
+	TEST("verdict 8 names the ban");
+	if (strstr(net_result_str(8), "banned") == NULL)
+		FAIL("expected: strstr(net_result_str(8), \"banned\") != NULL");
 
 	/* each requirement has its own remedy, so its verdict names it */
-	CHECK(strstr(net_result_str(13), "certificate") != NULL,
-	      "verdict 13 names the missing certificate");
-	CHECK(strstr(net_result_str(14), "Secure Boot") != NULL &&
-		      strstr(net_result_str(14), "firmware") != NULL,
-	      "verdict 14 names Secure Boot and where it is turned on");
-	CHECK(strstr(net_result_str(15), "lockdown") != NULL,
-	      "verdict 15 names kernel lockdown");
-	CHECK(strstr(net_result_str(16), "module") != NULL,
-	      "verdict 16 names module signature enforcement");
-	CHECK(strstr(net_result_str(17), "enforc") != NULL,
-	      "verdict 17 names the LSM enforce mode");
-	CHECK(strstr(net_result_str(18), "IMA") != NULL,
-	      "verdict 18 names IMA appraisal");
-	CHECK(strstr(net_result_str(19), "kernel") != NULL,
-	      "verdict 19 names the kernel image");
-	CHECK(strstr(net_result_str(20), "command line") != NULL,
-	      "verdict 20 names the kernel command line");
+	TEST("verdict 13 names the missing certificate");
+	if (strstr(net_result_str(13), "certificate") == NULL)
+		FAIL("expected: strstr(net_result_str(13), \"certificate\") "
+		     "!= NULL");
+	TEST("verdict 14 names Secure Boot and where it is turned on");
+	if (!(strstr(net_result_str(14), "Secure Boot") != NULL &&
+	      strstr(net_result_str(14), "firmware") != NULL))
+		FAIL("expected: strstr(net_result_str(14), \"Secure Boot\") "
+		     "!= NULL && strstr(net_result_str(14), \"firmware\") != "
+		     "NULL");
+	TEST("verdict 15 names kernel lockdown");
+	if (strstr(net_result_str(15), "lockdown") == NULL)
+		FAIL("expected: strstr(net_result_str(15), \"lockdown\") != "
+		     "NULL");
+	TEST("verdict 16 names module signature enforcement");
+	if (strstr(net_result_str(16), "module") == NULL)
+		FAIL("expected: strstr(net_result_str(16), \"module\") != NULL");
+	TEST("verdict 17 names the LSM enforce mode");
+	if (strstr(net_result_str(17), "enforc") == NULL)
+		FAIL("expected: strstr(net_result_str(17), \"enforc\") != NULL");
+	TEST("verdict 18 names IMA appraisal");
+	if (strstr(net_result_str(18), "IMA") == NULL)
+		FAIL("expected: strstr(net_result_str(18), \"IMA\") != NULL");
+	TEST("verdict 19 names the kernel image");
+	if (strstr(net_result_str(19), "kernel") == NULL)
+		FAIL("expected: strstr(net_result_str(19), \"kernel\") != NULL");
+	TEST("verdict 20 names the kernel command line");
+	if (strstr(net_result_str(20), "command line") == NULL)
+		FAIL("expected: strstr(net_result_str(20), \"command line\") "
+		     "!= NULL");
 
 	/* an unreadable report is not an old wire: no upgrade advice */
-	CHECK(strstr(net_result_str(5), "version") != NULL,
-	      "verdict 5 names the protocol version");
-	CHECK(strstr(net_result_str(21), "read") != NULL &&
-		      strstr(net_result_str(21), "version") == NULL,
-	      "verdict 21 says the report could not be read and does not advise an upgrade");
+	TEST("verdict 5 names the protocol version");
+	if (strstr(net_result_str(5), "version") == NULL)
+		FAIL("expected: strstr(net_result_str(5), \"version\") != NULL");
+	TEST("verdict 21 says the report is unreadable, advising no upgrade");
+	if (!(strstr(net_result_str(21), "read") != NULL &&
+	      strstr(net_result_str(21), "version") == NULL))
+		FAIL("expected: strstr(net_result_str(21), \"read\") != NULL "
+		     "&& strstr(net_result_str(21), \"version\") == NULL");
 
 	/*
 	 * an enforce refusal tells the host what to write and where: the line
@@ -143,35 +158,45 @@ int main(void)
 				 "verdict 17 (flags 0x%x) names mode = enforce "
 				 "in " LOTA_CONFIG_DEFAULT_PATH " and a reboot",
 				 states[i]);
-			CHECK(strstr(t, "mode = enforce") != NULL &&
-				      strstr(t, LOTA_CONFIG_DEFAULT_PATH) !=
-					      NULL &&
-				      strstr(t, "reboot") != NULL,
-			      msg);
+			TEST(msg);
+			if (!(strstr(t, "mode = enforce") != NULL &&
+			      strstr(t, LOTA_CONFIG_DEFAULT_PATH) != NULL &&
+			      strstr(t, "reboot") != NULL))
+				FAIL("expected: strstr(t, \"mode = enforce\") != NULL && "
+				     "strstr(t, LOTA_CONFIG_DEFAULT_PATH) != NULL && "
+				     "strstr(t, \"reboot\") != NULL");
 
 			snprintf(msg, sizeof(msg),
 				 "verdict 17 (flags 0x%x) names no other file, "
 				 "key or restart",
 				 states[i]);
-			CHECK(strstr(t, "agent.conf") == NULL &&
-				      strstr(t, "enforce = true") == NULL &&
-				      strstr(t, "restart lota-agent") == NULL,
-			      msg);
+			TEST(msg);
+			if (!(strstr(t, "agent.conf") == NULL &&
+			      strstr(t, "enforce = true") == NULL &&
+			      strstr(t, "restart lota-agent") == NULL))
+				FAIL("expected: strstr(t, \"agent.conf\") == NULL && "
+				     "strstr(t, \"enforce = true\") == NULL && strstr(t, "
+				     "\"restart lota-agent\") == NULL");
 		}
 	}
 
 	/* the report says whether the LSM was loaded; the sentence follows */
-	CHECK(strstr(net_verdict_str(17, LOTA_REPORT_FLAG_BPF_ACTIVE),
-		     "not enforcing") != NULL,
-	      "verdict 17 on a report with the LSM loaded says it is not enforcing");
-	CHECK(strstr(net_verdict_str(17, 0), "is loaded") == NULL &&
-		      strstr(net_verdict_str(17, 0), "not running") != NULL,
-	      "verdict 17 on a report without the LSM says the daemon is not running");
+	TEST("verdict 17 with the LSM loaded says it is not enforcing");
+	if (strstr(net_verdict_str(17, LOTA_REPORT_FLAG_BPF_ACTIVE),
+		   "not enforcing") == NULL)
+		FAIL("expected: strstr(net_verdict_str(17, "
+		     "LOTA_REPORT_FLAG_BPF_ACTIVE), \"not enforcing\") != NULL");
+	TEST("verdict 17 without the LSM says the daemon is not running");
+	if (!(strstr(net_verdict_str(17, 0), "is loaded") == NULL &&
+	      strstr(net_verdict_str(17, 0), "not running") != NULL))
+		FAIL("expected: strstr(net_verdict_str(17, 0), \"is loaded\") "
+		     "== NULL && strstr(net_verdict_str(17, 0), \"not "
+		     "running\") != NULL");
 
 	/* the default still exists for a code from a newer verifier */
-	CHECK(!is_named(FIRST_UNKNOWN_CODE),
-	      "a code the agent does not know still falls to the default");
+	TEST("a code the agent does not know still falls to the default");
+	if (is_named(FIRST_UNKNOWN_CODE))
+		FAIL("expected: !is_named(FIRST_UNKNOWN_CODE)");
 
-	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

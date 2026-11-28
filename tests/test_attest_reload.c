@@ -28,17 +28,7 @@
 #include "../src/agent/attest_targets.h"
 #include "../src/agent/config.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 /* self-signed anchor, so a target resolves a real publisher identity */
 static int write_anchor(const char *path)
@@ -108,7 +98,7 @@ int main(void)
 	size_t count = 0;
 	int rc;
 
-	printf("=== attestation target reload tests ===\n\n");
+	test_begin("attest reload");
 
 	snprintf(anchor_a, sizeof(anchor_a), "/tmp/lota-reload-a.%d.der",
 		 (int)getpid());
@@ -117,13 +107,13 @@ int main(void)
 	snprintf(conf, sizeof(conf), "/tmp/lota-reload.%d.conf", (int)getpid());
 
 	if (write_anchor(anchor_a) != 0 || write_anchor(anchor_b) != 0) {
-		fprintf(stderr, "FAIL: could not write the test anchors\n");
+		FAIL("could not write the test anchors");
 		return 1;
 	}
 
 	targets = calloc(LOTA_CONFIG_MAX_PROFILES, sizeof(*targets));
 	if (!targets) {
-		fprintf(stderr, "FAIL: allocation\n");
+		FAIL("allocation");
 		return 1;
 	}
 
@@ -135,14 +125,16 @@ int main(void)
 		 "verifier_port = 8573\n",
 		 anchor_a);
 	if (write_file(conf, text) < 0) {
-		fprintf(stderr, "FAIL: could not write the config\n");
+		FAIL("could not write the config");
 		free(targets);
 		return 1;
 	}
 
 	rc = attest_targets_reload(conf, NULL, 0, NULL, 300, false, targets,
 				   LOTA_CONFIG_MAX_PROFILES, &count);
-	CHECK(rc == 0 && count == 1, "the configured publisher is a target");
+	TEST("the configured publisher is a target");
+	if (!(rc == 0 && count == 1))
+		FAIL("expected: rc == 0 && count == 1");
 
 	/* what the running loop knows about that publisher */
 	targets[0].sessions = 2;
@@ -165,26 +157,32 @@ int main(void)
 		 "verifier_port = 8583\n",
 		 anchor_a, anchor_b);
 	if (write_file(conf, text) < 0) {
-		fprintf(stderr, "FAIL: could not rewrite the config\n");
+		FAIL("could not rewrite the config");
 		free(targets);
 		return 1;
 	}
 
 	rc = attest_targets_reload(conf, NULL, 0, NULL, 300, false, targets,
 				   LOTA_CONFIG_MAX_PROFILES, &count);
-	CHECK(rc == 0 && count == 2,
-	      "a publisher added while the loop runs becomes a target");
-	CHECK(count == 2 && strcmp(targets[1].server, "v.beta.example") == 0,
-	      "the new publisher's verifier is the one the file names");
-	CHECK(targets[0].sessions == 2 && targets[0].next_due_ms == 123456,
-	      "a publisher that is still configured keeps its schedule and "
-	      "sessions");
-	CHECK(targets[0].consecutive_failures == 3 &&
-		      targets[0].backoff_sec == 40 && targets[0].attested,
-	      "and keeps its failure state, so a reload is not a way to clear "
-	      "a backoff");
-	CHECK(targets[1].next_due_ms == 0,
-	      "the new publisher is due now rather than one interval from now");
+	TEST("a publisher added while the loop runs becomes a target");
+	if (!(rc == 0 && count == 2))
+		FAIL("expected: rc == 0 && count == 2");
+	TEST("the new publisher's verifier is the one the file names");
+	if (!(count == 2 && strcmp(targets[1].server, "v.beta.example") == 0))
+		FAIL("expected: count == 2 && strcmp(targets[1].server, "
+		     "\"v.beta.example\") == 0");
+	TEST("a publisher still configured keeps its schedule and sessions");
+	if (!(targets[0].sessions == 2 && targets[0].next_due_ms == 123456))
+		FAIL("expected: targets[0].sessions == 2 && "
+		     "targets[0].next_due_ms == 123456");
+	TEST("and keeps its failure state, so a reload clears no backoff");
+	if (!(targets[0].consecutive_failures == 3 &&
+	      targets[0].backoff_sec == 40 && targets[0].attested))
+		FAIL("expected: targets[0].consecutive_failures == 3 && "
+		     "targets[0].backoff_sec == 40 && targets[0].attested");
+	TEST("the new publisher is due now rather than one interval from now");
+	if (targets[1].next_due_ms != 0)
+		FAIL("expected: targets[1].next_due_ms == 0");
 
 	/* the daemon rebuilds from the config its SIGHUP already loaded */
 	{
@@ -198,12 +196,14 @@ int main(void)
 						    targets,
 						    LOTA_CONFIG_MAX_PROFILES,
 						    &count);
-		CHECK(rc == 0 && count == 2,
-		      "a rebuild from a loaded config keeps both publishers");
-		CHECK(targets[0].attested && targets[0].valid_until == 987654 &&
-			      targets[0].sessions == 1,
-		      "and keeps the verdict and sessions, so a SIGHUP does not "
-		      "read as a host that stopped being attested");
+		TEST("a rebuild from a loaded config keeps both publishers");
+		if (!(rc == 0 && count == 2))
+			FAIL("expected: rc == 0 && count == 2");
+		TEST("and keeps verdict and sessions across a SIGHUP");
+		if (!(targets[0].attested && targets[0].valid_until == 987654 &&
+		      targets[0].sessions == 1))
+			FAIL("expected: targets[0].attested && targets[0].valid_until "
+			     "== 987654 && targets[0].sessions == 1");
 		config_free(cfg);
 	}
 
@@ -216,10 +216,14 @@ int main(void)
 		rc = attest_targets_reload(conf, NULL, 0, NULL, 300, false,
 					   targets, LOTA_CONFIG_MAX_PROFILES,
 					   &count);
-		CHECK(rc < 0, "a config that does not load is refused");
-		CHECK(count == before &&
-			      strcmp(targets[1].server, "v.beta.example") == 0,
-		      "and the list the loop is using is left alone");
+		TEST("a config that does not load is refused");
+		if (rc >= 0)
+			FAIL("expected: rc < 0");
+		TEST("and the list the loop is using is left alone");
+		if (!(count == before &&
+		      strcmp(targets[1].server, "v.beta.example") == 0))
+			FAIL("expected: count == before && strcmp(targets[1].server, "
+			     "\"v.beta.example\") == 0");
 	}
 
 	/* a pin given for one verifier must not reach a profile's verifier */
@@ -236,22 +240,27 @@ int main(void)
 		rc = attest_targets_reload(conf, "v.single.example", 8443, NULL,
 					   300, true, targets,
 					   LOTA_CONFIG_MAX_PROFILES, &count);
-		CHECK(rc == -ENOTUNIQ,
-		      "a pinned loop refuses a file that configures profiles");
-		CHECK(count == before &&
-			      strcmp(targets[1].server, "v.beta.example") == 0,
-		      "and keeps reporting to the list it had");
+		TEST("a pinned loop refuses a file that configures profiles");
+		if (rc != -ENOTUNIQ)
+			FAIL("expected: rc == -ENOTUNIQ");
+		TEST("and keeps reporting to the list it had");
+		if (!(count == before &&
+		      strcmp(targets[1].server, "v.beta.example") == 0))
+			FAIL("expected: count == before && strcmp(targets[1].server, "
+			     "\"v.beta.example\") == 0");
 	}
 
-	CHECK(attest_targets_reload(NULL, NULL, 0, NULL, 300, false, targets,
-				    LOTA_CONFIG_MAX_PROFILES, &count) < 0,
-	      "a reload without a config path is refused");
+	TEST("a reload without a config path is refused");
+	if (attest_targets_reload(NULL, NULL, 0, NULL, 300, false, targets,
+				  LOTA_CONFIG_MAX_PROFILES, &count) >= 0)
+		FAIL("expected: attest_targets_reload(NULL, NULL, 0, NULL, "
+		     "300, false, targets, LOTA_CONFIG_MAX_PROFILES, &count) "
+		     "< 0");
 
 	unlink(anchor_a);
 	unlink(anchor_b);
 	unlink(conf);
 	free(targets);
 
-	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

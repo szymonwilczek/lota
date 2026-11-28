@@ -27,17 +27,7 @@
 #include "../include/lota_devt.h"
 #include "../src/agent/sb_dev.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 /* Mount id of an open file, the id /proc/self/mountinfo lists in field 1 */
 static int oracle_mnt_id(int fd, unsigned long long *out_id)
@@ -129,14 +119,12 @@ static void test_file_key_matches_superblock(const char *path)
 	char msg[PATH_MAX + 128];
 
 	if (oracle_sb_dev_for_path(path, &expected) < 0) {
-		fprintf(stderr, "FAIL: no superblock device for %s\n", path);
-		g_failures++;
+		FAIL("no superblock device for %s", path);
 		return;
 	}
 
 	if (loader_key_dev(path, &actual) < 0) {
-		fprintf(stderr, "FAIL: no loader key for %s\n", path);
-		g_failures++;
+		FAIL("no loader key for %s", path);
 		return;
 	}
 
@@ -145,7 +133,9 @@ static void test_file_key_matches_superblock(const char *path)
 		"a file's map key uses the superblock device (%s: key %u:%u, superblock %u:%u)",
 		path, LOTA_DEVT_MAJOR(actual), LOTA_DEVT_MINOR(actual),
 		LOTA_DEVT_MAJOR(expected), LOTA_DEVT_MINOR(expected));
-	CHECK(actual == expected, msg);
+	TEST(msg);
+	if (actual != expected)
+		FAIL("expected: actual == expected");
 }
 
 static void test_dir_key_matches_superblock(const char *path)
@@ -155,14 +145,12 @@ static void test_dir_key_matches_superblock(const char *path)
 	char msg[PATH_MAX + 128];
 
 	if (oracle_sb_dev_for_path(path, &expected) < 0) {
-		fprintf(stderr, "FAIL: no superblock device for %s\n", path);
-		g_failures++;
+		FAIL("no superblock device for %s", path);
 		return;
 	}
 
 	if (loader_key_dev(path, &actual) < 0) {
-		fprintf(stderr, "FAIL: no loader key for %s\n", path);
-		g_failures++;
+		FAIL("no loader key for %s", path);
 		return;
 	}
 
@@ -171,7 +159,9 @@ static void test_dir_key_matches_superblock(const char *path)
 		"a mountpoint's map key uses the superblock device (%s: key %u:%u, superblock %u:%u)",
 		path, LOTA_DEVT_MAJOR(actual), LOTA_DEVT_MINOR(actual),
 		LOTA_DEVT_MAJOR(expected), LOTA_DEVT_MINOR(expected));
-	CHECK(actual == expected, msg);
+	TEST(msg);
+	if (actual != expected)
+		FAIL("expected: actual == expected");
 }
 
 /* Mount a path resolves to, or 0 when it cannot be read */
@@ -212,13 +202,12 @@ static void test_every_mounted_filesystem(void)
 {
 	char line[4096];
 	unsigned int checked = 0;
-	unsigned int mismatched = 0;
 	FILE *f;
 
+	TEST("no mounted filesystem keys on a device the BPF side cannot read");
 	f = fopen("/proc/self/mountinfo", "re");
 	if (!f) {
-		fprintf(stderr, "FAIL: cannot read /proc/self/mountinfo\n");
-		g_failures++;
+		FAIL("cannot read /proc/self/mountinfo");
 		return;
 	}
 
@@ -252,20 +241,17 @@ static void test_every_mounted_filesystem(void)
 
 		expected = LOTA_DEVT_MKDEV(major, minor);
 		checked++;
-		if (actual != expected) {
-			fprintf(stderr,
-				"     %s: key %u:%u, superblock %u:%u\n",
-				mount_point, LOTA_DEVT_MAJOR(actual),
-				LOTA_DEVT_MINOR(actual), major, minor);
-			mismatched++;
-		}
+		if (actual != expected)
+			FAIL("%s: key %u:%u, superblock %u:%u", mount_point,
+			     LOTA_DEVT_MAJOR(actual), LOTA_DEVT_MINOR(actual),
+			     major, minor);
 	}
 
 	fclose(f);
 
-	CHECK(checked > 0, "at least one mounted filesystem was checked");
-	CHECK(mismatched == 0,
-	      "no mounted filesystem keys on a device the BPF side cannot read");
+	TEST("at least one mounted filesystem was checked");
+	if (checked <= 0)
+		FAIL("expected: checked > 0");
 }
 
 static const char *g_fixture =
@@ -280,9 +266,8 @@ static void write_fixture(int fd, const char *path, const char *body)
 	FILE *f = fdopen(fd, "w");
 
 	if (!f) {
-		fprintf(stderr, "FAIL: cannot write fixture %s\n", path);
+		FAIL("cannot write fixture %s", path);
 		close(fd);
-		g_failures++;
 		return;
 	}
 	fputs(body, f);
@@ -300,34 +285,43 @@ static void test_mountinfo_parse(void)
 	int fd = mkstemp(path);
 
 	if (fd < 0) {
-		fprintf(stderr, "FAIL: cannot create a fixture file\n");
-		g_failures++;
+		FAIL("cannot create a fixture file");
 		return;
 	}
 	write_fixture(fd, path, g_fixture);
 
-	CHECK(sb_dev_from_mountinfo(path, 43, &dev) == 0 &&
-		      dev == LOTA_DEVT_MKDEV(0, 35),
-	      "a subvolume mount resolves to its superblock device");
+	TEST("a subvolume mount resolves to its superblock device");
+	if (!(sb_dev_from_mountinfo(path, 43, &dev) == 0 &&
+	      dev == LOTA_DEVT_MKDEV(0, 35)))
+		FAIL("expected: sb_dev_from_mountinfo(path, 43, &dev) == 0 && "
+		     "dev == LOTA_DEVT_MKDEV(0, 35)");
 
 	dev = 0;
-	CHECK(sb_dev_from_mountinfo(path, 61, &dev) == 0 &&
-		      dev == LOTA_DEVT_MKDEV(0, 35),
-	      "a second subvolume of the same filesystem resolves to the same device");
+	TEST("two subvolumes of one filesystem resolve to the same device");
+	if (!(sb_dev_from_mountinfo(path, 61, &dev) == 0 &&
+	      dev == LOTA_DEVT_MKDEV(0, 35)))
+		FAIL("expected: sb_dev_from_mountinfo(path, 61, &dev) == 0 && "
+		     "dev == LOTA_DEVT_MKDEV(0, 35)");
 
 	dev = 0;
-	CHECK(sb_dev_from_mountinfo(path, 27, &dev) == 0 &&
-		      dev == LOTA_DEVT_MKDEV(259, 4),
-	      "a real block device keeps its major and minor");
+	TEST("a real block device keeps its major and minor");
+	if (!(sb_dev_from_mountinfo(path, 27, &dev) == 0 &&
+	      dev == LOTA_DEVT_MKDEV(259, 4)))
+		FAIL("expected: sb_dev_from_mountinfo(path, 27, &dev) == 0 && "
+		     "dev == LOTA_DEVT_MKDEV(259, 4)");
 
 	dev = 0xdeadbeefULL;
-	CHECK(sb_dev_from_mountinfo(path, 999, &dev) == -ENODEV &&
-		      dev == 0xdeadbeefULL,
-	      "an unlisted mount is refused and writes nothing");
+	TEST("an unlisted mount is refused and writes nothing");
+	if (!(sb_dev_from_mountinfo(path, 999, &dev) == -ENODEV &&
+	      dev == 0xdeadbeefULL))
+		FAIL("expected: sb_dev_from_mountinfo(path, 999, &dev) == "
+		     "-ENODEV && dev == 0xdeadbeefULL");
 
-	CHECK(sb_dev_from_mountinfo("/proc/self/no-such-mountinfo", 43, &dev) <
-		      0,
-	      "a mountinfo that cannot be read is refused");
+	TEST("a mountinfo that cannot be read is refused");
+	if (sb_dev_from_mountinfo("/proc/self/no-such-mountinfo", 43, &dev) >=
+	    0)
+		FAIL("expected: sb_dev_from_mountinfo(\"/proc/self/no-such-mountinfo\", "
+		     "43, &dev) < 0");
 
 	unlink(path);
 }
@@ -346,8 +340,7 @@ static void test_long_line_is_not_split(void)
 	int fd = mkstemp(path);
 
 	if (fd < 0) {
-		fprintf(stderr, "FAIL: cannot create a fixture file\n");
-		g_failures++;
+		FAIL("cannot create a fixture file");
 		return;
 	}
 
@@ -360,9 +353,11 @@ static void test_long_line_is_not_split(void)
 		 pad);
 	write_fixture(fd, path, body);
 
-	CHECK(sb_dev_from_mountinfo(path, 61, &dev) == 0 &&
-		      dev == LOTA_DEVT_MKDEV(0, 36),
-	      "the record after an over-long line is read as one record");
+	TEST("the record after an over-long line is read as one record");
+	if (!(sb_dev_from_mountinfo(path, 61, &dev) == 0 &&
+	      dev == LOTA_DEVT_MKDEV(0, 36)))
+		FAIL("expected: sb_dev_from_mountinfo(path, 61, &dev) == 0 && "
+		     "dev == LOTA_DEVT_MKDEV(0, 36)");
 
 	unlink(path);
 }
@@ -373,14 +368,14 @@ int main(void)
 	char *dir;
 	ssize_t len;
 
-	printf("=== trusted-library map key device tests ===\n");
+	test_begin("sb dev");
 
 	test_mountinfo_parse();
 	test_long_line_is_not_split();
 
 	len = readlink("/proc/self/exe", self, sizeof(self) - 1);
 	if (len <= 0) {
-		fprintf(stderr, "FAIL: cannot resolve /proc/self/exe\n");
+		FAIL("cannot resolve /proc/self/exe");
 		return 1;
 	}
 	self[len] = '\0';
@@ -395,10 +390,5 @@ int main(void)
 
 	test_every_mounted_filesystem();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll trusted-library map key device tests passed\n");
-	return 0;
+	return test_end();
 }

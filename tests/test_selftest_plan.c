@@ -22,31 +22,23 @@
 #include "../src/agent/selftest.h"
 #include "../src/agent/tpm.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 /* a key that is already there costs nothing to use and stays afterwards */
 static void test_existing_key_is_used(void)
 {
-	CHECK(selftest_aik_plan(1) == SELFTEST_AIK_USE_EXISTING,
-	      "an AIK already at the handle is quoted with");
+	TEST("an AIK already at the handle is quoted with");
+	if (selftest_aik_plan(1) != SELFTEST_AIK_USE_EXISTING)
+		FAIL("expected: selftest_aik_plan(1) == "
+		     "SELFTEST_AIK_USE_EXISTING");
 }
 
 /* a free handle is the case that caught this finding */
 static void test_free_handle_creates_nothing(void)
 {
-	CHECK(selftest_aik_plan(0) == SELFTEST_AIK_SKIP,
-	      "a free handle leaves the probe without a key rather than "
-	      "provisioning one");
+	TEST("a free handle leaves the probe without a key, not provisioning");
+	if (selftest_aik_plan(0) != SELFTEST_AIK_SKIP)
+		FAIL("expected: selftest_aik_plan(0) == SELFTEST_AIK_SKIP");
 }
 
 /*
@@ -55,9 +47,9 @@ static void test_free_handle_creates_nothing(void)
  */
 static void test_unreadable_tpm_creates_nothing(void)
 {
-	CHECK(selftest_aik_plan(-5) == SELFTEST_AIK_SKIP,
-	      "an unreadable handle is not treated as an invitation to "
-	      "provision");
+	TEST("an unreadable handle is not taken as an invitation to provision");
+	if (selftest_aik_plan(-5) != SELFTEST_AIK_SKIP)
+		FAIL("expected: selftest_aik_plan(-5) == SELFTEST_AIK_SKIP");
 }
 
 /*
@@ -67,17 +59,22 @@ static void test_unreadable_tpm_creates_nothing(void)
  */
 static void test_publisher_keys_are_what_is_quoted(void)
 {
-	CHECK(selftest_quote_key(1) == SELFTEST_QUOTE_PER_PUBLISHER,
-	      "one publisher holding a key is the key the probe quotes with");
-	CHECK(selftest_quote_key(5) == SELFTEST_QUOTE_PER_PUBLISHER,
-	      "several publishers holding keys are all the probe's to quote");
+	TEST("one publisher holding a key is the key the probe quotes with");
+	if (selftest_quote_key(1) != SELFTEST_QUOTE_PER_PUBLISHER)
+		FAIL("expected: selftest_quote_key(1) == "
+		     "SELFTEST_QUOTE_PER_PUBLISHER");
+	TEST("several publishers holding keys are all the probe's to quote");
+	if (selftest_quote_key(5) != SELFTEST_QUOTE_PER_PUBLISHER)
+		FAIL("expected: selftest_quote_key(5) == "
+		     "SELFTEST_QUOTE_PER_PUBLISHER");
 }
 
 static void test_no_publisher_leaves_the_pre_profile_key(void)
 {
-	CHECK(selftest_quote_key(0) == SELFTEST_QUOTE_PRE_PROFILE,
-	      "with no publisher holding a key the pre-profile records are "
-	      "the ones that describe this host");
+	TEST("with no publisher key the pre-profile records describe the host");
+	if (selftest_quote_key(0) != SELFTEST_QUOTE_PRE_PROFILE)
+		FAIL("expected: selftest_quote_key(0) == "
+		     "SELFTEST_QUOTE_PRE_PROFILE");
 }
 
 /*
@@ -90,8 +87,9 @@ static void test_a_failed_section_is_not_success(void)
 {
 	struct selftest_tally t = { .passed = 8, .failed = 1, .skipped = 0 };
 
-	CHECK(selftest_verdict(&t) != 0,
-	      "a probe with a failed section does not report success");
+	TEST("a probe with a failed section does not report success");
+	if (selftest_verdict(&t) == 0)
+		FAIL("expected: selftest_verdict(&t) != 0");
 }
 
 /* Nothing failed is success, however much was skipped. */
@@ -104,10 +102,12 @@ static void test_nothing_failed_is_success(void)
 					  .failed = 0,
 					  .skipped = 2 };
 
-	CHECK(selftest_verdict(&all_good) == 0,
-	      "a probe where everything worked reports success");
-	CHECK(selftest_verdict(&skipped) == 0,
-	      "a section that could not be reached is not a failure");
+	TEST("a probe where everything worked reports success");
+	if (selftest_verdict(&all_good) != 0)
+		FAIL("expected: selftest_verdict(&all_good) == 0");
+	TEST("a section that could not be reached is not a failure");
+	if (selftest_verdict(&skipped) != 0)
+		FAIL("expected: selftest_verdict(&skipped) == 0");
 }
 
 /* The tally is what the sections write into, so it has to record both ways. */
@@ -119,19 +119,27 @@ static void test_the_tally_counts_what_it_is_told(void)
 	selftest_record(&t, -EIO);
 	selftest_skip(&t);
 
-	CHECK(t.passed == 1 && t.failed == 1 && t.skipped == 1,
-	      "a pass, a failure and a skip are counted apart");
+	TEST("a pass, a failure and a skip are counted apart");
+	if (!(t.passed == 1 && t.failed == 1 && t.skipped == 1))
+		FAIL("expected: t.passed == 1 && t.failed == 1 && t.skipped "
+		     "== 1");
 }
 
 /* a key with no authorization record is left for the daemon to rotate */
 static void test_load_plan(void)
 {
-	CHECK(selftest_aik_load_plan(0) == SELFTEST_AIK_LOAD_QUOTE,
-	      "a loaded authorization is quoted with");
-	CHECK(selftest_aik_load_plan(-ENOENT) == SELFTEST_AIK_LOAD_SKIP,
-	      "a key with no authorization record is skipped");
-	CHECK(selftest_aik_load_plan(-EIO) == SELFTEST_AIK_LOAD_FAIL,
-	      "a failed load is a failure");
+	TEST("a loaded authorization is quoted with");
+	if (selftest_aik_load_plan(0) != SELFTEST_AIK_LOAD_QUOTE)
+		FAIL("expected: selftest_aik_load_plan(0) == "
+		     "SELFTEST_AIK_LOAD_QUOTE");
+	TEST("a key with no authorization record is skipped");
+	if (selftest_aik_load_plan(-ENOENT) != SELFTEST_AIK_LOAD_SKIP)
+		FAIL("expected: selftest_aik_load_plan(-ENOENT) == "
+		     "SELFTEST_AIK_LOAD_SKIP");
+	TEST("a failed load is a failure");
+	if (selftest_aik_load_plan(-EIO) != SELFTEST_AIK_LOAD_FAIL)
+		FAIL("expected: selftest_aik_load_plan(-EIO) == "
+		     "SELFTEST_AIK_LOAD_FAIL");
 }
 
 /* --test-tpm checks PCR 14 and leaves it to the daemon to extend */
@@ -149,18 +157,26 @@ static void test_check_writes_nothing(void)
 
 	for (size_t i = 0; i < sizeof(states) / sizeof(states[0]); i++)
 		any |= tpm_boot_commitment_writes(states[i], false);
-	CHECK(!any, "a check writes neither PCR 14 nor the snapshot");
-	CHECK(tpm_boot_commitment_writes(TPM_PCR14_AWAITING_EXTEND, true),
-	      "the daemon extends a register awaiting the commitment");
-	CHECK(tpm_boot_commitment_writes(TPM_PCR14_ALREADY_COMMITTED, true),
-	      "the daemon saves the snapshot over a held commitment");
-	CHECK(!tpm_boot_commitment_writes(TPM_PCR14_BINARY_CHANGED, true),
-	      "a refused verdict writes nothing");
+	TEST("a check writes neither PCR 14 nor the snapshot");
+	if (any)
+		FAIL("expected: !any");
+	TEST("the daemon extends a register awaiting the commitment");
+	if (!tpm_boot_commitment_writes(TPM_PCR14_AWAITING_EXTEND, true))
+		FAIL("expected: tpm_boot_commitment_writes(TPM_PCR14_AWAITING_EXTEND, "
+		     "true)");
+	TEST("the daemon saves the snapshot over a held commitment");
+	if (!tpm_boot_commitment_writes(TPM_PCR14_ALREADY_COMMITTED, true))
+		FAIL("expected: tpm_boot_commitment_writes(TPM_PCR14_ALREADY_COMMITTED, "
+		     "true)");
+	TEST("a refused verdict writes nothing");
+	if (tpm_boot_commitment_writes(TPM_PCR14_BINARY_CHANGED, true))
+		FAIL("expected: !tpm_boot_commitment_writes(TPM_PCR14_BINARY_CHANGED, "
+		     "true)");
 }
 
 int main(void)
 {
-	printf("=== --test-tpm attestation-key plan ===\n");
+	test_begin("selftest plan");
 	test_existing_key_is_used();
 	test_free_handle_creates_nothing();
 	test_unreadable_tpm_creates_nothing();
@@ -172,10 +188,5 @@ int main(void)
 	test_check_writes_nothing();
 	test_load_plan();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll --test-tpm plan tests passed\n");
-	return 0;
+	return test_end();
 }

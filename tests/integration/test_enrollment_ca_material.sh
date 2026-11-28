@@ -21,6 +21,9 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "enrollment ca material"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
@@ -29,29 +32,25 @@ GEN_CERTS="$REPO_DIR/examples/mtls/gen-certs.sh"
 
 for f in "$GEN_CA" "$GEN_CERTS"; do
     if [[ ! -x "$f" ]]; then
-	echo "[ca-material] missing artifact: $f" >&2
-	exit 2
+	FAIL "missing artifact: %s" "$f"
+	test_end
     fi
 done
 if ! command -v openssl >/dev/null 2>&1; then
-    echo "[ca-material] openssl not found" >&2
-    exit 2
+    FAIL "openssl not found"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
+test_cleanup 'rm -rf "$WORK_DIR"'
 
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-	echo "PASS: $msg"
-    else
-	echo "FAIL: $msg"
-	failures=$((failures + 1))
-    fi
+# quiet CMD...: CMD's output only as the detail of a failure
+quiet() {
+    local out
+    out=$("$@" 2>&1) || {
+	FAIL "%s" "$out"
+	return 1
+    }
 }
 
 # The identity the agent derives from a trust anchor:
@@ -63,17 +62,19 @@ spki_id() {
 	openssl dgst -sha256 -r | cut -d' ' -f1
 }
 
-"$GEN_CA" "$WORK_DIR/ca" >/dev/null
+quiet "$GEN_CA" "$WORK_DIR/ca"
 
 CA_DIR="$WORK_DIR/ca"
 
-check "the example generates a CA anchor" test -s "$CA_DIR/ca.crt"
-check "the example generates a listener certificate" test -s "$CA_DIR/tls.crt"
+TEST "the example generates a CA anchor"
+test -s "$CA_DIR/ca.crt" || FAIL
+TEST "the example generates a listener certificate"
+test -s "$CA_DIR/tls.crt" || FAIL
 
 # The property the whole flow rests on: one file works as both the identity
 # anchor and the TLS trust anchor.
-check "the listener certificate is issued by the CA anchor" \
-      openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt"
+TEST "the listener certificate is issued by the CA anchor"
+quiet openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt" || FAIL
 
 # OpenSSL 4 takes a leaf without key identifiers whose subject is its
 # issuer and whose key type is the issuer's for self-signed
@@ -81,8 +82,8 @@ subject_differs() {
     [[ "$(openssl x509 -in "$1" -noout -subject)" != \
        "$(openssl x509 -in "$2" -noout -subject)" ]]
 }
-check "the listener certificate names a subject other than the CA" \
-      subject_differs "$CA_DIR/tls.crt" "$CA_DIR/ca.crt"
+TEST "the listener certificate names a subject other than the CA"
+subject_differs "$CA_DIR/tls.crt" "$CA_DIR/ca.crt" || FAIL
 
 # The verifier revokes AIK certificates through a CRL from this anchor and
 # refuses one from an issuer without cRLSign. openssl verify applies the same
@@ -108,7 +109,8 @@ EOF_CNF
 	openssl verify -crl_check -CAfile "$CA_DIR/ca.crt" \
 		-CRLfile "$dir/ca.crl" "$CA_DIR/tls.crt" >/dev/null 2>&1
 }
-check "a CRL from the anchor verifies" crl_from_anchor_verifies
+TEST "a CRL from the anchor verifies"
+crl_from_anchor_verifies || FAIL
 
 # A listener certificate is the one certificate in the deployment that is
 # rotated on a schedule.
@@ -117,13 +119,14 @@ check "a CRL from the anchor verifies" crl_from_anchor_verifies
 before=$(spki_id "$CA_DIR/ca.crt")
 
 rm -f "$CA_DIR/tls.key" "$CA_DIR/tls.crt"
-"$GEN_CA" "$CA_DIR" >/dev/null
+quiet "$GEN_CA" "$CA_DIR"
 
 after=$(spki_id "$CA_DIR/ca.crt")
 
-check "the anchor survives a listener rotation" test "$before" = "$after"
-check "the rotated listener still chains to the anchor" \
-      openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt"
+TEST "the anchor survives a listener rotation"
+test "$before" = "$after" || FAIL
+TEST "the rotated listener still chains to the anchor"
+quiet openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt" || FAIL
 
 # And the identity really would move if it were taken from the listener,
 # which is what makes the choice of file the whole finding.
@@ -133,19 +136,19 @@ tls_before_rotation_differs() {
     listener_id=$(spki_id "$CA_DIR/tls.crt")
     [[ "$anchor_id" != "$listener_id" ]]
 }
-check "the listener has an identity of its own, which is not the anchor's" \
-      tls_before_rotation_differs
+TEST "the listener has an identity of its own, not the anchor's"
+tls_before_rotation_differs || FAIL
 
 # A certificate lost next to its key is issued again from that key.
 lost_certs_come_back() {
     rm -f "$CA_DIR/ca.crt" "$CA_DIR/tls.crt"
-    "$GEN_CA" "$CA_DIR" >/dev/null &&
+    quiet "$GEN_CA" "$CA_DIR" &&
 	test -s "$CA_DIR/ca.crt" &&
 	test "$(spki_id "$CA_DIR/ca.crt")" = "$before" &&
-	openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt" >/dev/null
+	quiet openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt"
 }
-check "a lost anchor and listener certificate come back from their keys" \
-      lost_certs_come_back
+TEST "a lost anchor and listener cert come back from their keys"
+lost_certs_come_back || FAIL
 
 # A self-signed listener left by an older script, which ca.crt does not
 # verify, is issued again; one that verifies is kept.
@@ -156,14 +159,14 @@ stale_listener_reissued() {
 	    -subj "/CN=lota-attest-ca" -out "$CA_DIR/tls.crt" 2>/dev/null &&
 	! openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt" \
 		>/dev/null 2>&1 &&
-	"$GEN_CA" "$CA_DIR" >/dev/null &&
-	openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt" >/dev/null &&
+	quiet "$GEN_CA" "$CA_DIR" &&
+	quiet openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt" &&
 	first=$(cksum <"$CA_DIR/tls.crt") &&
-	"$GEN_CA" "$CA_DIR" >/dev/null &&
+	quiet "$GEN_CA" "$CA_DIR" &&
 	test "$(cksum <"$CA_DIR/tls.crt")" = "$first"
 }
-check "a listener certificate ca.crt does not verify is issued again" \
-      stale_listener_reissued
+TEST "a listener certificate ca.crt does not verify is issued again"
+stale_listener_reissued || FAIL
 
 # A single leaf is issued only from an existing provisioning CA.
 leaf_without_ca_refused() {
@@ -171,7 +174,8 @@ leaf_without_ca_refused() {
 	test ! -e "$WORK_DIR/mtls/ca.key" &&
 	test ! -e "$WORK_DIR/mtls/server.crt"
 }
-check "gen-certs -server without ca.key is refused" leaf_without_ca_refused
+TEST "gen-certs -server without ca.key is refused"
+leaf_without_ca_refused || FAIL
 
 leaf_chains_to_existing_ca() {
     OUT_DIR="$WORK_DIR/mtls" "$GEN_CERTS" >/dev/null 2>&1 &&
@@ -181,16 +185,12 @@ leaf_chains_to_existing_ca() {
 		"$WORK_DIR/mtls/producer.crt" "$WORK_DIR/mtls/server.crt" \
 		>/dev/null
 }
-check "gen-certs -server reissues a lost ca.crt from ca.key" \
-      leaf_chains_to_existing_ca
+TEST "gen-certs -server reissues a lost ca.crt from ca.key"
+leaf_chains_to_existing_ca || FAIL
 
 # What the script tells the operator to do with each file has to name
 # the anchor, since that is the file the identity may be bound to.
-check "the script does not tell the operator to enroll against the listener" \
-      bash -c "! grep -q -- '--ca-cert tls.crt' '$GEN_CA'"
+TEST "the script never has the operator enroll against the listener"
+bash -c "! grep -q -- '--ca-cert tls.crt' '$GEN_CA'" || FAIL
 
-if [[ $failures -ne 0 ]]; then
-    echo "FAILURES: $failures"
-    exit 1
-fi
-echo "All tests passed"
+test_end

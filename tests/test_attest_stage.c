@@ -14,23 +14,12 @@
  */
 
 #include <errno.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "../src/agent/attest.h"
 #include "../src/agent/tpm.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 /*
  * Every stage a round can fail at is named. A stage with no name would reach
@@ -38,17 +27,13 @@ static int g_failures;
  */
 static void test_every_stage_is_named(void)
 {
-	int named = 1;
-
+	TEST("every attestation stage has a name");
 	for (int s = 0; s < ATTEST_STAGE_COUNT; s++) {
 		const char *name = attest_stage_str((enum attest_stage)s);
 
-		if (!name || name[0] == '\0') {
-			fprintf(stderr, "  stage %d has no name\n", s);
-			named = 0;
-		}
+		if (!name || name[0] == '\0')
+			FAIL("stage %d has no name", s);
 	}
-	CHECK(named, "every attestation stage has a name");
 }
 
 /*
@@ -57,22 +42,16 @@ static void test_every_stage_is_named(void)
  */
 static void test_stage_names_are_distinct(void)
 {
-	int distinct = 1;
-
+	TEST("no two attestation stages share a name");
 	for (int a = 0; a < ATTEST_STAGE_COUNT; a++) {
 		for (int b = a + 1; b < ATTEST_STAGE_COUNT; b++) {
 			const char *na = attest_stage_str((enum attest_stage)a);
 			const char *nb = attest_stage_str((enum attest_stage)b);
 
-			if (na && nb && strcmp(na, nb) == 0) {
-				fprintf(stderr,
-					"  stages %d and %d share '%s'\n", a, b,
-					na);
-				distinct = 0;
-			}
+			if (na && nb && strcmp(na, nb) == 0)
+				FAIL("stages %d and %d share '%s'", a, b, na);
 		}
 	}
-	CHECK(distinct, "no two attestation stages share a name");
 }
 
 /*
@@ -85,10 +64,12 @@ static void test_unknown_stage_is_printable(void)
 	const char *above =
 		attest_stage_str((enum attest_stage)ATTEST_STAGE_COUNT);
 
-	CHECK(below && below[0] != '\0',
-	      "a stage below the table is still printable");
-	CHECK(above && above[0] != '\0',
-	      "a stage past the table is still printable");
+	TEST("a stage below the table is still printable");
+	if (!(below && below[0] != '\0'))
+		FAIL("expected: below && below[0] != '\\0'");
+	TEST("a stage past the table is still printable");
+	if (!(above && above[0] != '\0'))
+		FAIL("expected: above && above[0] != '\\0'");
 }
 
 /*
@@ -105,8 +86,9 @@ static void test_tpm_codes_are_named(void)
 	const char *locked = attest_failure_reason(-LOTA_ERR_TPM_LOCKED);
 	const char *authfail = attest_failure_reason(-LOTA_ERR_TPM_AUTH_FAIL);
 
-	CHECK(locked && strstr(locked, "lockout"),
-	      "a dictionary-attack lockout is named, not numbered");
+	TEST("a dictionary-attack lockout is named, not numbered");
+	if (!(locked && strstr(locked, "lockout")))
+		FAIL("expected: locked && strstr(locked, \"lockout\")");
 	/*
 	 * Stated against the C library:
 	 * strerror() is localised, so "Unknown error 4097" is only what
@@ -114,13 +96,17 @@ static void test_tpm_codes_are_named(void)
 	 * What must hold everywhere is that a LOTA-private code is not left
 	 * to strerror() at all.
 	 */
-	CHECK(locked && strcmp(locked, strerror(LOTA_ERR_TPM_LOCKED)) != 0,
-	      "the lockout reason is not whatever strerror makes of 4097");
+	TEST("the lockout reason is not whatever strerror makes of 4097");
+	if (!(locked && strcmp(locked, strerror(LOTA_ERR_TPM_LOCKED)) != 0))
+		FAIL("expected: locked && strcmp(locked, "
+		     "strerror(LOTA_ERR_TPM_LOCKED)) != 0");
 
 	/* BAD_AUTH and NV_AUTHORIZATION share the code and leave the counter */
-	CHECK(authfail && strstr(authfail, "authorization") &&
-		      !strstr(authfail, "DA"),
-	      "an authorization failure promises no DA count");
+	TEST("an authorization failure promises no DA count");
+	if (!(authfail && strstr(authfail, "authorization") &&
+	      !strstr(authfail, "DA")))
+		FAIL("expected: authfail && strstr(authfail, "
+		     "\"authorization\") && !strstr(authfail, \"DA\")");
 }
 
 /*
@@ -131,23 +117,19 @@ static void test_posix_errors_still_render(void)
 {
 	const char *eio = attest_failure_reason(-EIO);
 
-	CHECK(eio && strcmp(eio, strerror(EIO)) == 0,
-	      "a POSIX errno renders as the C library renders it");
+	TEST("a POSIX errno renders as the C library renders it");
+	if (!(eio && strcmp(eio, strerror(EIO)) == 0))
+		FAIL("expected: eio && strcmp(eio, strerror(EIO)) == 0");
 }
 
 int main(void)
 {
-	printf("=== attestation stage tests ===\n");
+	test_begin("attest stage");
 	test_every_stage_is_named();
 	test_stage_names_are_distinct();
 	test_unknown_stage_is_printable();
 	test_tpm_codes_are_named();
 	test_posix_errors_still_render();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll attestation stage tests passed\n");
-	return 0;
+	return test_end();
 }

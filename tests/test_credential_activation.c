@@ -19,17 +19,7 @@
 
 #include "../src/agent/agent_internal.h" // IWYU pragma: keep (defines LOTA_TPM_TESTING)
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 static void test_aik_tpmt_public_validation(void)
 {
@@ -39,18 +29,26 @@ static void test_aik_tpmt_public_validation(void)
 
 	memset(&ctx, 0, sizeof(ctx));
 
-	CHECK(tpm_get_aik_tpmt_public(NULL, buf, sizeof(buf), &out) == -EINVAL,
-	      "aik_tpmt_public rejects nil ctx");
+	TEST("aik_tpmt_public rejects nil ctx");
+	if (tpm_get_aik_tpmt_public(NULL, buf, sizeof(buf), &out) != -EINVAL)
+		FAIL("expected: tpm_get_aik_tpmt_public(NULL, buf, "
+		     "sizeof(buf), &out) == -EINVAL");
 
 	/* ctx.initialized == false */
-	CHECK(tpm_get_aik_tpmt_public(&ctx, buf, sizeof(buf), &out) == -EINVAL,
-	      "aik_tpmt_public rejects uninitialized ctx");
+	TEST("aik_tpmt_public rejects uninitialized ctx");
+	if (tpm_get_aik_tpmt_public(&ctx, buf, sizeof(buf), &out) != -EINVAL)
+		FAIL("expected: tpm_get_aik_tpmt_public(&ctx, buf, "
+		     "sizeof(buf), &out) == -EINVAL");
 
 	ctx.initialized = true;
-	CHECK(tpm_get_aik_tpmt_public(&ctx, NULL, sizeof(buf), &out) == -EINVAL,
-	      "aik_tpmt_public rejects nil buffer");
-	CHECK(tpm_get_aik_tpmt_public(&ctx, buf, sizeof(buf), NULL) == -EINVAL,
-	      "aik_tpmt_public rejects nil out_size");
+	TEST("aik_tpmt_public rejects nil buffer");
+	if (tpm_get_aik_tpmt_public(&ctx, NULL, sizeof(buf), &out) != -EINVAL)
+		FAIL("expected: tpm_get_aik_tpmt_public(&ctx, NULL, "
+		     "sizeof(buf), &out) == -EINVAL");
+	TEST("aik_tpmt_public rejects nil out_size");
+	if (tpm_get_aik_tpmt_public(&ctx, buf, sizeof(buf), NULL) != -EINVAL)
+		FAIL("expected: tpm_get_aik_tpmt_public(&ctx, buf, "
+		     "sizeof(buf), NULL) == -EINVAL");
 }
 
 static void test_activate_credential_validation(void)
@@ -63,24 +61,36 @@ static void test_activate_credential_validation(void)
 
 	memset(&ctx, 0, sizeof(ctx));
 
-	CHECK(tpm_activate_credential(NULL, cred, sizeof(cred), secret,
-				      sizeof(secret), out_secret,
-				      sizeof(out_secret), &out_len) == -EINVAL,
-	      "activate_credential rejects nil ctx");
+	TEST("activate_credential rejects nil ctx");
+	if (tpm_activate_credential(NULL, cred, sizeof(cred), secret,
+				    sizeof(secret), out_secret,
+				    sizeof(out_secret), &out_len) != -EINVAL)
+		FAIL("expected: tpm_activate_credential(NULL, cred, "
+		     "sizeof(cred), secret, sizeof(secret), out_secret, "
+		     "sizeof(out_secret), &out_len) == -EINVAL");
 
 	ctx.initialized = true;
-	CHECK(tpm_activate_credential(&ctx, NULL, 0, secret, sizeof(secret),
-				      out_secret, sizeof(out_secret),
-				      &out_len) == -EINVAL,
-	      "activate_credential rejects nil cred_blob");
-	CHECK(tpm_activate_credential(&ctx, cred, sizeof(cred), NULL, 0,
-				      out_secret, sizeof(out_secret),
-				      &out_len) == -EINVAL,
-	      "activate_credential rejects nil enc_secret");
-	CHECK(tpm_activate_credential(&ctx, cred, sizeof(cred), secret,
-				      sizeof(secret), NULL, sizeof(out_secret),
-				      &out_len) == -EINVAL,
-	      "activate_credential rejects nil out_secret");
+	TEST("activate_credential rejects nil cred_blob");
+	if (tpm_activate_credential(&ctx, NULL, 0, secret, sizeof(secret),
+				    out_secret, sizeof(out_secret),
+				    &out_len) != -EINVAL)
+		FAIL("expected: tpm_activate_credential(&ctx, NULL, 0, "
+		     "secret, sizeof(secret), out_secret, sizeof(out_secret), "
+		     "&out_len) == -EINVAL");
+	TEST("activate_credential rejects nil enc_secret");
+	if (tpm_activate_credential(&ctx, cred, sizeof(cred), NULL, 0,
+				    out_secret, sizeof(out_secret),
+				    &out_len) != -EINVAL)
+		FAIL("expected: tpm_activate_credential(&ctx, cred, "
+		     "sizeof(cred), NULL, 0, out_secret, sizeof(out_secret), "
+		     "&out_len) == -EINVAL");
+	TEST("activate_credential rejects nil out_secret");
+	if (tpm_activate_credential(&ctx, cred, sizeof(cred), secret,
+				    sizeof(secret), NULL, sizeof(out_secret),
+				    &out_len) != -EINVAL)
+		FAIL("expected: tpm_activate_credential(&ctx, cred, "
+		     "sizeof(cred), secret, sizeof(secret), NULL, "
+		     "sizeof(out_secret), &out_len) == -EINVAL");
 }
 
 static void test_activate_credential_malformed_blobs(void)
@@ -102,29 +112,29 @@ static void test_activate_credential_malformed_blobs(void)
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.initialized = true;
 
-	CHECK(tpm_activate_credential(&ctx, bad_cred, sizeof(bad_cred),
-				      ok_secret, sizeof(ok_secret), out_secret,
-				      sizeof(out_secret), &out_len) == -EINVAL,
-	      "activate_credential rejects malformed credential blob");
+	TEST("activate_credential rejects malformed credential blob");
+	if (tpm_activate_credential(&ctx, bad_cred, sizeof(bad_cred), ok_secret,
+				    sizeof(ok_secret), out_secret,
+				    sizeof(out_secret), &out_len) != -EINVAL)
+		FAIL("expected: tpm_activate_credential(&ctx, bad_cred, "
+		     "sizeof(bad_cred), ok_secret, sizeof(ok_secret), "
+		     "out_secret, sizeof(out_secret), &out_len) == -EINVAL");
 
-	CHECK(tpm_activate_credential(&ctx, ok_cred, sizeof(ok_cred),
-				      bad_secret, sizeof(bad_secret),
-				      out_secret, sizeof(out_secret),
-				      &out_len) == -EINVAL,
-	      "activate_credential rejects malformed encrypted secret");
+	TEST("activate_credential rejects malformed encrypted secret");
+	if (tpm_activate_credential(&ctx, ok_cred, sizeof(ok_cred), bad_secret,
+				    sizeof(bad_secret), out_secret,
+				    sizeof(out_secret), &out_len) != -EINVAL)
+		FAIL("expected: tpm_activate_credential(&ctx, ok_cred, "
+		     "sizeof(ok_cred), bad_secret, sizeof(bad_secret), "
+		     "out_secret, sizeof(out_secret), &out_len) == -EINVAL");
 }
 
 int main(void)
 {
-	printf("=== credential activation unit tests ===\n");
+	test_begin("credential activation");
 	test_aik_tpmt_public_validation();
 	test_activate_credential_validation();
 	test_activate_credential_malformed_blobs();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll credential activation tests passed\n");
-	return 0;
+	return test_end();
 }

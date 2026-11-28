@@ -61,8 +61,6 @@ static void test_commit_matches_reference(void)
 		FAIL("digest mismatch");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_commit_rejects_null_output(void)
@@ -72,7 +70,6 @@ static void test_commit_rejects_null_output(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_baseline_read_takes_exactly_one_digest(void)
@@ -117,16 +114,14 @@ static void test_baseline_read_takes_exactly_one_digest(void)
 		FAIL("a missing baseline was not read as absent");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("=== initramfs lock tests ===\n");
+	test_begin("initramfs lock");
 	test_commit_matches_reference();
 	test_commit_rejects_null_output();
 	test_baseline_read_takes_exactly_one_digest();
 
-	printf("\nResult: %d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

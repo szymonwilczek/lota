@@ -32,17 +32,7 @@
 #include "../src/agent/profile.h"
 #include "../src/agent/publishers.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 /* Caller-owned: several anchors are live at once in one test */
 static void tmp_path(char *out, size_t out_len, const char *suffix)
@@ -212,7 +202,9 @@ static void test_identity_follows_the_key(void)
 	tmp_path(reissued_path, sizeof(reissued_path), "a2.der");
 
 	if (!key || !other_key) {
-		CHECK(0, "key generation");
+		TEST("key generation");
+		if (!0)
+			FAIL("expected: 0");
 		goto out;
 	}
 
@@ -220,7 +212,9 @@ static void test_identity_follows_the_key(void)
 	reissued = mint_cert(key, "publisher-a-renewed", 2);
 	other = mint_cert(other_key, "publisher-b", 1);
 	if (!cert || !reissued || !other) {
-		CHECK(0, "certificate minting");
+		TEST("certificate minting");
+		if (!0)
+			FAIL("expected: 0");
 		goto out;
 	}
 
@@ -228,36 +222,54 @@ static void test_identity_follows_the_key(void)
 	    write_cert_pem(pem_path, cert) != 0 ||
 	    write_cert_der(reissued_path, reissued) != 0 ||
 	    write_cert_der(other_path, other) != 0) {
-		CHECK(0, "writing anchors");
+		TEST("writing anchors");
+		if (!0)
+			FAIL("expected: 0");
 		goto out;
 	}
 
-	CHECK(profile_id_from_anchor(der_path, id_der, sizeof(id_der)) == 0,
-	      "DER anchor derives an identity");
-	CHECK(profile_id_from_anchor(pem_path, id_pem, sizeof(id_pem)) == 0,
-	      "PEM anchor derives an identity");
-	CHECK(profile_id_from_anchor(reissued_path, id_reissued,
-				     sizeof(id_reissued)) == 0,
-	      "reissued anchor derives an identity");
-	CHECK(profile_id_from_anchor(other_path, id_other, sizeof(id_other)) ==
-		      0,
-	      "second publisher's anchor derives an identity");
+	TEST("DER anchor derives an identity");
+	if (profile_id_from_anchor(der_path, id_der, sizeof(id_der)) != 0)
+		FAIL("expected: profile_id_from_anchor(der_path, id_der, "
+		     "sizeof(id_der)) == 0");
+	TEST("PEM anchor derives an identity");
+	if (profile_id_from_anchor(pem_path, id_pem, sizeof(id_pem)) != 0)
+		FAIL("expected: profile_id_from_anchor(pem_path, id_pem, "
+		     "sizeof(id_pem)) == 0");
+	TEST("reissued anchor derives an identity");
+	if (profile_id_from_anchor(reissued_path, id_reissued,
+				   sizeof(id_reissued)) != 0)
+		FAIL("expected: profile_id_from_anchor(reissued_path, "
+		     "id_reissued, sizeof(id_reissued)) == 0");
+	TEST("second publisher's anchor derives an identity");
+	if (profile_id_from_anchor(other_path, id_other, sizeof(id_other)) != 0)
+		FAIL("expected: profile_id_from_anchor(other_path, id_other, "
+		     "sizeof(id_other)) == 0");
 
-	CHECK(strlen(id_der) == LOTA_PROFILE_ID_LEN - 1,
-	      "identity is 64 hex characters");
-	CHECK(strspn(id_der, "0123456789abcdef") == strlen(id_der),
-	      "identity is lowercase hex");
+	TEST("identity is 64 hex characters");
+	if (!(strlen(id_der) == LOTA_PROFILE_ID_LEN - 1))
+		FAIL("expected: strlen(id_der) == LOTA_PROFILE_ID_LEN - 1");
+	TEST("identity is lowercase hex");
+	if (strspn(id_der, "0123456789abcdef") != strlen(id_der))
+		FAIL("expected: strspn(id_der, \"0123456789abcdef\") == "
+		     "strlen(id_der)");
 
-	CHECK(strcmp(id_der, id_pem) == 0,
-	      "PEM and DER of one anchor are one profile");
-	CHECK(strcmp(id_der, id_reissued) == 0,
-	      "reissuing the CA certificate keeps the profile");
-	CHECK(strcmp(id_der, id_other) != 0,
-	      "a second publisher gets a second profile");
+	TEST("PEM and DER of one anchor are one profile");
+	if (strcmp(id_der, id_pem) != 0)
+		FAIL("expected: strcmp(id_der, id_pem) == 0");
+	TEST("reissuing the CA certificate keeps the profile");
+	if (strcmp(id_der, id_reissued) != 0)
+		FAIL("expected: strcmp(id_der, id_reissued) == 0");
+	TEST("a second publisher gets a second profile");
+	if (strcmp(id_der, id_other) == 0)
+		FAIL("expected: strcmp(id_der, id_other) != 0");
 
-	CHECK(expected_id(key, id_expected, sizeof(id_expected)) == 0 &&
-		      strcmp(id_der, id_expected) == 0,
-	      "identity is the SHA-256 of the anchor's SPKI");
+	TEST("identity is the SHA-256 of the anchor's SPKI");
+	if (!(expected_id(key, id_expected, sizeof(id_expected)) == 0 &&
+	      strcmp(id_der, id_expected) == 0))
+		FAIL("expected: expected_id(key, id_expected, "
+		     "sizeof(id_expected)) == 0 && strcmp(id_der, "
+		     "id_expected) == 0");
 
 out:
 	unlink(der_path);
@@ -281,32 +293,46 @@ static void test_unusable_anchor_is_refused(void)
 
 	tmp_path(garbage_path, sizeof(garbage_path), "garbage.der");
 
-	CHECK(profile_id_from_anchor(NULL, id, sizeof(id)) == -EINVAL,
-	      "no anchor is refused");
-	CHECK(profile_id_from_anchor("/tmp/lota-profile-absent.XXXXXX", id,
-				     sizeof(id)) == -ENOENT,
-	      "missing anchor reports ENOENT");
+	TEST("no anchor is refused");
+	if (profile_id_from_anchor(NULL, id, sizeof(id)) != -EINVAL)
+		FAIL("expected: profile_id_from_anchor(NULL, id, sizeof(id)) "
+		     "== -EINVAL");
+	TEST("missing anchor reports ENOENT");
+	if (profile_id_from_anchor("/tmp/lota-profile-absent.XXXXXX", id,
+				   sizeof(id)) != -ENOENT)
+		FAIL("expected: profile_id_from_anchor(\"/tmp/lota-profile-absent.XXXXXX\", "
+		     "id, sizeof(id)) == -ENOENT");
 
 	/* root reads a 0000 file; the refusal is only there for a user */
 	if (geteuid() != 0 &&
 	    write_all(garbage_path, garbage, sizeof(garbage)) == 0 &&
 	    chmod(garbage_path, 0) == 0) {
-		CHECK(profile_id_from_anchor(garbage_path, id, sizeof(id)) ==
-			      -EACCES,
-		      "an anchor that cannot be read is not reported missing");
+		TEST("an anchor that cannot be read is not reported missing");
+		if (profile_id_from_anchor(garbage_path, id, sizeof(id)) !=
+		    -EACCES)
+			FAIL("expected: profile_id_from_anchor(garbage_path, id, "
+			     "sizeof(id)) == -EACCES");
 		unlink(garbage_path);
 	}
 
-	CHECK(write_all(garbage_path, garbage, sizeof(garbage)) == 0,
-	      "write a non-certificate anchor");
-	CHECK(profile_id_from_anchor(garbage_path, id, sizeof(id)) == -EINVAL,
-	      "a file that is not a certificate is refused");
-	CHECK(profile_paths_from_anchor(garbage_path, &paths) == -EINVAL,
-	      "paths are refused with the identity");
+	TEST("write a non-certificate anchor");
+	if (write_all(garbage_path, garbage, sizeof(garbage)) != 0)
+		FAIL("expected: write_all(garbage_path, garbage, "
+		     "sizeof(garbage)) == 0");
+	TEST("a file that is not a certificate is refused");
+	if (profile_id_from_anchor(garbage_path, id, sizeof(id)) != -EINVAL)
+		FAIL("expected: profile_id_from_anchor(garbage_path, id, "
+		     "sizeof(id)) == -EINVAL");
+	TEST("paths are refused with the identity");
+	if (profile_paths_from_anchor(garbage_path, &paths) != -EINVAL)
+		FAIL("expected: profile_paths_from_anchor(garbage_path, "
+		     "&paths) == -EINVAL");
 
-	CHECK(profile_id_from_anchor(garbage_path, id,
-				     LOTA_PROFILE_ID_LEN - 1) == -EINVAL,
-	      "a buffer too small for the identity is refused");
+	TEST("a buffer too small for the identity is refused");
+	if (profile_id_from_anchor(garbage_path, id, LOTA_PROFILE_ID_LEN - 1) !=
+	    -EINVAL)
+		FAIL("expected: profile_id_from_anchor(garbage_path, id, "
+		     "LOTA_PROFILE_ID_LEN - 1) == -EINVAL");
 
 	unlink(garbage_path);
 }
@@ -324,39 +350,54 @@ static void test_paths_and_directory(void)
 	tmp_path(der_path, sizeof(der_path), "paths.der");
 
 	if (!key) {
-		CHECK(0, "key generation");
+		TEST("key generation");
+		if (!0)
+			FAIL("expected: 0");
 		goto out;
 	}
 	cert = mint_cert(key, "publisher-a", 1);
 	if (!cert || write_cert_der(der_path, cert) != 0) {
-		CHECK(0, "writing the anchor");
+		TEST("writing the anchor");
+		if (!0)
+			FAIL("expected: 0");
 		goto out;
 	}
 
 	snprintf(base, sizeof(base), "/tmp/lota-profile-base.%d", getpid());
 
-	CHECK(profile_paths_from_anchor_base(base, der_path, &paths) == 0,
-	      "paths derive from an anchor");
+	TEST("paths derive from an anchor");
+	if (profile_paths_from_anchor_base(base, der_path, &paths) != 0)
+		FAIL("expected: profile_paths_from_anchor_base(base, "
+		     "der_path, &paths) == 0");
 
 	snprintf(expect, sizeof(expect), "%s/%s", base, paths.id);
-	CHECK(strcmp(paths.dir, expect) == 0, "profile directory is base/id");
+	TEST("profile directory is base/id");
+	if (strcmp(paths.dir, expect) != 0)
+		FAIL("expected: strcmp(paths.dir, expect) == 0");
 	snprintf(expect, sizeof(expect), "%s/%s", paths.dir,
 		 LOTA_PROFILE_ENROLL_STATE_FILE);
-	CHECK(strcmp(paths.enroll_state, expect) == 0,
-	      "enrollment record sits in the profile");
+	TEST("enrollment record sits in the profile");
+	if (strcmp(paths.enroll_state, expect) != 0)
+		FAIL("expected: strcmp(paths.enroll_state, expect) == 0");
 	snprintf(expect, sizeof(expect), "%s/%s", paths.dir,
 		 LOTA_PROFILE_AIK_CERT_FILE);
-	CHECK(strcmp(paths.aik_cert, expect) == 0,
-	      "AIK certificate sits in the profile");
+	TEST("AIK certificate sits in the profile");
+	if (strcmp(paths.aik_cert, expect) != 0)
+		FAIL("expected: strcmp(paths.aik_cert, expect) == 0");
 
-	CHECK(profile_dir_ensure(&paths) == 0, "profile directory is created");
-	CHECK(stat(paths.dir, &st) == 0 && S_ISDIR(st.st_mode),
-	      "profile directory exists");
-	CHECK((st.st_mode & 0777) == 0700,
-	      "profile directory is root-only: the record carries the "
-	      "enrollment token");
-	CHECK(profile_dir_ensure(&paths) == 0,
-	      "creating an existing profile directory is a no-op");
+	TEST("profile directory is created");
+	if (profile_dir_ensure(&paths) != 0)
+		FAIL("expected: profile_dir_ensure(&paths) == 0");
+	TEST("profile directory exists");
+	if (!(stat(paths.dir, &st) == 0 && S_ISDIR(st.st_mode)))
+		FAIL("expected: stat(paths.dir, &st) == 0 && "
+		     "S_ISDIR(st.st_mode)");
+	TEST("profile directory is root-only: the record holds the token");
+	if ((st.st_mode & 0777) != 0700)
+		FAIL("expected: (st.st_mode & 0777) == 0700");
+	TEST("creating an existing profile directory is a no-op");
+	if (profile_dir_ensure(&paths) != 0)
+		FAIL("expected: profile_dir_ensure(&paths) == 0");
 
 	rmdir(paths.dir);
 	rmdir(base);
@@ -390,24 +431,34 @@ static void test_handle_record_first_use(void)
 	snprintf(base, sizeof(base), "/tmp/lota-profile-fbase.%d", getpid());
 
 	if (!key) {
-		CHECK(0, "key generation");
+		TEST("key generation");
+		if (!0)
+			FAIL("expected: 0");
 		goto out;
 	}
 	cert = mint_cert(key, "publisher-first-use", 1);
 	if (!cert || write_cert_der(der_path, cert) != 0 ||
 	    profile_paths_from_anchor_base(base, der_path, &paths) != 0) {
-		CHECK(0, "profile setup");
+		TEST("profile setup");
+		if (!0)
+			FAIL("expected: 0");
 		goto out;
 	}
 
-	CHECK(profile_aik_handle_save(&paths, 0x81010012) == 0,
-	      "a handle is recorded for a publisher that has never enrolled");
-	CHECK(stat(paths.dir, &st) == 0 && S_ISDIR(st.st_mode) &&
-		      (st.st_mode & 0777) == 0700,
-	      "recording the handle creates the profile directory root-only");
-	CHECK(profile_aik_handle_load(&paths, &handle) == 0 &&
-		      handle == 0x81010012,
-	      "the recorded handle reads back");
+	TEST("a handle is recorded for a publisher that has never enrolled");
+	if (profile_aik_handle_save(&paths, 0x81010012) != 0)
+		FAIL("expected: profile_aik_handle_save(&paths, 0x81010012) "
+		     "== 0");
+	TEST("recording the handle creates the profile directory root-only");
+	if (!(stat(paths.dir, &st) == 0 && S_ISDIR(st.st_mode) &&
+	      (st.st_mode & 0777) == 0700))
+		FAIL("expected: stat(paths.dir, &st) == 0 && "
+		     "S_ISDIR(st.st_mode) && (st.st_mode & 0777) == 0700");
+	TEST("the recorded handle reads back");
+	if (!(profile_aik_handle_load(&paths, &handle) == 0 &&
+	      handle == 0x81010012))
+		FAIL("expected: profile_aik_handle_load(&paths, &handle) == 0 "
+		     "&& handle == 0x81010012");
 
 	unlink(paths.aik_handle);
 	rmdir(paths.dir);
@@ -439,7 +490,9 @@ static void write_handle_record(const char *base, const char *profile_id,
 		 LOTA_PROFILE_AIK_HANDLE_FILE);
 	f = fopen_priv(path, "w");
 	if (!f) {
-		CHECK(0, "write a sibling handle record");
+		TEST("write a sibling handle record");
+		if (!0)
+			FAIL("expected: 0");
 		return;
 	}
 	fputs(contents, f);
@@ -470,27 +523,40 @@ static void test_handle_record_round_trip(void)
 	snprintf(base, sizeof(base), "/tmp/lota-profile-hbase.%d", getpid());
 
 	if (!key) {
-		CHECK(0, "key generation");
+		TEST("key generation");
+		if (!0)
+			FAIL("expected: 0");
 		goto out;
 	}
 	cert = mint_cert(key, "publisher-a", 1);
 	if (!cert || write_cert_der(der_path, cert) != 0 ||
 	    profile_paths_from_anchor_base(base, der_path, &paths) != 0) {
-		CHECK(0, "profile setup");
+		TEST("profile setup");
+		if (!0)
+			FAIL("expected: 0");
 		goto out;
 	}
 
-	CHECK(profile_aik_handle_load(&paths, &handle) == -ENOENT,
-	      "a profile that has not provisioned records no handle");
+	TEST("a profile that has not provisioned records no handle");
+	if (profile_aik_handle_load(&paths, &handle) != -ENOENT)
+		FAIL("expected: profile_aik_handle_load(&paths, &handle) == "
+		     "-ENOENT");
 
-	CHECK(profile_dir_ensure(&paths) == 0, "profile directory");
-	CHECK(profile_aik_handle_save(&paths, 0x81010011) == 0,
-	      "handle is recorded");
-	CHECK(profile_aik_handle_load(&paths, &handle) == 0 &&
-		      handle == 0x81010011,
-	      "recorded handle reads back");
-	CHECK(profile_aik_handle_save(&paths, 0) == -EINVAL,
-	      "handle 0 is not a handle");
+	TEST("profile directory");
+	if (profile_dir_ensure(&paths) != 0)
+		FAIL("expected: profile_dir_ensure(&paths) == 0");
+	TEST("handle is recorded");
+	if (profile_aik_handle_save(&paths, 0x81010011) != 0)
+		FAIL("expected: profile_aik_handle_save(&paths, 0x81010011) "
+		     "== 0");
+	TEST("recorded handle reads back");
+	if (!(profile_aik_handle_load(&paths, &handle) == 0 &&
+	      handle == 0x81010011))
+		FAIL("expected: profile_aik_handle_load(&paths, &handle) == 0 "
+		     "&& handle == 0x81010011");
+	TEST("handle 0 is not a handle");
+	if (profile_aik_handle_save(&paths, 0) != -EINVAL)
+		FAIL("expected: profile_aik_handle_save(&paths, 0) == -EINVAL");
 
 	unlink(paths.aik_handle);
 	rmdir(paths.dir);
@@ -511,12 +577,15 @@ static void test_handle_candidates(void)
 
 	snprintf(base, sizeof(base), "/tmp/lota-profile-cbase.%d", getpid());
 
-	CHECK(profile_aik_handle_candidates(base, base_handle, 4, out,
+	TEST("with no profiles the whole range is free");
+	if (!(profile_aik_handle_candidates(base, base_handle, 4, out,
 					    LOTA_PROFILE_MAX_AIK_HANDLES,
 					    &n) == 0 &&
-		      n == 4 && out[0] == base_handle &&
-		      out[3] == base_handle + 3,
-	      "with no profiles the whole range is free");
+	      n == 4 && out[0] == base_handle && out[3] == base_handle + 3))
+		FAIL("expected: profile_aik_handle_candidates(base, "
+		     "base_handle, 4, out, LOTA_PROFILE_MAX_AIK_HANDLES, &n) "
+		     "== 0 && n == 4 && out[0] == base_handle && out[3] == "
+		     "base_handle + 3");
 
 	/* two publishers hold the first and the third slot */
 	write_handle_record(base, "aaaa", "0x81010010\n");
@@ -530,28 +599,37 @@ static void test_handle_candidates(void)
 		mkdir(dir, 0700);
 	}
 
-	CHECK(profile_aik_handle_candidates(base, base_handle, 4, out,
+	TEST("recorded handles are skipped, the rest stays in order");
+	if (!(profile_aik_handle_candidates(base, base_handle, 4, out,
 					    LOTA_PROFILE_MAX_AIK_HANDLES,
 					    &n) == 0 &&
-		      n == 2 && out[0] == base_handle + 1 &&
-		      out[1] == base_handle + 3,
-	      "recorded handles are skipped, the rest stays in order");
+	      n == 2 && out[0] == base_handle + 1 && out[1] == base_handle + 3))
+		FAIL("expected: profile_aik_handle_candidates(base, "
+		     "base_handle, 4, out, LOTA_PROFILE_MAX_AIK_HANDLES, &n) "
+		     "== 0 && n == 2 && out[0] == base_handle + 1 && out[1] "
+		     "== base_handle + 3");
 
 	write_handle_record(base, "dddd", "0x81010011\n");
 	write_handle_record(base, "eeee", "0x81010013\n");
-	CHECK(profile_aik_handle_candidates(base, base_handle, 4, out,
+	TEST("a full range offers nothing rather than reusing a handle");
+	if (!(profile_aik_handle_candidates(base, base_handle, 4, out,
 					    LOTA_PROFILE_MAX_AIK_HANDLES,
 					    &n) == 0 &&
-		      n == 0,
-	      "a full range offers nothing rather than reusing a handle");
+	      n == 0))
+		FAIL("expected: profile_aik_handle_candidates(base, "
+		     "base_handle, 4, out, LOTA_PROFILE_MAX_AIK_HANDLES, &n) "
+		     "== 0 && n == 0");
 
 	/* unreadable record must not silently free the slot it names */
 	write_handle_record(base, "cccc", "not-a-handle\n");
-	CHECK(profile_aik_handle_candidates(base, base_handle, 4, out,
+	TEST("a corrupt record frees its slot for reallocation");
+	if (!(profile_aik_handle_candidates(base, base_handle, 4, out,
 					    LOTA_PROFILE_MAX_AIK_HANDLES,
 					    &n) == 0 &&
-		      n == 1 && out[0] == base_handle + 2,
-	      "a corrupt record frees its slot for reallocation");
+	      n == 1 && out[0] == base_handle + 2))
+		FAIL("expected: profile_aik_handle_candidates(base, "
+		     "base_handle, 4, out, LOTA_PROFILE_MAX_AIK_HANDLES, &n) "
+		     "== 0 && n == 1 && out[0] == base_handle + 2");
 
 	remove_profile_dir(base, "aaaa");
 	remove_profile_dir(base, "bbbb");
@@ -581,26 +659,36 @@ static void test_consent_record(void)
 	snprintf(base, sizeof(base), "/tmp/lota-profile-consent.%d", getpid());
 
 	if (!key) {
-		CHECK(0, "key generation");
+		TEST("key generation");
+		if (!0)
+			FAIL("expected: 0");
 		goto out;
 	}
 	cert = mint_cert(key, "publisher-a", 1);
 	if (!cert || write_cert_der(der_path, cert) != 0 ||
 	    profile_paths_from_anchor_base(base, der_path, &paths) != 0) {
-		CHECK(0, "profile setup");
+		TEST("profile setup");
+		if (!0)
+			FAIL("expected: 0");
 		goto out;
 	}
 
-	CHECK(profile_consent_time(&paths, &agreed) == -ENOENT,
-	      "a publisher nobody agreed to has no consent");
+	TEST("a publisher nobody agreed to has no consent");
+	if (profile_consent_time(&paths, &agreed) != -ENOENT)
+		FAIL("expected: profile_consent_time(&paths, &agreed) == "
+		     "-ENOENT");
 
-	CHECK(profile_consent_record(&paths, 0) == 0,
-	      "consent is recorded before anything enrolled");
-	CHECK(stat(paths.dir, &st) == 0,
-	      "recording consent creates the profile directory");
-	CHECK(profile_consent_time(&paths, &agreed) == 0 && agreed > 0 &&
-		      agreed <= time(NULL),
-	      "the record says when the decision was made");
+	TEST("consent is recorded before anything enrolled");
+	if (profile_consent_record(&paths, 0) != 0)
+		FAIL("expected: profile_consent_record(&paths, 0) == 0");
+	TEST("recording consent creates the profile directory");
+	if (stat(paths.dir, &st) != 0)
+		FAIL("expected: stat(paths.dir, &st) == 0");
+	TEST("the record says when the decision was made");
+	if (!(profile_consent_time(&paths, &agreed) == 0 && agreed > 0 &&
+	      agreed <= time(NULL)))
+		FAIL("expected: profile_consent_time(&paths, &agreed) == 0 && "
+		     "agreed > 0 && agreed <= time(NULL)");
 
 	/* record that is not one must not read as consent */
 	{
@@ -610,8 +698,10 @@ static void test_consent_record(void)
 			fputs("yes please\n", f);
 			fclose(f);
 		}
-		CHECK(profile_consent_time(&paths, &agreed) == -EINVAL,
-		      "a file that is not a consent record is refused");
+		TEST("a file that is not a consent record is refused");
+		if (profile_consent_time(&paths, &agreed) != -EINVAL)
+			FAIL("expected: profile_consent_time(&paths, &agreed) == "
+			     "-EINVAL");
 	}
 
 	unlink(paths.consent);
@@ -654,23 +744,31 @@ static void test_anchor_is_ca(void)
 		 (int)getpid());
 
 	if (!key) {
-		CHECK(0, "key generation");
+		TEST("key generation");
+		if (!0)
+			FAIL("expected: 0");
 		return;
 	}
 	ca = mint_ca_cert(key, "publisher anchor", 1);
 	leaf = mint_cert(key, "lota-attest-ca listener", 2);
 	if (!ca || !leaf || write_cert_pem(ca_path, ca) != 0 ||
 	    write_cert_pem(leaf_path, leaf) != 0) {
-		CHECK(0, "certificate fixtures");
+		TEST("certificate fixtures");
+		if (!0)
+			FAIL("expected: 0");
 		goto out;
 	}
 
-	CHECK(profile_anchor_is_ca(ca_path) == 1,
-	      "a CA anchor is recognised as one");
-	CHECK(profile_anchor_is_ca(leaf_path) == 0,
-	      "a listener certificate is not a CA anchor");
-	CHECK(profile_anchor_is_ca("/nonexistent/anchor.pem") < 0,
-	      "an anchor that cannot be read is an error, not an answer");
+	TEST("a CA anchor is recognised as one");
+	if (profile_anchor_is_ca(ca_path) != 1)
+		FAIL("expected: profile_anchor_is_ca(ca_path) == 1");
+	TEST("a listener certificate is not a CA anchor");
+	if (profile_anchor_is_ca(leaf_path) != 0)
+		FAIL("expected: profile_anchor_is_ca(leaf_path) == 0");
+	TEST("an anchor that cannot be read is an error, not an answer");
+	if (profile_anchor_is_ca("/nonexistent/anchor.pem") >= 0)
+		FAIL("expected: profile_anchor_is_ca(\"/nonexistent/anchor.pem\") "
+		     "< 0");
 
 out:
 	unlink(ca_path);
@@ -686,20 +784,27 @@ static void test_aik_slot_tally(void)
 	struct profile_aik_slots slots;
 
 	/* nothing recorded, nothing on the chip: the whole range is free */
-	CHECK(profile_aik_slot_tally(base, 8, NULL, 0, NULL, 0, &slots) == 0 &&
-		      slots.total == 8 && slots.free_slots == 8 &&
-		      slots.recorded == 0 && slots.unrecorded == 0,
-	      "an untouched range is entirely free");
+	TEST("an untouched range is entirely free");
+	if (!(profile_aik_slot_tally(base, 8, NULL, 0, NULL, 0, &slots) == 0 &&
+	      slots.total == 8 && slots.free_slots == 8 &&
+	      slots.recorded == 0 && slots.unrecorded == 0))
+		FAIL("expected: profile_aik_slot_tally(base, 8, NULL, 0, "
+		     "NULL, 0, &slots) == 0 && slots.total == 8 && "
+		     "slots.free_slots == 8 && slots.recorded == 0 && "
+		     "slots.unrecorded == 0");
 
 	{
 		const uint32_t recorded[] = { base, base + 1 };
 		const uint32_t in_use[] = { base, base + 1 };
 
-		CHECK(profile_aik_slot_tally(base, 8, recorded, 2, in_use, 2,
+		TEST("a slot a profile records is not an orphan");
+		if (!(profile_aik_slot_tally(base, 8, recorded, 2, in_use, 2,
 					     &slots) == 0 &&
-			      slots.recorded == 2 && slots.unrecorded == 0 &&
-			      slots.free_slots == 6,
-		      "a slot a profile records is not an orphan");
+		      slots.recorded == 2 && slots.unrecorded == 0 &&
+		      slots.free_slots == 6))
+			FAIL("expected: profile_aik_slot_tally(base, 8, recorded, 2, "
+			     "in_use, 2, &slots) == 0 && slots.recorded == 2 && "
+			     "slots.unrecorded == 0 && slots.free_slots == 6");
 	}
 
 	{
@@ -709,32 +814,45 @@ static void test_aik_slot_tally(void)
 		const uint32_t in_use[] = { base,     base + 1, base + 2,
 					    base + 3, base + 4, base + 6 };
 
-		CHECK(profile_aik_slot_tally(base, 8, recorded, 5, in_use, 6,
+		TEST("objects nothing records fill the rest of the range");
+		if (!(profile_aik_slot_tally(base, 8, recorded, 5, in_use, 6,
 					     &slots) == 0 &&
-			      slots.recorded == 5 && slots.unrecorded == 3 &&
-			      slots.free_slots == 0,
-		      "objects nothing records fill the rest of the range");
-		CHECK(slots.unrecorded_handles[0] == base + 2 &&
-			      slots.unrecorded_handles[1] == base + 3 &&
-			      slots.unrecorded_handles[2] == base + 4,
-		      "the orphaned handles are named, lowest first");
+		      slots.recorded == 5 && slots.unrecorded == 3 &&
+		      slots.free_slots == 0))
+			FAIL("expected: profile_aik_slot_tally(base, 8, recorded, 5, "
+			     "in_use, 6, &slots) == 0 && slots.recorded == 5 && "
+			     "slots.unrecorded == 3 && slots.free_slots == 0");
+		TEST("the orphaned handles are named, lowest first");
+		if (!(slots.unrecorded_handles[0] == base + 2 &&
+		      slots.unrecorded_handles[1] == base + 3 &&
+		      slots.unrecorded_handles[2] == base + 4))
+			FAIL("expected: slots.unrecorded_handles[0] == base + 2 && "
+			     "slots.unrecorded_handles[1] == base + 3 && "
+			     "slots.unrecorded_handles[2] == base + 4");
 	}
 
 	{
 		/* an object outside the range costs this build nothing */
 		const uint32_t in_use[] = { 0x81010002, base + 9 };
 
-		CHECK(profile_aik_slot_tally(base, 8, NULL, 0, in_use, 2,
+		TEST("handles outside the range are not this build's");
+		if (!(profile_aik_slot_tally(base, 8, NULL, 0, in_use, 2,
 					     &slots) == 0 &&
-			      slots.unrecorded == 0 && slots.free_slots == 8,
-		      "handles outside the range are not this build's");
+		      slots.unrecorded == 0 && slots.free_slots == 8))
+			FAIL("expected: profile_aik_slot_tally(base, 8, NULL, 0, "
+			     "in_use, 2, &slots) == 0 && slots.unrecorded == 0 && "
+			     "slots.free_slots == 8");
 	}
 
-	CHECK(profile_aik_slot_tally(base, 8, NULL, 0, NULL, 0, NULL) ==
-			      -EINVAL &&
-		      profile_aik_slot_tally(base, 0, NULL, 0, NULL, 0,
-					     &slots) == -EINVAL,
-	      "the tally rejects a missing result and an empty range");
+	TEST("the tally rejects a missing result and an empty range");
+	if (!(profile_aik_slot_tally(base, 8, NULL, 0, NULL, 0, NULL) ==
+		      -EINVAL &&
+	      profile_aik_slot_tally(base, 0, NULL, 0, NULL, 0, &slots) ==
+		      -EINVAL))
+		FAIL("expected: profile_aik_slot_tally(base, 8, NULL, 0, "
+		     "NULL, 0, NULL) == -EINVAL && "
+		     "profile_aik_slot_tally(base, 0, NULL, 0, NULL, 0, "
+		     "&slots) == -EINVAL");
 }
 
 /*
@@ -758,16 +876,23 @@ static void test_publisher_inventory(void)
 
 	snprintf(base, sizeof(base), "/tmp/lota-profile-inv.%d", getpid());
 
-	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+	TEST("a host that answered to nobody lists nobody");
+	if (!(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
 			      &count) == 0 &&
-		      count == 0,
-	      "a host that answered to nobody lists nobody");
+	      count == 0))
+		FAIL("expected: publishers_list(base, entries, "
+		     "LOTA_PROFILE_MAX_AIK_HANDLES, &count) == 0 && count == 0");
 
-	CHECK(profile_paths_from_id(base, id_a, &paths) == 0,
-	      "paths derive from an identity");
-	CHECK(profile_consent_record(&paths, 0) == 0, "publisher A agreed to");
-	CHECK(profile_aik_handle_save(&paths, 0x81010010) == 0,
-	      "publisher A holds a key");
+	TEST("paths derive from an identity");
+	if (profile_paths_from_id(base, id_a, &paths) != 0)
+		FAIL("expected: profile_paths_from_id(base, id_a, &paths) == 0");
+	TEST("publisher A agreed to");
+	if (profile_consent_record(&paths, 0) != 0)
+		FAIL("expected: profile_consent_record(&paths, 0) == 0");
+	TEST("publisher A holds a key");
+	if (profile_aik_handle_save(&paths, 0x81010010) != 0)
+		FAIL("expected: profile_aik_handle_save(&paths, 0x81010010) "
+		     "== 0");
 
 	/* directory whose name is not an identity is not a publisher */
 	{
@@ -777,18 +902,24 @@ static void test_publisher_inventory(void)
 		mkdir(junk, 0700);
 	}
 
-	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+	TEST("only directories named by an identity are publishers");
+	if (!(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
 			      &count) == 0 &&
-		      count == 1,
-	      "only directories named by an identity are publishers");
-	CHECK(strcmp(entries[0].id, id_a) == 0 && entries[0].consented &&
-		      entries[0].has_aik_handle &&
-		      entries[0].aik_handle == 0x81010010,
-	      "the entry says what is stored for that publisher");
-	CHECK(!entries[0].enrolled && !entries[0].has_cert,
-	      "agreed to but not enrolled is a state, not an omission");
-	CHECK(!entries[0].enroll_unreadable,
-	      "no record on disk is not an unreadable one");
+	      count == 1))
+		FAIL("expected: publishers_list(base, entries, "
+		     "LOTA_PROFILE_MAX_AIK_HANDLES, &count) == 0 && count == 1");
+	TEST("the entry says what is stored for that publisher");
+	if (!(strcmp(entries[0].id, id_a) == 0 && entries[0].consented &&
+	      entries[0].has_aik_handle && entries[0].aik_handle == 0x81010010))
+		FAIL("expected: strcmp(entries[0].id, id_a) == 0 && "
+		     "entries[0].consented && entries[0].has_aik_handle && "
+		     "entries[0].aik_handle == 0x81010010");
+	TEST("agreed to but not enrolled is a state, not an omission");
+	if (!(!entries[0].enrolled && !entries[0].has_cert))
+		FAIL("expected: !entries[0].enrolled && !entries[0].has_cert");
+	TEST("no record on disk is not an unreadable one");
+	if (entries[0].enroll_unreadable)
+		FAIL("expected: !entries[0].enroll_unreadable");
 
 	/* an unreadable record is held, not "never enrolled" */
 	{
@@ -800,30 +931,43 @@ static void test_publisher_inventory(void)
 		old_rec.version = LOTA_ENROLL_STATE_VERSION + 1;
 		fd = open(paths.enroll_state, O_WRONLY | O_CREAT | O_TRUNC,
 			  0600);
-		CHECK(fd >= 0, "an enrollment record can be planted");
+		TEST("an enrollment record can be planted");
+		if (fd < 0)
+			FAIL("expected: fd >= 0");
 		if (fd >= 0) {
-			CHECK(write(fd, &old_rec, sizeof(old_rec)) ==
-				      (ssize_t)sizeof(old_rec),
-			      "the planted record is a whole record");
+			TEST("the planted record is a whole record");
+			if (write(fd, &old_rec, sizeof(old_rec)) !=
+			    (ssize_t)sizeof(old_rec))
+				FAIL("expected: write(fd, &old_rec, sizeof(old_rec)) == "
+				     "(ssize_t)sizeof(old_rec)");
 			close(fd);
 		}
 
-		CHECK(publishers_list(base, entries,
+		TEST("the profile is still one publisher");
+		if (!(publishers_list(base, entries,
 				      LOTA_PROFILE_MAX_AIK_HANDLES,
 				      &count) == 0 &&
-			      count == 1,
-		      "the profile is still one publisher");
-		CHECK(!entries[0].enrolled && entries[0].enroll_unreadable &&
-			      entries[0].enroll_rc == -ENOTSUP,
-		      "a record this build cannot read is held, not absent");
+		      count == 1))
+			FAIL("expected: publishers_list(base, entries, "
+			     "LOTA_PROFILE_MAX_AIK_HANDLES, &count) == 0 && count == 1");
+		TEST("a record this build cannot read is held, not absent");
+		if (!(!entries[0].enrolled && entries[0].enroll_unreadable &&
+		      entries[0].enroll_rc == -ENOTSUP))
+			FAIL("expected: !entries[0].enrolled && "
+			     "entries[0].enroll_unreadable && entries[0].enroll_rc == "
+			     "-ENOTSUP");
 
-		CHECK(unlink(paths.enroll_state) == 0,
-		      "the planted record is removed again");
-		CHECK(publishers_list(base, entries,
+		TEST("the planted record is removed again");
+		if (unlink(paths.enroll_state) != 0)
+			FAIL("expected: unlink(paths.enroll_state) == 0");
+		TEST("removing it makes the profile unenrolled again");
+		if (!(publishers_list(base, entries,
 				      LOTA_PROFILE_MAX_AIK_HANDLES,
 				      &count) == 0 &&
-			      !entries[0].enroll_unreadable,
-		      "removing it makes the profile unenrolled again");
+		      !entries[0].enroll_unreadable))
+			FAIL("expected: publishers_list(base, entries, "
+			     "LOTA_PROFILE_MAX_AIK_HANDLES, &count) == 0 && "
+			     "!entries[0].enroll_unreadable");
 	}
 
 	/*
@@ -832,23 +976,34 @@ static void test_publisher_inventory(void)
 	 * full. The count is what the ceiling is stated against, so a publisher
 	 * that holds no key must not be counted as using a slot.
 	 */
-	CHECK(publishers_keys_held(entries, count) == 1,
-	      "a publisher holding a key counts against the TPM's slots");
+	TEST("a publisher holding a key counts against the TPM's slots");
+	if (publishers_keys_held(entries, count) != 1)
+		FAIL("expected: publishers_keys_held(entries, count) == 1");
 
-	CHECK(profile_paths_from_id(base, id_b, &paths) == 0 &&
-		      profile_consent_record(&paths, 0) == 0,
-	      "publisher B agreed to, with no key yet");
-	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+	TEST("publisher B agreed to, with no key yet");
+	if (!(profile_paths_from_id(base, id_b, &paths) == 0 &&
+	      profile_consent_record(&paths, 0) == 0))
+		FAIL("expected: profile_paths_from_id(base, id_b, &paths) == "
+		     "0 && profile_consent_record(&paths, 0) == 0");
+	TEST("a publisher with no key holds no slot");
+	if (!(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
 			      &count) == 0 &&
-		      count == 2 && publishers_keys_held(entries, count) == 1,
-	      "a publisher with no key holds no slot");
-	CHECK(publishers_forget(&paths) == 0, "publisher B forgotten");
-	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+	      count == 2 && publishers_keys_held(entries, count) == 1))
+		FAIL("expected: publishers_list(base, entries, "
+		     "LOTA_PROFILE_MAX_AIK_HANDLES, &count) == 0 && count == "
+		     "2 && publishers_keys_held(entries, count) == 1");
+	TEST("publisher B forgotten");
+	if (publishers_forget(&paths) != 0)
+		FAIL("expected: publishers_forget(&paths) == 0");
+	TEST("the inventory is back to one publisher");
+	if (!(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
 			      &count) == 0 &&
-		      count == 1,
-	      "the inventory is back to one publisher");
-	CHECK(profile_paths_from_id(base, id_a, &paths) == 0,
-	      "paths derive from publisher A again");
+	      count == 1))
+		FAIL("expected: publishers_list(base, entries, "
+		     "LOTA_PROFILE_MAX_AIK_HANDLES, &count) == 0 && count == 1");
+	TEST("paths derive from publisher A again");
+	if (profile_paths_from_id(base, id_a, &paths) != 0)
+		FAIL("expected: profile_paths_from_id(base, id_a, &paths) == 0");
 
 	/*
 	 * A handle is recorded before its key exists, so it can be given back
@@ -859,35 +1014,50 @@ static void test_publisher_inventory(void)
 	{
 		uint32_t handle = 0;
 
-		CHECK(profile_aik_handle_forget(&paths) == 0 &&
-			      profile_aik_handle_load(&paths, &handle) ==
-				      -ENOENT,
-		      "a reserved handle can be given back");
-		CHECK(profile_aik_handle_forget(&paths) == 0,
-		      "giving back a handle twice is not a failure");
-		CHECK(publishers_list(base, entries,
+		TEST("a reserved handle can be given back");
+		if (!(profile_aik_handle_forget(&paths) == 0 &&
+		      profile_aik_handle_load(&paths, &handle) == -ENOENT))
+			FAIL("expected: profile_aik_handle_forget(&paths) == 0 && "
+			     "profile_aik_handle_load(&paths, &handle) == -ENOENT");
+		TEST("giving back a handle twice is not a failure");
+		if (profile_aik_handle_forget(&paths) != 0)
+			FAIL("expected: profile_aik_handle_forget(&paths) == 0");
+		TEST("a profile that gave its handle back holds no key");
+		if (!(publishers_list(base, entries,
 				      LOTA_PROFILE_MAX_AIK_HANDLES,
 				      &count) == 0 &&
-			      count == 1 &&
-			      publishers_keys_held(entries, count) == 0,
-		      "a profile that gave its handle back holds no key");
-		CHECK(entries[0].consented,
-		      "and is still listed, with the consent it was given");
-		CHECK(profile_aik_handle_save(&paths, 0x81010010) == 0,
-		      "publisher A holds a key again");
+		      count == 1 && publishers_keys_held(entries, count) == 0))
+			FAIL("expected: publishers_list(base, entries, "
+			     "LOTA_PROFILE_MAX_AIK_HANDLES, &count) == 0 && count == "
+			     "1 && publishers_keys_held(entries, count) == 0");
+		TEST("and is still listed, with the consent it was given");
+		if (!entries[0].consented)
+			FAIL("expected: entries[0].consented");
+		TEST("publisher A holds a key again");
+		if (profile_aik_handle_save(&paths, 0x81010010) != 0)
+			FAIL("expected: profile_aik_handle_save(&paths, 0x81010010) "
+			     "== 0");
 	}
 
-	CHECK(publishers_forget(&paths) == 0, "a publisher can be forgotten");
-	CHECK(stat(paths.dir, &st) != 0,
-	      "forgetting leaves no directory behind");
-	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+	TEST("a publisher can be forgotten");
+	if (publishers_forget(&paths) != 0)
+		FAIL("expected: publishers_forget(&paths) == 0");
+	TEST("forgetting leaves no directory behind");
+	if (stat(paths.dir, &st) == 0)
+		FAIL("expected: stat(paths.dir, &st) != 0");
+	TEST("a forgotten publisher is gone from the inventory");
+	if (!(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
 			      &count) == 0 &&
-		      count == 0,
-	      "a forgotten publisher is gone from the inventory");
+	      count == 0))
+		FAIL("expected: publishers_list(base, entries, "
+		     "LOTA_PROFILE_MAX_AIK_HANDLES, &count) == 0 && count == 0");
 
-	CHECK(profile_paths_from_id(base, "not-hex", &paths) == -EINVAL &&
-		      profile_paths_from_id(base, id_b + 1, &paths) == -EINVAL,
-	      "an identity that is not one cannot become a path");
+	TEST("an identity that is not one cannot become a path");
+	if (!(profile_paths_from_id(base, "not-hex", &paths) == -EINVAL &&
+	      profile_paths_from_id(base, id_b + 1, &paths) == -EINVAL))
+		FAIL("expected: profile_paths_from_id(base, \"not-hex\", "
+		     "&paths) == -EINVAL && profile_paths_from_id(base, id_b "
+		     "+ 1, &paths) == -EINVAL");
 
 	{
 		char junk[PATH_MAX];
@@ -923,33 +1093,47 @@ static void test_host_wide_verbs_count_every_key(void)
 
 	snprintf(base, sizeof(base), "/tmp/lota-profile-seal.%d", getpid());
 
-	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+	TEST("a host with no publishers offers no per-publisher key");
+	if (!(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
 			      &count) == 0 &&
-		      count == 0,
-	      "a host with no publishers offers no per-publisher key");
+	      count == 0))
+		FAIL("expected: publishers_list(base, entries, "
+		     "LOTA_PROFILE_MAX_AIK_HANDLES, &count) == 0 && count == 0");
 
-	for (int i = 0; i < 3; i++)
-		CHECK(profile_paths_from_id(base, ids[i], &paths[i]) == 0 &&
-			      profile_consent_record(&paths[i], 0) == 0,
-		      "three publishers agreed to");
+	for (int i = 0; i < 3; i++) {
+		TEST("three publishers agreed to");
+		if (!(profile_paths_from_id(base, ids[i], &paths[i]) == 0 &&
+		      profile_consent_record(&paths[i], 0) == 0))
+			FAIL("expected: profile_paths_from_id(base, ids[i], "
+			     "&paths[i]) == 0 && profile_consent_record(&paths[i], 0) "
+			     "== 0");
+	}
 
 	/* two of the three hold a key; the third consented and stopped there */
-	CHECK(profile_aik_handle_save(&paths[0], 0x81010010) == 0 &&
-		      profile_aik_handle_save(&paths[1], 0x81010011) == 0,
-	      "two of the three hold an attestation key");
+	TEST("two of the three hold an attestation key");
+	if (!(profile_aik_handle_save(&paths[0], 0x81010010) == 0 &&
+	      profile_aik_handle_save(&paths[1], 0x81010011) == 0))
+		FAIL("expected: profile_aik_handle_save(&paths[0], "
+		     "0x81010010) == 0 && profile_aik_handle_save(&paths[1], "
+		     "0x81010011) == 0");
 
-	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+	TEST("all three publishers are listed");
+	if (!(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
 			      &count) == 0 &&
-		      count == 3,
-	      "all three publishers are listed");
-	CHECK(publishers_keys_held(entries, count) == 2,
-	      "a host-wide verb has two keys to act on, not one and not three");
+	      count == 3))
+		FAIL("expected: publishers_list(base, entries, "
+		     "LOTA_PROFILE_MAX_AIK_HANDLES, &count) == 0 && count == 3");
+	TEST("a host-wide verb has two keys to act on, not one and not three");
+	if (publishers_keys_held(entries, count) != 2)
+		FAIL("expected: publishers_keys_held(entries, count) == 2");
 
 	/* the default key is in use only on a host with no publishers */
-	CHECK(!publishers_default_key_in_use(count),
-	      "a host with publishers does not attest with the default key");
-	CHECK(publishers_default_key_in_use(0),
-	      "a host with no publisher does attest with the default key");
+	TEST("a host with publishers does not attest with the default key");
+	if (publishers_default_key_in_use(count))
+		FAIL("expected: !publishers_default_key_in_use(count)");
+	TEST("a host with no publisher does attest with the default key");
+	if (!publishers_default_key_in_use(0))
+		FAIL("expected: publishers_default_key_in_use(0)");
 
 	for (int i = 0; i < 3; i++)
 		publishers_forget(&paths[i]);
@@ -974,50 +1158,78 @@ static void test_aik_auth_at_rest_state(void)
 
 	snprintf(base, sizeof(base), "/tmp/lota-profile-auth.%d", getpid());
 
-	CHECK(profile_paths_from_id(base, id, &paths) == 0 &&
-		      profile_consent_record(&paths, 0) == 0,
-	      "a publisher to hold an authorization");
+	TEST("a publisher to hold an authorization");
+	if (!(profile_paths_from_id(base, id, &paths) == 0 &&
+	      profile_consent_record(&paths, 0) == 0))
+		FAIL("expected: profile_paths_from_id(base, id, &paths) == 0 "
+		     "&& profile_consent_record(&paths, 0) == 0");
 
 	snprintf(plain, sizeof(plain), "%s/%s", paths.dir,
 		 LOTA_PROFILE_AIK_AUTH_FILE);
 	snprintf(sealed, sizeof(sealed), "%s/%s", paths.dir,
 		 LOTA_PROFILE_AIK_AUTH_SEALED_FILE);
 
-	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_NONE,
-	      "a publisher holding no authorization reports none");
-	CHECK(!profile_aik_auth_exposed(PROFILE_AIK_AUTH_NONE),
-	      "no authorization is not an exposed one");
+	TEST("a publisher holding no authorization reports none");
+	if (profile_aik_auth_state(&paths) != PROFILE_AIK_AUTH_NONE)
+		FAIL("expected: profile_aik_auth_state(&paths) == "
+		     "PROFILE_AIK_AUTH_NONE");
+	TEST("no authorization is not an exposed one");
+	if (profile_aik_auth_exposed(PROFILE_AIK_AUTH_NONE))
+		FAIL("expected: !profile_aik_auth_exposed(PROFILE_AIK_AUTH_NONE)");
 
-	CHECK(write_all(plain, (const uint8_t *)"auth", 4) == 0,
-	      "sidecar written");
-	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_PLAINTEXT,
-	      "the shipped default reports plaintext on disk");
-	CHECK(profile_aik_auth_exposed(PROFILE_AIK_AUTH_PLAINTEXT),
-	      "plaintext is readable from a captured disk");
+	TEST("sidecar written");
+	if (write_all(plain, (const uint8_t *)"auth", 4) != 0)
+		FAIL("expected: write_all(plain, (const uint8_t *)\"auth\", "
+		     "4) == 0");
+	TEST("the shipped default reports plaintext on disk");
+	if (profile_aik_auth_state(&paths) != PROFILE_AIK_AUTH_PLAINTEXT)
+		FAIL("expected: profile_aik_auth_state(&paths) == "
+		     "PROFILE_AIK_AUTH_PLAINTEXT");
+	TEST("plaintext is readable from a captured disk");
+	if (!profile_aik_auth_exposed(PROFILE_AIK_AUTH_PLAINTEXT))
+		FAIL("expected: profile_aik_auth_exposed(PROFILE_AIK_AUTH_PLAINTEXT)");
 
-	CHECK(write_all(sealed, (const uint8_t *)"blob", 4) == 0,
-	      "sealed written");
-	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_BOTH,
-	      "adopting sealing without strict reports both copies");
-	CHECK(profile_aik_auth_exposed(PROFILE_AIK_AUTH_BOTH),
-	      "sealing a second copy protects nothing while the first remains");
+	TEST("sealed written");
+	if (write_all(sealed, (const uint8_t *)"blob", 4) != 0)
+		FAIL("expected: write_all(sealed, (const uint8_t *)\"blob\", "
+		     "4) == 0");
+	TEST("adopting sealing without strict reports both copies");
+	if (profile_aik_auth_state(&paths) != PROFILE_AIK_AUTH_BOTH)
+		FAIL("expected: profile_aik_auth_state(&paths) == "
+		     "PROFILE_AIK_AUTH_BOTH");
+	TEST("sealing a second copy protects nothing while the first remains");
+	if (!profile_aik_auth_exposed(PROFILE_AIK_AUTH_BOTH))
+		FAIL("expected: profile_aik_auth_exposed(PROFILE_AIK_AUTH_BOTH)");
 
 	unlink(plain);
-	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_SEALED,
-	      "strict reports sealed with no plaintext copy");
-	CHECK(!profile_aik_auth_exposed(PROFILE_AIK_AUTH_SEALED),
-	      "sealed alone is the state that is not exposed");
+	TEST("strict reports sealed with no plaintext copy");
+	if (profile_aik_auth_state(&paths) != PROFILE_AIK_AUTH_SEALED)
+		FAIL("expected: profile_aik_auth_state(&paths) == "
+		     "PROFILE_AIK_AUTH_SEALED");
+	TEST("sealed alone is the state that is not exposed");
+	if (profile_aik_auth_exposed(PROFILE_AIK_AUTH_SEALED))
+		FAIL("expected: !profile_aik_auth_exposed(PROFILE_AIK_AUTH_SEALED)");
 
 	/* empty file is not a copy of anything */
-	CHECK(write_all(plain, (const uint8_t *)"", 0) == 0, "empty sidecar");
-	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_SEALED,
-	      "an interrupted write is not counted as a stored authorization");
+	TEST("empty sidecar");
+	if (write_all(plain, (const uint8_t *)"", 0) != 0)
+		FAIL("expected: write_all(plain, (const uint8_t *)\"\", 0) == "
+		     "0");
+	TEST("an interrupted write is not counted as a stored authorization");
+	if (profile_aik_auth_state(&paths) != PROFILE_AIK_AUTH_SEALED)
+		FAIL("expected: profile_aik_auth_state(&paths) == "
+		     "PROFILE_AIK_AUTH_SEALED");
 
-	CHECK(profile_aik_auth_state(NULL) == PROFILE_AIK_AUTH_NONE,
-	      "no profile reports no authorization");
-	CHECK(profile_aik_auth_state_str(PROFILE_AIK_AUTH_SEALED) != NULL &&
-		      profile_aik_auth_state_str(PROFILE_AIK_AUTH_NONE) != NULL,
-	      "every state names itself");
+	TEST("no profile reports no authorization");
+	if (profile_aik_auth_state(NULL) != PROFILE_AIK_AUTH_NONE)
+		FAIL("expected: profile_aik_auth_state(NULL) == "
+		     "PROFILE_AIK_AUTH_NONE");
+	TEST("every state names itself");
+	if (!(profile_aik_auth_state_str(PROFILE_AIK_AUTH_SEALED) != NULL &&
+	      profile_aik_auth_state_str(PROFILE_AIK_AUTH_NONE) != NULL))
+		FAIL("expected: profile_aik_auth_state_str(PROFILE_AIK_AUTH_SEALED) "
+		     "!= NULL && profile_aik_auth_state_str(PROFILE_AIK_AUTH_NONE) "
+		     "!= NULL");
 
 	unlink(plain);
 	unlink(sealed);
@@ -1046,23 +1258,30 @@ static void test_a_listing_that_does_not_fit_is_refused(void)
 	for (size_t i = 0; i < bound + extra; i++) {
 		memset(id, (int)('0' + (i % 10)), sizeof(id) - 1);
 		id[sizeof(id) - 1] = '\0';
-		CHECK(profile_paths_from_id(base, id, &paths) == 0 &&
-			      profile_consent_record(&paths, 0) == 0,
-		      "a publisher is agreed to");
+		TEST("a publisher is agreed to");
+		if (!(profile_paths_from_id(base, id, &paths) == 0 &&
+		      profile_consent_record(&paths, 0) == 0))
+			FAIL("expected: profile_paths_from_id(base, id, &paths) == 0 "
+			     "&& profile_consent_record(&paths, 0) == 0");
 	}
 
-	CHECK(publishers_list(base, entries, bound, &count) == -ENOBUFS,
-	      "a listing that cannot hold every profile is refused, not cut short");
-	CHECK(count == bound + extra,
-	      "and the refusal says how many profiles there are");
+	TEST("a listing too small for every profile is refused, not cut short");
+	if (publishers_list(base, entries, bound, &count) != -ENOBUFS)
+		FAIL("expected: publishers_list(base, entries, bound, &count) "
+		     "== -ENOBUFS");
+	TEST("and the refusal says how many profiles there are");
+	if (!(count == bound + extra))
+		FAIL("expected: count == bound + extra");
 
 	{
 		struct publisher_entry *all = NULL;
 		size_t seen = 0;
 
-		CHECK(publishers_list_alloc(base, &all, &seen) == 0 &&
-			      seen == bound + extra && all != NULL,
-		      "the allocating listing holds every profile there is");
+		TEST("the allocating listing holds every profile there is");
+		if (!(publishers_list_alloc(base, &all, &seen) == 0 &&
+		      seen == bound + extra && all != NULL))
+			FAIL("expected: publishers_list_alloc(base, &all, &seen) == 0 "
+			     "&& seen == bound + extra && all != NULL");
 		free(all);
 	}
 
@@ -1073,9 +1292,11 @@ static void test_a_listing_that_does_not_fit_is_refused(void)
 
 		snprintf(empty, sizeof(empty), "/tmp/lota-profile-none.%d",
 			 getpid());
-		CHECK(publishers_list_alloc(empty, &none, &seen) == 0 &&
-			      none == NULL && seen == 0,
-		      "a host that answered to nobody allocates nothing");
+		TEST("a host that answered to nobody allocates nothing");
+		if (!(publishers_list_alloc(empty, &none, &seen) == 0 &&
+		      none == NULL && seen == 0))
+			FAIL("expected: publishers_list_alloc(empty, &none, &seen) == "
+			     "0 && none == NULL && seen == 0");
 	}
 
 	for (size_t i = 0; i < bound + extra; i++) {
@@ -1108,21 +1329,29 @@ static void test_a_rotated_pin_is_visible(void)
 	tmp_path(anchor_path, sizeof(anchor_path), "listener.pem");
 
 	if (!gen1 || !gen2) {
-		CHECK(0, "two listener keys are generated");
+		TEST("two listener keys are generated");
+		if (!0)
+			FAIL("expected: 0");
 		goto out;
 	}
 	cert1 = mint_cert(gen1, "verifier.example", 41);
 	cert2 = mint_cert(gen2, "verifier.example", 42);
 	if (!cert1 || !cert2 || write_cert_pem(anchor_path, cert1) != 0) {
-		CHECK(0, "the first listener certificate is written");
+		TEST("the first listener certificate is written");
+		if (!0)
+			FAIL("expected: 0");
 		goto out;
 	}
 
-	CHECK(profile_id_from_anchor(anchor_path, id1, sizeof(id1)) == 0,
-	      "the first generation names a publisher");
-	CHECK(profile_paths_from_id(base, id1, &paths) == 0 &&
-		      profile_dir_ensure(&paths) == 0,
-	      "the first generation gets a profile");
+	TEST("the first generation names a publisher");
+	if (profile_id_from_anchor(anchor_path, id1, sizeof(id1)) != 0)
+		FAIL("expected: profile_id_from_anchor(anchor_path, id1, "
+		     "sizeof(id1)) == 0");
+	TEST("the first generation gets a profile");
+	if (!(profile_paths_from_id(base, id1, &paths) == 0 &&
+	      profile_dir_ensure(&paths) == 0))
+		FAIL("expected: profile_paths_from_id(base, id1, &paths) == 0 "
+		     "&& profile_dir_ensure(&paths) == 0");
 
 	memset(&rec, 0, sizeof(rec));
 	rec.magic = LOTA_ENROLL_STATE_MAGIC;
@@ -1130,43 +1359,63 @@ static void test_a_rotated_pin_is_visible(void)
 	rec.ca_port = 18703;
 	snprintf(rec.ca_server, sizeof(rec.ca_server), "%s", "127.0.0.1");
 	snprintf(rec.ca_cert, sizeof(rec.ca_cert), "%s", anchor_path);
-	CHECK(enroll_state_save_path(paths.enroll_state, &rec) == 0,
-	      "the first generation records where it enrolled");
+	TEST("the first generation records where it enrolled");
+	if (enroll_state_save_path(paths.enroll_state, &rec) != 0)
+		FAIL("expected: enroll_state_save_path(paths.enroll_state, "
+		     "&rec) == 0");
 
-	CHECK(publisher_anchor_names_another(base, id1, named, sizeof(named)) ==
-		      0,
-	      "before the rotation the anchor still names its own profile");
+	TEST("before the rotation the anchor still names its own profile");
+	if (publisher_anchor_names_another(base, id1, named, sizeof(named)) !=
+	    0)
+		FAIL("expected: publisher_anchor_names_another(base, id1, "
+		     "named, sizeof(named)) == 0");
 
 	/* the publisher re-issues the listener certificate over a new key */
-	CHECK(write_cert_pem(anchor_path, cert2) == 0,
-	      "the listener certificate is re-issued in place");
-	CHECK(profile_id_from_anchor(anchor_path, id2, sizeof(id2)) == 0 &&
-		      strcmp(id1, id2) != 0,
-	      "the re-issued certificate is a different publisher here");
+	TEST("the listener certificate is re-issued in place");
+	if (write_cert_pem(anchor_path, cert2) != 0)
+		FAIL("expected: write_cert_pem(anchor_path, cert2) == 0");
+	TEST("the re-issued certificate is a different publisher here");
+	if (!(profile_id_from_anchor(anchor_path, id2, sizeof(id2)) == 0 &&
+	      strcmp(id1, id2) != 0))
+		FAIL("expected: profile_id_from_anchor(anchor_path, id2, "
+		     "sizeof(id2)) == 0 && strcmp(id1, id2) != 0");
 
-	CHECK(publisher_anchor_names_another(base, id1, named, sizeof(named)) ==
-			      1 &&
-		      strcmp(named, id2) == 0,
-	      "the first profile is named as one its own anchor left behind");
+	TEST("the first profile is named as one its own anchor left behind");
+	if (!(publisher_anchor_names_another(base, id1, named, sizeof(named)) ==
+		      1 &&
+	      strcmp(named, id2) == 0))
+		FAIL("expected: publisher_anchor_names_another(base, id1, "
+		     "named, sizeof(named)) == 1 && strcmp(named, id2) == 0");
 
 	/* the second enrollment, at the same endpoint */
-	CHECK(profile_paths_from_id(base, id2, &paths) == 0 &&
-		      profile_dir_ensure(&paths) == 0,
-	      "the second generation gets a profile of its own");
+	TEST("the second generation gets a profile of its own");
+	if (!(profile_paths_from_id(base, id2, &paths) == 0 &&
+	      profile_dir_ensure(&paths) == 0))
+		FAIL("expected: profile_paths_from_id(base, id2, &paths) == 0 "
+		     "&& profile_dir_ensure(&paths) == 0");
 	snprintf(rec.ca_cert, sizeof(rec.ca_cert), "%s", anchor_path);
-	CHECK(enroll_state_save_path(paths.enroll_state, &rec) == 0,
-	      "the second generation records the same endpoint");
+	TEST("the second generation records the same endpoint");
+	if (enroll_state_save_path(paths.enroll_state, &rec) != 0)
+		FAIL("expected: enroll_state_save_path(paths.enroll_state, "
+		     "&rec) == 0");
 
-	CHECK(publishers_endpoint_shared(base, id2, "127.0.0.1", 18703, named,
+	TEST("the second enrollment finds the first at the same endpoint");
+	if (!(publishers_endpoint_shared(base, id2, "127.0.0.1", 18703, named,
 					 sizeof(named)) == 1 &&
-		      strcmp(named, id1) == 0,
-	      "the second enrollment finds the first at the same endpoint");
-	CHECK(publisher_anchor_names_another(base, id2, named, sizeof(named)) ==
-		      0,
-	      "the profile the anchor names now is not left behind");
-	CHECK(publishers_endpoint_shared(base, id2, "127.0.0.1", 18704, named,
-					 sizeof(named)) == 0,
-	      "a different port at the same host is a different endpoint");
+	      strcmp(named, id1) == 0))
+		FAIL("expected: publishers_endpoint_shared(base, id2, "
+		     "\"127.0.0.1\", 18703, named, sizeof(named)) == 1 && "
+		     "strcmp(named, id1) == 0");
+	TEST("the profile the anchor names now is not left behind");
+	if (publisher_anchor_names_another(base, id2, named, sizeof(named)) !=
+	    0)
+		FAIL("expected: publisher_anchor_names_another(base, id2, "
+		     "named, sizeof(named)) == 0");
+	TEST("a different port at the same host is a different endpoint");
+	if (publishers_endpoint_shared(base, id2, "127.0.0.1", 18704, named,
+				       sizeof(named)) != 0)
+		FAIL("expected: publishers_endpoint_shared(base, id2, "
+		     "\"127.0.0.1\", 18704, named, sizeof(named)) == 0");
 
 	/* a publisher that never enrolled has no anchor to compare */
 	{
@@ -1174,9 +1423,11 @@ static void test_a_rotated_pin_is_visible(void)
 
 		memset(never, '7', sizeof(never) - 1);
 		never[sizeof(never) - 1] = '\0';
-		CHECK(publisher_anchor_names_another(base, never, named,
-						     sizeof(named)) < 0,
-		      "a profile with no record is not called left behind");
+		TEST("a profile with no record is not called left behind");
+		if (publisher_anchor_names_another(base, never, named,
+						   sizeof(named)) >= 0)
+			FAIL("expected: publisher_anchor_names_another(base, never, "
+			     "named, sizeof(named)) < 0");
 	}
 
 	remove_profile_dir(base, id1);
@@ -1207,7 +1458,7 @@ out:
 
 int main(void)
 {
-	printf("=== Publisher profile identity tests ===\n\n");
+	test_begin("profile id");
 
 	test_identity_follows_the_key();
 	test_unusable_anchor_is_refused();
@@ -1224,6 +1475,5 @@ int main(void)
 	test_aik_auth_at_rest_state();
 	test_a_rotated_pin_is_visible();
 
-	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

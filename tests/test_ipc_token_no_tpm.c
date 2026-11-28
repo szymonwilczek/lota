@@ -541,7 +541,7 @@ static int probe_protect_pid(struct ipc_context *ctx)
 
 static void test_protect_pid_is_not_an_internal_error(void)
 {
-	TEST("a server that enforces nothing does not call it an internal error");
+	TEST("a server enforcing nothing does not call it an internal error");
 
 	if (protect_result == LOTA_IPC_ERR_INTERNAL) {
 		FAIL("a structural refusal is reported as a broken daemon");
@@ -552,8 +552,6 @@ static void test_protect_pid_is_not_an_internal_error(void)
 		FAIL("a server with no enforcement accepted a policy change");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_protect_pid_refusal_names_itself(void)
@@ -562,8 +560,6 @@ static void test_protect_pid_refusal_names_itself(void)
 
 	if (protect_result != LOTA_IPC_ERR_NO_ENFORCEMENT)
 		FAIL("the refusal does not name what is missing");
-	else
-		PASS();
 }
 
 static void test_protect_pid_refusal_is_logged(void)
@@ -579,8 +575,6 @@ static void test_protect_pid_refusal_is_logged(void)
 		FAIL("the log does not name the refused command");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -611,8 +605,6 @@ static void protect_pid_named(struct ipc_context *ctx, uint32_t pid,
 		FAIL("no answer");
 	else if (resp.result != LOTA_IPC_ERR_BAD_REQUEST)
 		FAIL("the pid reached the policy checks");
-	else
-		PASS();
 }
 
 static void test_protect_pid_names_no_pid(struct ipc_context *ctx)
@@ -691,14 +683,11 @@ static void test_protect_pid_nested_namespace(struct ipc_context *ctx)
 	close(pfd[0]);
 
 	if (WIFEXITED(status) && WEXITSTATUS(status) == 77) {
-		tests_run--;
-		printf("SKIP: no user and PID namespace here\n");
+		SKIP("no user and PID namespace here");
 	} else if (grandchild <= 0 || protect_map_pid == 0) {
 		FAIL("the request never reached the map");
 	} else if (protect_map_pid != (uint32_t)grandchild) {
 		FAIL("the map got a PID other than the caller's");
-	} else {
-		PASS();
 	}
 }
 
@@ -711,8 +700,6 @@ static void test_no_tpm_is_refused(void)
 		FAIL("an unsigned token was issued");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -730,8 +717,6 @@ static void test_absent_tpm_is_not_a_tpm_failure(void)
 		FAIL("a host with no TPM reports one as having failed");
 		return;
 	}
-
-	PASS();
 }
 
 /* Every other refusal in GET_TOKEN says why in the log. This one has to too */
@@ -753,8 +738,6 @@ static void test_refusal_is_logged(void)
 		FAIL("the log does not name the missing TPM");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -789,8 +772,6 @@ static void test_capability_line_promises_no_tokens(struct ipc_context *ctx)
 		FAIL("the line does not name the verb that does issue tokens");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -857,8 +838,6 @@ static void test_unnamed_publisher_is_refused(void)
 		FAIL("the refusal does not name the missing publisher");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_unnamed_publisher_refusal_is_logged(void)
@@ -879,14 +858,12 @@ static void test_unnamed_publisher_refusal_is_logged(void)
 		FAIL("the log does not name what the caller has to send");
 		return;
 	}
-
-	PASS();
 }
 
 /* lota_anticheat.h: a title on a single-publisher machine names nobody */
 static void test_one_publisher_still_answers_an_unnamed_caller(void)
 {
-	TEST("a host serving one publisher still answers a request naming none");
+	TEST("a host with one publisher still answers a request naming none");
 
 	if (unnamed_result == LOTA_IPC_ERR_UNKNOWN_PROFILE) {
 		FAIL("the only publisher on the host was treated as ambiguous");
@@ -898,8 +875,6 @@ static void test_one_publisher_still_answers_an_unnamed_caller(void)
 		FAIL("the request stopped somewhere other than the TPM");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_boot_evidence_without_tpm(struct ipc_context *ctx)
@@ -924,8 +899,6 @@ static void test_boot_evidence_without_tpm(struct ipc_context *ctx)
 		FAIL("no answer");
 	else if (resp.result != LOTA_IPC_ERR_NO_TPM)
 		FAIL("the refusal does not say there is no TPM");
-	else
-		PASS();
 }
 
 int main(void)
@@ -933,7 +906,7 @@ int main(void)
 	struct ipc_context ctx;
 	int listen_fd, ret;
 
-	printf("=== what the bridge answers holding nothing ===\n\n");
+	test_begin("ipc token no tpm");
 
 	/* agent logs to stderr when it is not run under systemd */
 	unsetenv("JOURNAL_STREAM");
@@ -945,13 +918,13 @@ int main(void)
 
 	listen_fd = listener_open();
 	if (listen_fd < 0) {
-		printf("SKIP: cannot create a Unix socket in /tmp (%s)\n",
-		       strerror(-listen_fd));
+		SKIP("cannot create a Unix socket in /tmp (%s)",
+		     strerror(-listen_fd));
 		return 0;
 	}
 
 	if (ipc_init_activated(&ctx, listen_fd) < 0) {
-		printf("SKIP: ipc_init_activated failed\n");
+		SKIP("ipc_init_activated failed");
 		close(listen_fd);
 		unlink(test_socket);
 		return 0;
@@ -969,7 +942,7 @@ int main(void)
 
 	ret = probe_refusal(&ctx);
 	if (ret < 0) {
-		printf("SKIP: no answer to GET_TOKEN (%s)\n", strerror(-ret));
+		SKIP("no answer to GET_TOKEN (%s)", strerror(-ret));
 		ipc_cleanup(&ctx);
 		unlink(test_socket);
 		unlink(test_log);
@@ -983,7 +956,7 @@ int main(void)
 
 	ret = probe_protect_pid(&ctx);
 	if (ret < 0) {
-		printf("SKIP: no answer to PROTECT_PID (%s)\n", strerror(-ret));
+		SKIP("no answer to PROTECT_PID (%s)", strerror(-ret));
 	} else {
 		test_protect_pid_is_not_an_internal_error();
 		test_protect_pid_refusal_names_itself();
@@ -998,16 +971,16 @@ int main(void)
 	unnamed_profiles_set(&ctx, 1);
 	ret = probe_unnamed(&ctx);
 	if (ret < 0)
-		printf("SKIP: no answer to GET_TOKEN with one publisher (%s)\n",
-		       strerror(-ret));
+		SKIP("no answer to GET_TOKEN with one publisher (%s)",
+		     strerror(-ret));
 	else
 		test_one_publisher_still_answers_an_unnamed_caller();
 
 	unnamed_profiles_set(&ctx, 2);
 	ret = probe_unnamed(&ctx);
 	if (ret < 0) {
-		printf("SKIP: no answer to GET_TOKEN with two publishers (%s)\n",
-		       strerror(-ret));
+		SKIP("no answer to GET_TOKEN with two publishers (%s)",
+		     strerror(-ret));
 	} else {
 		test_unnamed_publisher_is_refused();
 		test_unnamed_publisher_refusal_is_logged();
@@ -1019,6 +992,5 @@ int main(void)
 	unlink(test_socket);
 	unlink(test_log);
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

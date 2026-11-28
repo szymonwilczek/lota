@@ -16,6 +16,9 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "fuzz leak detection"
+
 export LC_ALL=C
 unset ASAN_OPTIONS LSAN_OPTIONS
 
@@ -24,19 +27,18 @@ BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$REPO_DIR/build}}"
 OFF_MSG="leak detection is off for this process"
 
 if ! command -v clang >/dev/null 2>&1; then
-    echo "[fuzz-leaks] clang not installed" >&2
-    exit 2
+    FAIL "clang not installed"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 fail() {
-    echo "[fuzz-leaks] FAIL: $1" >&2
+    FAIL "%s" "$1"
     if [[ -n "${2:-}" && -f "$2" ]]; then
-	sed -n '1,30p' "$2" >&2
+	FAIL "%s" "$(sed -n '1,30p' "$2")"
     fi
-    exit 1
 }
 
 # Refuses ptrace with EPERM, then runs its arguments.
@@ -129,12 +131,12 @@ no_artifacts() {
 	! compgen -G "$dir/leak-*" >/dev/null
 }
 
-echo "[fuzz-leaks] the seccomp wrapper refuses ptrace"
+TEST "the seccomp wrapper refuses ptrace"
 run probe 1 "$WORK_DIR/clean" -runs=1
 [[ "$(cat "$WORK_DIR/run-probe/rc")" != 125 ]] ||
     fail "the wrapper could not install its filter"
 
-echo "[fuzz-leaks] a clean target under refused ptrace runs clean"
+TEST "a clean target under refused ptrace runs clean"
 run clean-wrapped 1 "$WORK_DIR/clean" -runs=20000
 log="$WORK_DIR/run-clean-wrapped/log"
 [[ "$(cat "$WORK_DIR/run-clean-wrapped/rc")" == 0 ]] ||
@@ -144,7 +146,7 @@ grep -q "$OFF_MSG" "$log" ||
 no_artifacts clean-wrapped ||
     fail "a clean target left a reproducer behind" "$log"
 
-echo "[fuzz-leaks] a leaking target under refused ptrace does not report a crash"
+TEST "a leaking target under refused ptrace does not report a crash"
 run leaky-wrapped 1 "$WORK_DIR/leaky" -runs=20000
 log="$WORK_DIR/run-leaky-wrapped/log"
 [[ "$(cat "$WORK_DIR/run-leaky-wrapped/rc")" == 0 ]] ||
@@ -152,17 +154,17 @@ log="$WORK_DIR/run-leaky-wrapped/log"
 no_artifacts leaky-wrapped ||
     fail "left a reproducer for a check that could not run" "$log"
 
-echo "[fuzz-leaks] where ptrace works, a leak is still reported"
+TEST "where ptrace works, a leak is still reported"
 run leaky-host 0 "$WORK_DIR/leaky" -runs=20000
 log="$WORK_DIR/run-leaky-host/log"
 if grep -q "$OFF_MSG" "$log"; then
-    echo "[fuzz-leaks]   this host refuses ptrace attach; skipped"
+    SKIP "this host refuses ptrace attach"
 else
     [[ "$(cat "$WORK_DIR/run-leaky-host/rc")" != 0 ]] ||
 	fail "a leaking target exited 0 on a host where leaks can be checked" "$log"
     grep -q "detected memory leaks" "$log" ||
 	fail "the leak was not reported" "$log"
-    echo "[fuzz-leaks] a clean target on this host keeps leak detection on"
+    TEST "a clean target on this host keeps leak detection on"
     run clean-host 0 "$WORK_DIR/clean" -runs=20000
     log="$WORK_DIR/run-clean-host/log"
     [[ "$(cat "$WORK_DIR/run-clean-host/rc")" == 0 ]] ||
@@ -172,8 +174,8 @@ else
 fi
 
 target="$BUILD_DIR/fuzz-bpf-event-budget"
+TEST "the built fuzz target under refused ptrace runs clean"
 if [[ -x "$target" ]]; then
-    echo "[fuzz-leaks] the built fuzz target under refused ptrace runs clean"
     run target-wrapped 1 "$target" -runs=20000
     log="$WORK_DIR/run-target-wrapped/log"
     [[ "$(cat "$WORK_DIR/run-target-wrapped/rc")" == 0 ]] ||
@@ -181,7 +183,7 @@ if [[ -x "$target" ]]; then
     no_artifacts target-wrapped ||
 	fail "$target left a reproducer behind" "$log"
 else
-    echo "[fuzz-leaks] $target not built; skipped (run 'make fuzz-all')"
+    SKIP "%s not built (run 'make fuzz-all')" "$target"
 fi
 
-echo "[fuzz-leaks] PASS"
+test_end

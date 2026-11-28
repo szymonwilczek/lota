@@ -470,11 +470,9 @@ static void test_repeat_answers_share_one_walk(struct ipc_context *ctx)
 		snprintf(msg, sizeof(msg),
 			 "three answers walked the protected set %d times",
 			 coverage_walks);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-
-	PASS();
 }
 
 /* The walk belongs to the set, not to the caller */
@@ -500,8 +498,6 @@ static void test_second_caller_pays_nothing(struct ipc_context *ctx)
 		FAIL("the second answer walked the protected set again");
 		return;
 	}
-
-	PASS();
 }
 
 /* A new mapping may lack a digest and bumps no epoch: forget must re-walk */
@@ -528,8 +524,6 @@ static void test_mapping_change_costs_a_fresh_walk(struct ipc_context *ctx)
 		FAIL("the answer after a mapping change reused the old verdict");
 		return;
 	}
-
-	PASS();
 }
 
 /* Membership changes bump the epoch, which alone forces a re-walk */
@@ -556,8 +550,6 @@ static void test_set_change_costs_a_fresh_walk(struct ipc_context *ctx)
 		FAIL("the answer after a set change reused the old verdict");
 		return;
 	}
-
-	PASS();
 }
 
 /* Each call one second past the last, so every tick is due */
@@ -608,8 +600,6 @@ static void test_mapping_loss_is_announced(struct ipc_context *ctx)
 		FAIL("the return to full coverage was not announced");
 		return;
 	}
-
-	PASS();
 }
 
 /* A burst of mappings within one tick costs one walk */
@@ -641,8 +631,6 @@ static void test_mappings_within_a_tick_share_one_walk(struct ipc_context *ctx)
 		FAIL("the due tick did not fold the forgotten verdict once");
 		return;
 	}
-
-	PASS();
 }
 
 /* An exited PID is dropped by the fold alone; the tick must run it */
@@ -698,7 +686,6 @@ static void test_protected_exit_is_announced(struct ipc_context *ctx)
 		goto out;
 	}
 
-	PASS();
 out:
 	if (child > 0) {
 		kill(child, SIGKILL);
@@ -712,24 +699,24 @@ int main(void)
 	struct ipc_context ctx;
 	int listen_fd;
 
-	printf("=== Status coverage-cost tests ===\n\n");
+	test_begin("ipc coverage cost");
 
 	listen_fd = listener_open();
 	if (listen_fd < 0) {
-		printf("SKIP: cannot create a Unix socket in /tmp (%s)\n",
-		       strerror(-listen_fd));
+		SKIP("cannot create a Unix socket in /tmp (%s)",
+		     strerror(-listen_fd));
 		return 0;
 	}
 
 	if (ipc_init_activated(&ctx, listen_fd) < 0) {
-		printf("SKIP: ipc_init_activated failed\n");
+		SKIP("ipc_init_activated failed");
 		close(listen_fd);
 		unlink(test_socket);
 		return 0;
 	}
 
 	if (protect_self() < 0) {
-		printf("SKIP: out of memory building the protected set\n");
+		SKIP("out of memory building the protected set");
 		ipc_cleanup(&ctx);
 		close(listen_fd);
 		unlink(test_socket);
@@ -747,6 +734,5 @@ int main(void)
 	ipc_cleanup(&ctx);
 	unlink(test_socket);
 
-	printf("\n%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

@@ -28,12 +28,6 @@
 #include "../include/lota_gaming.h"
 #include "../include/lota_ipc.h"
 
-static void SKIP(const char *msg)
-{
-	tests_passed++;
-	printf("SKIP (%s)\n", msg);
-}
-
 static char test_socket[64];
 static int mock_errno;
 
@@ -289,10 +283,9 @@ static void test_named_publisher_reaches_the_agent(void)
 
 		snprintf(msg, sizeof(msg),
 			 "mock agent rejected the exchange (code %d)", rc);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 static void test_unknown_publisher_fails_the_connection(void)
@@ -327,7 +320,6 @@ static void test_unknown_publisher_fails_the_connection(void)
 		lota_disconnect(client);
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -370,7 +362,6 @@ static void test_bad_request_is_not_an_unknown_publisher(void)
 		FAIL("a bad request was reported as something else");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -410,10 +401,9 @@ static void expect_transport_failure(const char *name, scenario_fn scenario,
 		return;
 	}
 	if (lota_connect_last_error() != want) {
-		FAIL(wrong);
+		FAIL("%s", wrong);
 		return;
 	}
-	PASS();
 }
 
 static void test_a_silent_agent_is_not_an_unknown_publisher(void)
@@ -458,7 +448,6 @@ static void test_malformed_publisher_is_refused(void)
 		lota_disconnect(client);
 		return;
 	}
-	PASS();
 }
 
 static void test_no_publisher_sends_nothing(void)
@@ -497,7 +486,6 @@ static void test_no_publisher_sends_nothing(void)
 		FAIL("the agent saw a SET_PROFILE nobody asked for");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -555,7 +543,6 @@ static void test_consent_required_is_distinguishable(void)
 		FAIL("the title cannot tell consent from any other failure");
 		return;
 	}
-	PASS();
 }
 
 /* a full key-slot range reaches the title as its own code, not AGENT_ERROR */
@@ -614,7 +601,6 @@ static void test_no_key_slot_is_distinguishable(void)
 		FAIL("the title cannot tell a full handle range from a fault");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -729,7 +715,6 @@ static void test_tpm_lockout_is_distinguishable(void)
 		FAIL("the refusal does not name the lockout");
 		return;
 	}
-	PASS();
 }
 
 static void server_token_too_many(int client_fd)
@@ -792,7 +777,6 @@ static void test_process_limit_is_distinguishable(void)
 		FAIL("the refusal does not name the process limit");
 		return;
 	}
-	PASS();
 }
 
 typedef void (*scenario_fn)(int client_fd);
@@ -821,7 +805,6 @@ static void test_connect_struct_size(void)
 			return;
 		}
 	}
-	PASS();
 
 	TEST("connect: undersized struct_size -> NULL");
 	{
@@ -843,7 +826,6 @@ static void test_connect_struct_size(void)
 			return;
 		}
 	}
-	PASS();
 
 	TEST("connect: struct_size from a newer caller reaches the socket");
 	{
@@ -867,7 +849,6 @@ static void test_connect_struct_size(void)
 			return;
 		}
 	}
-	PASS();
 }
 
 static void test_token_only_publisher_is_distinguishable(void)
@@ -925,7 +906,6 @@ static void test_token_only_publisher_is_distinguishable(void)
 		FAIL("a verdict was claimed for a publisher nobody reports to");
 		return;
 	}
-	PASS();
 }
 
 /* two headers state the same bits;
@@ -942,12 +922,11 @@ static void test_flag_constants_agree(void)
 		FAIL("IPC and SDK status flags disagree");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("=== Publisher selection tests ===\n\n");
+	test_begin("publisher profile");
 
 	snprintf(test_socket, sizeof(test_socket), "/tmp/lota-pubsel.%d.sock",
 		 getpid());
@@ -966,6 +945,5 @@ int main(void)
 	test_token_only_publisher_is_distinguishable();
 	test_flag_constants_agree();
 
-	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

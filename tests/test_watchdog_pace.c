@@ -6,24 +6,16 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
-#include <stdio.h>
 #include <string.h>
 
 #include "../src/agent/watchdog_pace.h"
-
-static int tests_run;
-static int tests_passed;
+#include "test.h"
 
 static void check(const char *name, int ok, const char *why)
 {
-	tests_run++;
-	printf("  [%2d] %-58s ", tests_run, name);
-	if (ok) {
-		tests_passed++;
-		printf("PASS\n");
-	} else {
-		printf("FAIL: %s\n", why);
-	}
+	TEST(name);
+	if (!ok)
+		FAIL("%s", why);
 }
 
 #define DEADLINE 60000
@@ -188,7 +180,7 @@ static void test_mixed(void)
 
 int main(void)
 {
-	printf("\n=== watchdog pacing tests ===\n\n");
+	test_begin("watchdog pace");
 
 	test_owing();
 	test_sleep_bound();
@@ -197,6 +189,5 @@ int main(void)
 	test_slow_round();
 	test_mixed();
 
-	printf("\n%d/%d passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

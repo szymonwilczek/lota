@@ -224,8 +224,6 @@ static void test_assemble(void)
 		FAIL("result.json is not the session's result");
 	else if (exists(dir, ".result.json.tmp"))
 		FAIL("the temporary file is left behind");
-	else
-		PASS();
 	free(got);
 
 	TEST("a complete session is left as it is");
@@ -234,8 +232,6 @@ static void test_assemble(void)
 		FAIL("lota-bench run failed");
 	else if (!got || !expected_result || strcmp(got, expected_result))
 		FAIL("result.json changed");
-	else
-		PASS();
 	free(got);
 }
 
@@ -263,8 +259,6 @@ static void test_refusals(void)
 		FAIL("writing the run");
 	else if (run(dir, NULL, NULL) != 1 || exists(dir, "result.json"))
 		FAIL("joined a run under the wrong name");
-	else
-		PASS();
 	free(other);
 
 	TEST("a run file that is a link is refused");
@@ -278,30 +272,22 @@ static void test_refusals(void)
 		FAIL("planting the link");
 	else if (run(dir, NULL, NULL) != 1 || exists(dir, "result.json"))
 		FAIL("followed the link");
-	else
-		PASS();
 
 	TEST("options do not change a session that has begun");
 	if (run(dir, "--game", "Other Title") != EXIT_BENCH_USAGE)
 		FAIL("accepted --game on a session");
 	else if (run(dir, "--rounds", "3") != EXIT_BENCH_USAGE)
 		FAIL("accepted --rounds on a session");
-	else
-		PASS();
 
 	TEST("a directory without a plan holds no session");
 	snprintf(dir, sizeof(dir), "%s/empty", base);
 	if (mkdir(dir, 0755) || run(dir, NULL, NULL) != 1)
 		FAIL("took a run without a plan");
-	else
-		PASS();
 
 	TEST("a path the launch options cannot carry is refused");
 	snprintf(dir, sizeof(dir), "%s/a,b", base);
 	if (run(dir, "--game", "Example Title") != 1 || exists(base, "a,b"))
 		FAIL("began a session under a ','");
-	else
-		PASS();
 
 	TEST("a session refused for its options leaves no directory");
 	snprintf(dir, sizeof(dir), "%s/refused", base);
@@ -314,8 +300,6 @@ static void test_refusals(void)
 		 run(dir, "--rounds", "3") != EXIT_BENCH_USAGE ||
 		 !exists(base, "refused"))
 		FAIL("removed a directory it did not make");
-	else
-		PASS();
 }
 
 static int setup(void)
@@ -334,7 +318,7 @@ static int setup(void)
 		runs[i] = write_run(i);
 		if (!runs[i] || bench_validate(runs[i], strlen(runs[i]), one,
 					       err, sizeof(err))) {
-			printf("run %u: %s\n", i, runs[i] ? err : "write");
+			FAIL("run %u: %s", i, runs[i] ? err : "write");
 			goto out;
 		}
 		doc->runs[i] = one->runs[0];
@@ -388,7 +372,6 @@ static void test_find_log(void)
 		FAIL("second look");
 		goto out;
 	}
-	PASS();
 out:
 	if (fd >= 0)
 		close(fd);
@@ -439,7 +422,6 @@ static void test_warm(void)
 		FAIL("followed a link");
 		goto out;
 	}
-	PASS();
 out:
 	close(fd);
 	unlink(path);
@@ -448,12 +430,12 @@ out:
 
 int main(void)
 {
-	printf("lota-bench run:\n");
+	test_begin("bench run");
 
 	if (setup()) {
-		printf("setup failed\n");
+		FAIL("setup failed");
 		cleanup();
-		return 1;
+		return test_end();
 	}
 	test_assemble();
 	test_refusals();
@@ -463,6 +445,5 @@ int main(void)
 	cleanup();
 	free(expected_result);
 	free(doc);
-	printf("%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

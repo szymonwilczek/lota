@@ -77,8 +77,6 @@ static void test_spent_commitment_needs_an_operator(void)
 	TEST("a commitment spent by shutdown exits for an operator");
 	if (rc != LOTA_EXIT_OPERATOR_ACTION)
 		FAIL("a refusal only a reboot can clear is restartable");
-	else
-		PASS();
 }
 
 /* Every other refusing verdict is the same class: the register is spent. */
@@ -94,8 +92,6 @@ static void test_every_refusing_verdict_needs_an_operator(void)
 		TEST(verdict_name(state));
 		if (rc != LOTA_EXIT_OPERATOR_ACTION)
 			FAIL("restarting into this verdict cannot clear it");
-		else
-			PASS();
 	}
 }
 
@@ -112,8 +108,6 @@ static void test_a_correctable_refusal_stays_restartable(void)
 		FAIL("a correctable refusal was routed to the operator exit");
 	else if (rc != 1)
 		FAIL("the errno leaked into the exit status");
-	else
-		PASS();
 }
 
 /*
@@ -130,11 +124,10 @@ static void test_no_errno_reaches_the_exit_status(void)
 	for (i = 0; i < sizeof(errnos) / sizeof(*errnos); i++) {
 		if (lota_daemon_exit_status(-errnos[i],
 					    TPM_PCR14_AWAITING_EXTEND) != 1) {
-			FAIL(strerror(errnos[i]));
+			FAIL("%s", strerror(errnos[i]));
 			return;
 		}
 	}
-	PASS();
 }
 
 /*
@@ -149,8 +142,6 @@ static void test_a_refusal_before_the_commitment_needs_an_operator(void)
 	TEST("a refusal of the policy or the object exits for an operator");
 	if (rc != LOTA_EXIT_OPERATOR_ACTION)
 		FAIL("the status run_daemon() chose did not survive");
-	else
-		PASS();
 }
 
 /* The mapping that was already there, kept honest. */
@@ -161,8 +152,6 @@ static void test_refused_host_configuration_needs_an_operator(void)
 	TEST("a host configuration the agent refuses exits for an operator");
 	if (rc != LOTA_EXIT_OPERATOR_ACTION)
 		FAIL("-ENOTSUP no longer reaches the operator exit");
-	else
-		PASS();
 }
 
 /*
@@ -177,8 +166,6 @@ static void test_a_key_with_no_record_needs_an_operator(void)
 	TEST("a key with no record exits for an operator");
 	if (rc != LOTA_EXIT_OPERATOR_ACTION)
 		FAIL("-EKEYREVOKED exits for a restart");
-	else
-		PASS();
 }
 
 /*
@@ -197,21 +184,19 @@ static void test_a_startup_check_that_could_not_read_is_retried(void)
 	TEST("a startup check that could not read exits 1");
 	for (i = 0; i < sizeof(transient) / sizeof(*transient); i++) {
 		if (lota_startup_check_exit_status(-transient[i]) != 1) {
-			FAIL(strerror(transient[i]));
+			FAIL("%s", strerror(transient[i]));
 			return;
 		}
 	}
-	PASS();
 
 	TEST("a startup check that refused what it read exits for an operator");
 	for (i = 0; i < sizeof(refused) / sizeof(*refused); i++) {
 		if (lota_startup_check_exit_status(-refused[i]) !=
 		    LOTA_EXIT_OPERATOR_ACTION) {
-			FAIL(strerror(refused[i]));
+			FAIL("%s", strerror(refused[i]));
 			return;
 		}
 	}
-	PASS();
 }
 
 /*
@@ -231,11 +216,10 @@ static void test_a_refused_object_needs_an_operator(void)
 		if (lota_daemon_exit_status(lota_bpf_load_refusal(-refused[i]),
 					    TPM_PCR14_ALREADY_COMMITTED) !=
 		    LOTA_EXIT_OPERATOR_ACTION) {
-			FAIL(strerror(refused[i]));
+			FAIL("%s", strerror(refused[i]));
 			return;
 		}
 	}
-	PASS();
 
 	TEST("a load that could not finish exits 1");
 	for (i = 0; i < sizeof(transient) / sizeof(*transient); i++) {
@@ -243,11 +227,10 @@ static void test_a_refused_object_needs_an_operator(void)
 
 		if (lota_daemon_exit_status(err, TPM_PCR14_ALREADY_COMMITTED) !=
 		    1) {
-			FAIL(strerror(transient[i]));
+			FAIL("%s", strerror(transient[i]));
 			return;
 		}
 	}
-	PASS();
 }
 
 /* A daemon that served and stopped carries its own status out. */
@@ -261,8 +244,6 @@ static void test_a_served_daemon_carries_its_own_status(void)
 	else if (lota_daemon_exit_status(-EBADF, TPM_PCR14_ALREADY_COMMITTED) !=
 		 1)
 		FAIL("a failed event loop does not exit 1");
-	else
-		PASS();
 }
 
 static FILE *open_unit(const char *unit)
@@ -335,8 +316,6 @@ static void test_the_unit_prevents_restarting_on_that_status(void)
 	if (!unit_prevents_restart_on("lota-agent.service",
 				      LOTA_EXIT_OPERATOR_ACTION))
 		FAIL("RestartPreventExitStatus does not list the status");
-	else
-		PASS();
 }
 
 /*
@@ -358,8 +337,6 @@ static void test_the_unit_stops_a_failure_that_repeats(void)
 		FAIL("the interval is not infinity");
 	else if (strtol(burst, NULL, 10) <= 0)
 		FAIL("the burst is not a positive count");
-	else
-		PASS();
 }
 
 /* @unit's first @key= line with its continuations joined; false when none */
@@ -416,8 +393,6 @@ static void test_the_unit_stops_its_socket_on_that_status(void)
 		FAIL("the stop is not conditioned on exit status 78");
 	else if (!strstr(cmd, "systemctl --no-block stop lota-agent.socket"))
 		FAIL("the socket is not stopped without blocking");
-	else
-		PASS();
 }
 
 /*
@@ -437,8 +412,6 @@ static void test_the_unit_does_not_retry_a_running_instance(void)
 	if (!unit_prevents_restart_on("lota-agent.service",
 				      LOTA_EXIT_ALREADY_RUNNING))
 		FAIL("RestartPreventExitStatus does not list the status");
-	else
-		PASS();
 }
 
 /*
@@ -453,8 +426,6 @@ static void test_the_attest_unit_stops_on_a_spent_commitment(void)
 	if (!unit_prevents_restart_on("lota-attest.service",
 				      LOTA_EXIT_OPERATOR_ACTION))
 		FAIL("RestartPreventExitStatus does not list the status");
-	else
-		PASS();
 }
 
 /*
@@ -467,13 +438,11 @@ static void test_the_two_no_retry_statuses_differ(void)
 
 	if (LOTA_EXIT_ALREADY_RUNNING == LOTA_EXIT_OPERATOR_ACTION)
 		FAIL("the two no-retry statuses collapsed into one");
-	else
-		PASS();
 }
 
 int main(void)
 {
-	printf("=== Daemon exit status tests ===\n\n");
+	test_begin("daemon exit status");
 
 	test_spent_commitment_needs_an_operator();
 	test_every_refusing_verdict_needs_an_operator();
@@ -492,6 +461,5 @@ int main(void)
 	test_the_attest_unit_stops_on_a_spent_commitment();
 	test_the_two_no_retry_statuses_differ();
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

@@ -382,7 +382,6 @@ static void test_live_listener_is_not_taken(struct ipc_context *ctx)
 		return;
 	}
 
-	PASS();
 	close(victim_fd);
 	unlink(victim_socket);
 }
@@ -407,8 +406,6 @@ static void test_refusal_leaves_the_socket_connectable(struct ipc_context *ctx)
 
 	if (!connectable(victim_socket))
 		FAIL("the socket is gone or no longer answers");
-	else
-		PASS();
 
 	ipc_remove_listener(ctx, victim_socket);
 	close(victim_fd);
@@ -461,8 +458,6 @@ test_probe_without_a_descriptor_keeps_the_path(struct ipc_context *ctx)
 		FAIL("the refusal does not name the descriptor limit");
 	else if (!connectable(victim_socket))
 		FAIL("the socket is gone or no longer answers");
-	else
-		PASS();
 
 	if (ret == 0)
 		ipc_remove_listener(ctx, victim_socket);
@@ -503,8 +498,6 @@ test_stale_socket_file_is_not_mistaken_for_a_listener(struct ipc_context *ctx)
 	ret = ipc_add_listener(ctx, victim_socket);
 	if (ret == -EADDRINUSE)
 		FAIL("a leftover was refused as somebody's listener");
-	else
-		PASS();
 
 	if (ret == 0)
 		ipc_remove_listener(ctx, victim_socket);
@@ -534,8 +527,6 @@ static void test_untouched_socket_is_not_replaced(void)
 
 	if (ipc_socket_was_replaced(victim_socket, st.st_dev, st.st_ino))
 		FAIL("a socket nobody touched was reported replaced");
-	else
-		PASS();
 
 	close(fd);
 	unlink(victim_socket);
@@ -558,9 +549,7 @@ static void test_unlinked_socket_is_replaced(void)
 
 	unlink(victim_socket);
 
-	if (ipc_socket_was_replaced(victim_socket, st.st_dev, st.st_ino))
-		PASS();
-	else
+	if (!ipc_socket_was_replaced(victim_socket, st.st_dev, st.st_ino))
 		FAIL("an unlinked socket was reported as still ours");
 
 	close(fd);
@@ -593,10 +582,8 @@ static void test_rebound_socket_is_replaced(void)
 		return;
 	}
 
-	if (ipc_socket_was_replaced(victim_socket, before.st_dev,
-				    before.st_ino))
-		PASS();
-	else
+	if (!ipc_socket_was_replaced(victim_socket, before.st_dev,
+				     before.st_ino))
 		FAIL("a socket bound over ours was reported as still ours");
 
 	close(old_fd);
@@ -616,8 +603,6 @@ static void test_unrecorded_identity_is_not_a_replacement(void)
 
 	if (ipc_socket_was_replaced(victim_socket, 0, 0))
 		FAIL("an unrecorded listener was reported replaced");
-	else
-		PASS();
 }
 
 /*
@@ -673,7 +658,6 @@ static void test_bind_failure_is_left_to_the_caller(struct ipc_context *ctx)
 		FAIL("wrote to stderr, so the caller cannot keep a pending login quiet");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
@@ -681,7 +665,7 @@ int main(void)
 	struct ipc_context ctx;
 	int listen_fd;
 
-	printf("=== Extra IPC listeners against a path in use ===\n\n");
+	test_begin("ipc extra listener");
 
 	/* the agent logs to stderr when it is not run under systemd */
 	unsetenv("JOURNAL_STREAM");
@@ -695,13 +679,13 @@ int main(void)
 
 	listen_fd = listener_at(test_socket);
 	if (listen_fd < 0) {
-		printf("SKIP: cannot create a Unix socket in /tmp (%s)\n",
-		       strerror(-listen_fd));
+		SKIP("cannot create a Unix socket in /tmp (%s)",
+		     strerror(-listen_fd));
 		return 0;
 	}
 
 	if (ipc_init_activated(&ctx, listen_fd) < 0) {
-		printf("SKIP: ipc_init_activated failed\n");
+		SKIP("ipc_init_activated failed");
 		close(listen_fd);
 		unlink(test_socket);
 		return 0;
@@ -721,6 +705,5 @@ int main(void)
 	unlink(test_socket);
 	unlink(victim_socket);
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

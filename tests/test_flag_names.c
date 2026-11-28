@@ -11,22 +11,11 @@
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
-#include <stdio.h>
 #include <string.h>
 
 #include "../include/lota_gaming.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 static int names(uint32_t flag, const char *want)
 {
@@ -42,16 +31,27 @@ int main(void)
 {
 	char buf[256] = { 0 };
 
-	printf("=== SDK flag decoder tests ===\n\n");
+	test_begin("flag names");
 
-	CHECK(names(LOTA_FLAG_ATTESTED, "ATTESTED"), "ATTESTED is named");
-	CHECK(names(LOTA_FLAG_TPM_OK, "TPM_OK"), "TPM_OK is named");
-	CHECK(names(LOTA_FLAG_IOMMU_OK, "IOMMU_OK"), "IOMMU_OK is named");
-	CHECK(names(LOTA_FLAG_BPF_LOADED, "BPF_LOADED"), "BPF_LOADED is named");
-	CHECK(names(LOTA_FLAG_SECURE_BOOT, "SECURE_BOOT"),
-	      "SECURE_BOOT is named");
+	TEST("ATTESTED is named");
+	if (!names(LOTA_FLAG_ATTESTED, "ATTESTED"))
+		FAIL("expected: names(LOTA_FLAG_ATTESTED, \"ATTESTED\")");
+	TEST("TPM_OK is named");
+	if (!names(LOTA_FLAG_TPM_OK, "TPM_OK"))
+		FAIL("expected: names(LOTA_FLAG_TPM_OK, \"TPM_OK\")");
+	TEST("IOMMU_OK is named");
+	if (!names(LOTA_FLAG_IOMMU_OK, "IOMMU_OK"))
+		FAIL("expected: names(LOTA_FLAG_IOMMU_OK, \"IOMMU_OK\")");
+	TEST("BPF_LOADED is named");
+	if (!names(LOTA_FLAG_BPF_LOADED, "BPF_LOADED"))
+		FAIL("expected: names(LOTA_FLAG_BPF_LOADED, \"BPF_LOADED\")");
+	TEST("SECURE_BOOT is named");
+	if (!names(LOTA_FLAG_SECURE_BOOT, "SECURE_BOOT"))
+		FAIL("expected: names(LOTA_FLAG_SECURE_BOOT, \"SECURE_BOOT\")");
 	/* the one this file exists for */
-	CHECK(names(LOTA_FLAG_TOKEN_ONLY, "TOKEN_ONLY"), "TOKEN_ONLY is named");
+	TEST("TOKEN_ONLY is named");
+	if (!names(LOTA_FLAG_TOKEN_ONLY, "TOKEN_ONLY"))
+		FAIL("expected: names(LOTA_FLAG_TOKEN_ONLY, \"TOKEN_ONLY\")");
 
 	/*
 	 * the case player actually sees on host whose publisher runs no verifier:
@@ -61,48 +61,71 @@ int main(void)
 				     LOTA_FLAG_SECURE_BOOT |
 				     LOTA_FLAG_TOKEN_ONLY,
 			     buf, sizeof(buf));
-	CHECK(strstr(buf, "TOKEN_ONLY") && !strstr(buf, "ATTESTED"),
-	      "a token-only host decodes as healthy and unjudged");
+	TEST("a token-only host decodes as healthy and unjudged");
+	if (!(strstr(buf, "TOKEN_ONLY") && !strstr(buf, "ATTESTED")))
+		FAIL("expected: strstr(buf, \"TOKEN_ONLY\") && !strstr(buf, "
+		     "\"ATTESTED\")");
 
 	/*
 	 * Protected process ended locally is a thing a player did, so the title
 	 * showing them why the machine reads as it does has to be able to say it.
 	 * Undecoded, the same host looks unexplained.
 	 */
-	CHECK(names(LOTA_FLAG_PROTECTED_TERMINATED, "PROTECTED_TERMINATED"),
-	      "PROTECTED_TERMINATED is named");
+	TEST("PROTECTED_TERMINATED is named");
+	if (!names(LOTA_FLAG_PROTECTED_TERMINATED, "PROTECTED_TERMINATED"))
+		FAIL("expected: names(LOTA_FLAG_PROTECTED_TERMINATED, "
+		     "\"PROTECTED_TERMINATED\")");
 
 	lota_flags_to_string(LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK |
 				     LOTA_FLAG_PROTECTED_TERMINATED,
 			     buf, sizeof(buf));
-	CHECK(strstr(buf, "ATTESTED") && strstr(buf, "PROTECTED_TERMINATED"),
-	      "an attested host that ended a protected process decodes as both");
+	TEST("an attested host that ended a protected process decodes as both");
+	if (!(strstr(buf, "ATTESTED") && strstr(buf, "PROTECTED_TERMINATED")))
+		FAIL("expected: strstr(buf, \"ATTESTED\") && strstr(buf, "
+		     "\"PROTECTED_TERMINATED\")");
 
-	CHECK(names(LOTA_FLAG_BENCH, "BENCH"), "BENCH is named");
+	TEST("BENCH is named");
+	if (!names(LOTA_FLAG_BENCH, "BENCH"))
+		FAIL("expected: names(LOTA_FLAG_BENCH, \"BENCH\")");
 
 	/* the policy a title reads off a token has to print as it reads */
-	CHECK(names(LOTA_FLAG_ENFORCE, "ENFORCE"), "ENFORCE is named");
-	CHECK(names(LOTA_FLAG_STRICT_MMAP, "STRICT_MMAP"),
-	      "STRICT_MMAP is named");
-	CHECK(names(LOTA_FLAG_STRICT_EXEC, "STRICT_EXEC"),
-	      "STRICT_EXEC is named");
-	CHECK(names(LOTA_FLAG_STRICT_MODULES, "STRICT_MODULES"),
-	      "STRICT_MODULES is named");
-	CHECK(names(LOTA_FLAG_BLOCK_ANON_EXEC, "BLOCK_ANON_EXEC"),
-	      "BLOCK_ANON_EXEC is named");
-	CHECK(names(LOTA_FLAG_BLOCK_PTRACE, "BLOCK_PTRACE"),
-	      "BLOCK_PTRACE is named");
-	CHECK(names(LOTA_FLAG_AGENT_RESTARTED, "AGENT_RESTARTED"),
-	      "AGENT_RESTARTED is named");
-	CHECK(names(LOTA_FLAG_REENROLLING, "REENROLLING"),
-	      "REENROLLING is named");
-	CHECK(names(LOTA_FLAG_EVENTS_LOST, "EVENTS_LOST"),
-	      "EVENTS_LOST is named");
+	TEST("ENFORCE is named");
+	if (!names(LOTA_FLAG_ENFORCE, "ENFORCE"))
+		FAIL("expected: names(LOTA_FLAG_ENFORCE, \"ENFORCE\")");
+	TEST("STRICT_MMAP is named");
+	if (!names(LOTA_FLAG_STRICT_MMAP, "STRICT_MMAP"))
+		FAIL("expected: names(LOTA_FLAG_STRICT_MMAP, \"STRICT_MMAP\")");
+	TEST("STRICT_EXEC is named");
+	if (!names(LOTA_FLAG_STRICT_EXEC, "STRICT_EXEC"))
+		FAIL("expected: names(LOTA_FLAG_STRICT_EXEC, \"STRICT_EXEC\")");
+	TEST("STRICT_MODULES is named");
+	if (!names(LOTA_FLAG_STRICT_MODULES, "STRICT_MODULES"))
+		FAIL("expected: names(LOTA_FLAG_STRICT_MODULES, "
+		     "\"STRICT_MODULES\")");
+	TEST("BLOCK_ANON_EXEC is named");
+	if (!names(LOTA_FLAG_BLOCK_ANON_EXEC, "BLOCK_ANON_EXEC"))
+		FAIL("expected: names(LOTA_FLAG_BLOCK_ANON_EXEC, "
+		     "\"BLOCK_ANON_EXEC\")");
+	TEST("BLOCK_PTRACE is named");
+	if (!names(LOTA_FLAG_BLOCK_PTRACE, "BLOCK_PTRACE"))
+		FAIL("expected: names(LOTA_FLAG_BLOCK_PTRACE, "
+		     "\"BLOCK_PTRACE\")");
+	TEST("AGENT_RESTARTED is named");
+	if (!names(LOTA_FLAG_AGENT_RESTARTED, "AGENT_RESTARTED"))
+		FAIL("expected: names(LOTA_FLAG_AGENT_RESTARTED, "
+		     "\"AGENT_RESTARTED\")");
+	TEST("REENROLLING is named");
+	if (!names(LOTA_FLAG_REENROLLING, "REENROLLING"))
+		FAIL("expected: names(LOTA_FLAG_REENROLLING, \"REENROLLING\")");
+	TEST("EVENTS_LOST is named");
+	if (!names(LOTA_FLAG_EVENTS_LOST, "EVENTS_LOST"))
+		FAIL("expected: names(LOTA_FLAG_EVENTS_LOST, \"EVENTS_LOST\")");
 
-	CHECK(lota_flags_to_string(LOTA_FLAG_ATTESTED, buf, 2) ==
-		      LOTA_ERR_BUFFER_TOO_SMALL,
-	      "a buffer too small is refused rather than truncated silently");
+	TEST("a buffer too small is refused rather than truncated silently");
+	if (lota_flags_to_string(LOTA_FLAG_ATTESTED, buf, 2) !=
+	    LOTA_ERR_BUFFER_TOO_SMALL)
+		FAIL("expected: lota_flags_to_string(LOTA_FLAG_ATTESTED, buf, "
+		     "2) == LOTA_ERR_BUFFER_TOO_SMALL");
 
-	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

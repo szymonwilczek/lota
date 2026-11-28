@@ -26,6 +26,7 @@
 
 #include "../src/agent/bpf_loader.h"
 #include "../src/agent/policy_sign.h"
+#include "test.h"
 
 /* --wrap targets need external linkage */
 int __wrap_policy_verify_buffer(const uint8_t *data, size_t data_len,
@@ -37,13 +38,6 @@ __wrap_bpf_object__open_file(const char *path,
 struct bpf_object *
 __wrap_bpf_object__open_mem(const void *obj_buf, size_t obj_buf_sz,
 			    const struct bpf_object_open_opts *opts);
-
-#define T_PASS() printf("PASS\n")
-#define T_FAIL(fmt, ...)                                  \
-	do {                                              \
-		printf("FAIL: " fmt "\n", ##__VA_ARGS__); \
-		exit(1);                                  \
-	} while (0)
 
 static int g_open_file_called;
 static int g_open_mem_called;
@@ -86,15 +80,20 @@ __wrap_bpf_object__open_mem(const void *obj_buf, size_t obj_buf_sz,
 static void write_file(const char *path, const void *data, size_t len)
 {
 	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-	if (fd < 0)
-		T_FAIL("open %s: %s", path, strerror(errno));
+	if (fd < 0) {
+		FAIL("open %s: %s", path, strerror(errno));
+		exit(1);
+	}
 	FILE *f = fdopen(fd, "wb");
 	if (!f) {
 		close(fd);
-		T_FAIL("fdopen %s: %s", path, strerror(errno));
+		FAIL("fdopen %s: %s", path, strerror(errno));
+		exit(1);
 	}
-	if (fwrite(data, 1, len, f) != len)
-		T_FAIL("fwrite %s", path);
+	if (fwrite(data, 1, len, f) != len) {
+		FAIL("fwrite %s", path);
+		exit(1);
+	}
 	fclose(f);
 }
 
@@ -107,6 +106,7 @@ int main(void)
 	const size_t obj_len = sizeof(obj_bytes) - 1;
 	uint8_t sig[POLICY_SIG_SIZE] = { 0 };
 
+	test_begin("bpf loader load source");
 	write_file(obj_path, obj_bytes, obj_len);
 	write_file(sig_path, sig, sizeof(sig));
 
@@ -118,15 +118,17 @@ int main(void)
 	 * the assertion is which open the loader chose and with what bytes */
 	(void)bpf_loader_load(&ctx, obj_path, pubkey_path);
 
+	TEST("loader does not re-open the verified path");
 	if (g_open_file_called)
-		T_FAIL("loader re-opened the path (verify-then-reopen TOCTOU)");
+		FAIL("verify-then-reopen TOCTOU");
+	TEST("loader loads from the verified in-memory buffer");
 	if (!g_open_mem_called)
-		T_FAIL("loader did not load from the verified in-memory buffer");
+		FAIL("bpf_object__open_mem never called");
+	TEST("loaded bytes are the verified bytes");
 	if (g_mem_len != obj_len || memcmp(g_mem_buf, obj_bytes, obj_len) != 0)
-		T_FAIL("loaded bytes differ from the verified bytes");
+		FAIL("loaded bytes differ");
 
 	unlink(obj_path);
 	unlink(sig_path);
-	T_PASS();
-	return 0;
+	return test_end();
 }

@@ -22,7 +22,6 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -89,8 +88,6 @@ static void test_probe_accepts_a_live_pid(void)
 		FAIL("the probe refuses a process that is running");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_probe_refuses_a_pid_that_is_gone(void)
@@ -114,8 +111,6 @@ static void test_probe_refuses_a_pid_that_is_gone(void)
 		FAIL("the refusal does not say the process is not there");
 		return;
 	}
-
-	PASS();
 }
 
 /* refusal has to land before anything is spent */
@@ -150,8 +145,6 @@ static void test_validator_refuses_before_the_commitment(void)
 		FAIL("the validator carried on past a pid it cannot protect");
 		return;
 	}
-
-	PASS();
 }
 
 /* and that a policy naming a live process is not refused for its pids */
@@ -177,19 +170,16 @@ static void test_validator_accepts_a_live_pid(void)
 		FAIL("the validator never reached the kernel prerequisites");
 		return;
 	}
-
-	PASS();
 }
 
 int main(void)
 {
-	printf("=== --protect-pid before the boot commitment ===\n\n");
+	test_begin("protect pid validation");
 
 	test_probe_accepts_a_live_pid();
 	test_probe_refuses_a_pid_that_is_gone();
 	test_validator_refuses_before_the_commitment();
 	test_validator_accepts_a_live_pid();
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

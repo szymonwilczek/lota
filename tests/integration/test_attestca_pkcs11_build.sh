@@ -14,21 +14,24 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "attestca pkcs11 build"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 
 if ! command -v go >/dev/null 2>&1; then
-    echo "[attestca-pkcs11-build] missing toolchain: go" >&2
-    exit 2
+    FAIL "missing toolchain: go"
+    test_end
 fi
 if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
-    echo "[attestca-pkcs11-build] missing toolchain: a C compiler" >&2
-    exit 2
+    FAIL "missing toolchain: a C compiler"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 BIN="$WORK_DIR/build/lota-attest-ca"
 
@@ -36,33 +39,18 @@ BIN="$WORK_DIR/build/lota-attest-ca"
 STUB_MARKER='built without PKCS#11 support'
 SIGNER_MARKER='token PIN is required in LOTA_CA_PKCS11_PIN'
 
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-        echo "PASS: $msg"
-    else
-        echo "FAIL: $msg"
-        failures=$((failures + 1))
-    fi
-}
-
 carries() { grep -qaF -- "$1" "$BIN"; }
 lacks() { ! grep -qaF -- "$1" "$BIN"; }
 
+TEST "make attest-ca builds the CA"
 if ! make -C "$REPO_DIR" BUILD_DIR="$WORK_DIR/build" attest-ca \
      >"$WORK_DIR/build.log" 2>&1; then
-    echo "[attestca-pkcs11-build] the build failed" >&2
-    cat "$WORK_DIR/build.log" >&2
-    exit 2
+    FAIL "%s" "$(tail -n 20 "$WORK_DIR/build.log")"
+    test_end
 fi
-check "the CA carries the PKCS#11 signer" carries "$SIGNER_MARKER"
-check "the CA has no build without PKCS#11" lacks "$STUB_MARKER"
+TEST "the CA carries the PKCS#11 signer"
+carries "$SIGNER_MARKER" || FAIL
+TEST "the CA has no build without PKCS#11"
+lacks "$STUB_MARKER" || FAIL
 
-if ((failures > 0)); then
-    echo "$failures check(s) failed"
-    exit 1
-fi
-echo "All checks passed"
+test_end

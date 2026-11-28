@@ -10,9 +10,8 @@
  *   2. Run test: ./build/test_ipc_dos
  */
 
-#include <stdio.h>
-
 #include "../include/lota_gaming.h"
+#include "test.h"
 
 #define TEST_CONNECTIONS 100
 
@@ -21,52 +20,35 @@ static struct lota_client *clients[TEST_CONNECTIONS];
 int main(void)
 {
 	int i;
-	int success_count = 0;
+	int opened = 0;
 	int ret;
 	struct lota_status status;
 
-	printf("=== IPC DoS / Concurrency Test ===\n");
-	printf("Target: %d concurrent connections\n\n", TEST_CONNECTIONS);
+	test_begin("ipc dos");
 
-	printf("Opening connections...\n");
+	TEST("agent accepts 100 concurrent connections");
 	for (i = 0; i < TEST_CONNECTIONS; i++) {
 		clients[i] = lota_connect();
-		if (clients[i]) {
-			success_count++;
-			if (i % 10 == 0)
-				printf(".");
-		} else {
-			printf("X");
-			fprintf(stderr, "\nFailed to connect client %d\n", i);
+		if (!clients[i]) {
+			FAIL("client %d failed to connect", i);
 			break;
 		}
-	}
-	printf("\n\nEstablished %d/%d connections.\n", success_count,
-	       TEST_CONNECTIONS);
-
-	if (success_count < 65) {
-		printf("FAIL: Failed to exceed old limit of 64 connections.\n");
-		goto cleanup;
+		opened++;
 	}
 
-	printf("Verifying last connection (%d)...\n", success_count - 1);
-	ret = lota_get_status(clients[success_count - 1], &status);
-	if (ret == 0) {
-		printf("PASS: Last connection is alive and responding.\n");
+	TEST("last connection answers a status query");
+	if (opened == 0) {
+		SKIP("no connection open");
 	} else {
-		printf("FAIL: Last connection failed to query status: %s\n",
-		       lota_strerror(ret));
+		ret = lota_get_status(clients[opened - 1], &status);
+		if (ret != 0)
+			FAIL("connection %d: %s", opened - 1,
+			     lota_strerror(ret));
 	}
 
-	printf("Closing connections...\n");
-cleanup:
-	for (i = 0; i < success_count; i++) {
-		if (clients[i]) {
-			lota_disconnect(clients[i]);
-			clients[i] = NULL;
-		}
+	for (i = 0; i < opened; i++) {
+		lota_disconnect(clients[i]);
+		clients[i] = NULL;
 	}
-
-	printf("Done.\n");
-	return (success_count == TEST_CONNECTIONS) ? 0 : 1;
+	return test_end();
 }

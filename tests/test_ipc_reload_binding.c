@@ -621,7 +621,6 @@ static void test_binding_survives_reload(struct ipc_context *ctx,
 		goto out;
 	}
 
-	PASS();
 out:
 	close(title_fd);
 	close(loop_fd);
@@ -668,7 +667,6 @@ static void test_removed_publisher_unbinds(struct ipc_context *ctx,
 		goto out;
 	}
 
-	PASS();
 out:
 	close(title_fd);
 	close(loop_fd);
@@ -680,17 +678,17 @@ int main(void)
 	struct ipc_context ctx;
 	int listen_fd;
 
-	printf("=== IPC publisher-reload binding tests ===\n\n");
+	test_begin("ipc reload binding");
 
 	listen_fd = listener_open();
 	if (listen_fd < 0) {
-		printf("SKIP: cannot create a Unix socket in /tmp (%s)\n",
-		       strerror(-listen_fd));
+		SKIP("cannot create a Unix socket in /tmp (%s)",
+		     strerror(-listen_fd));
 		return 0;
 	}
 
 	if (ipc_init_activated(&ctx, listen_fd) < 0) {
-		printf("SKIP: ipc_init_activated failed\n");
+		SKIP("ipc_init_activated failed");
 		close(listen_fd);
 		unlink(test_socket);
 		return 0;
@@ -700,7 +698,7 @@ int main(void)
 	rebuilt = calloc(1, sizeof(*rebuilt));
 	replacement = calloc(1, sizeof(*replacement));
 	if (!profiles || !rebuilt || !replacement) {
-		printf("FAIL: out of memory\n");
+		FAIL("out of memory");
 		ipc_cleanup(&ctx);
 		free(profiles);
 		free(rebuilt);
@@ -712,7 +710,7 @@ int main(void)
 	if (profile_init(profiles) < 0 ||
 	    profile_init_id(rebuilt, test_profile_hex) < 0 ||
 	    profile_init_id(replacement, other_profile_hex) < 0) {
-		printf("SKIP: cannot record consent under /tmp\n");
+		SKIP("cannot record consent under /tmp");
 		ipc_cleanup(&ctx);
 		free(profiles);
 		free(rebuilt);
@@ -734,6 +732,5 @@ int main(void)
 	free(replacement);
 	unlink(test_socket);
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

@@ -99,7 +99,6 @@ static void test_default_off_roundtrip(void)
 		FAIL("auth mismatch after reload");
 		return;
 	}
-	PASS();
 }
 
 static void test_sealed_path_derivation(void)
@@ -126,7 +125,6 @@ static void test_sealed_path_derivation(void)
 		FAIL("plain path");
 		return;
 	}
-	PASS();
 }
 
 static void test_sealing_on_without_tpm_fails_cleanly(void)
@@ -155,7 +153,6 @@ static void test_sealing_on_without_tpm_fails_cleanly(void)
 		FAIL("sealed file created despite seal failure");
 		return;
 	}
-	PASS();
 }
 
 static void test_strict_load_no_plaintext_fallback(void)
@@ -187,7 +184,6 @@ static void test_strict_load_no_plaintext_fallback(void)
 		FAIL("auth marked loaded after strict failure");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -302,14 +298,14 @@ static void test_unreadable_record_is_not_a_missing_one(void)
 			snprintf(reason, sizeof(reason),
 				 "%s: load returned %d, want %d", cases[i].name,
 				 rc, cases[i].want_rc);
-			FAIL(reason);
+			FAIL("%s", reason);
 			return;
 		}
 		if (ctx.aik_auth_loaded && rc != 0) {
 			snprintf(reason, sizeof(reason),
 				 "%s: auth marked loaded after a failed load",
 				 cases[i].name);
-			FAIL(reason);
+			FAIL("%s", reason);
 			return;
 		}
 		if (blocks_reprovision(rc) != cases[i].want_block) {
@@ -317,11 +313,10 @@ static void test_unreadable_record_is_not_a_missing_one(void)
 				 "%s: reprovision decision is %d, want %d",
 				 cases[i].name, blocks_reprovision(rc),
 				 cases[i].want_block);
-			FAIL(reason);
+			FAIL("%s", reason);
 			return;
 		}
 	}
-	PASS();
 }
 
 static void test_recovery_decision(void)
@@ -342,7 +337,6 @@ static void test_recovery_decision(void)
 		FAIL("success blocked");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -380,7 +374,6 @@ static void test_leftover_sidecar_is_still_a_record(void)
 		FAIL("sidecar not seen");
 		return;
 	}
-	PASS();
 }
 
 /* a sealed copy left from before would be loaded ahead of the new value */
@@ -416,7 +409,6 @@ static void test_plaintext_save_drops_an_old_sealed_copy(void)
 		FAIL("old sealed copy kept");
 		return;
 	}
-	PASS();
 }
 
 /* write @len bytes of @magic with @version + 1 */
@@ -462,7 +454,7 @@ static void test_state_files_at_an_unknown_version(void)
 	char path[512];
 	int rc;
 
-	TEST("every version-guarded state file refuses a version it cannot read");
+	TEST("every version-guarded state file refuses an unreadable version");
 	init_ctx(&ctx);
 
 	/* clock_state.dat: refused, and the caller carries on without it */
@@ -540,7 +532,6 @@ static void test_state_files_at_an_unknown_version(void)
 		FAIL("an unreadable sealed copy would rotate the key");
 		return;
 	}
-	PASS();
 }
 
 static void test_reseal_reprovision_arg_guards(void)
@@ -559,7 +550,6 @@ static void test_reseal_reprovision_arg_guards(void)
 		FAIL("reprovision guard");
 		return;
 	}
-	PASS();
 }
 
 static void test_mask_selection_default(void)
@@ -578,7 +568,6 @@ static void test_mask_selection_default(void)
 		FAIL("bitmap mismatch");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -602,7 +591,6 @@ static void test_mask_selection_agent_bound(void)
 		FAIL("bitmap mismatch");
 		return;
 	}
-	PASS();
 }
 
 static void test_mask_selection_edges(void)
@@ -626,7 +614,6 @@ static void test_mask_selection_edges(void)
 		FAIL("PCR23");
 		return;
 	}
-	PASS();
 }
 
 static void test_mask_selection_ignores_out_of_range(void)
@@ -640,7 +627,6 @@ static void test_mask_selection_ignores_out_of_range(void)
 		FAIL("out-of-range bit leaked into selection");
 		return;
 	}
-	PASS();
 }
 
 static void test_mask_selection_null_args(void)
@@ -657,7 +643,6 @@ static void test_mask_selection_null_args(void)
 		FAIL("NULL count");
 		return;
 	}
-	PASS();
 }
 
 static void test_seal_arg_validation(void)
@@ -700,7 +685,6 @@ static void test_seal_arg_validation(void)
 		FAIL("NULL secret");
 		return;
 	}
-	PASS();
 }
 
 static void test_unseal_arg_validation(void)
@@ -727,7 +711,6 @@ static void test_unseal_arg_validation(void)
 		FAIL("NULL out_len");
 		return;
 	}
-	PASS();
 }
 
 static void test_policy_fail_maps_clean(void)
@@ -747,7 +730,6 @@ static void test_policy_fail_maps_clean(void)
 		FAIL("PCR_CHANGED not mapped");
 		return;
 	}
-	PASS();
 }
 
 /* the boot-state hint must not follow a framing refusal */
@@ -775,7 +757,6 @@ static void test_boot_state_hint_is_for_a_tpm_that_did_not_say(void)
 		FAIL("a lockout is still an answer from the chip");
 		return;
 	}
-	PASS();
 }
 
 static void test_seal_primary_name_match(void)
@@ -804,12 +785,11 @@ static void test_seal_primary_name_match(void)
 		FAIL("a size past the buffer");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("Running LOTA AIK-auth hardening tests...\n\n");
+	test_begin("seal aik");
 	setup_dir();
 
 	test_default_off_roundtrip();
@@ -834,6 +814,5 @@ int main(void)
 	test_seal_primary_name_match();
 
 	cleanup_dir();
-	printf("\n%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

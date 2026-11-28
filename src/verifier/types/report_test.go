@@ -136,7 +136,7 @@ func TestParseReport_ValidReport(t *testing.T) {
 			t.Errorf("Flags: got 0x%08X, want 0x%08X",
 				report.Header.Flags, FlagTPMQuoteOK|FlagModuleSig)
 		}
-		t.Log("✓ Header parsed correctly")
+		t.Log("Header parsed correctly")
 	})
 
 	t.Run("TPMEvidence", func(t *testing.T) {
@@ -168,7 +168,7 @@ func TestParseReport_ValidReport(t *testing.T) {
 					i, report.TPM.Nonce[i], expected)
 			}
 		}
-		t.Log("✓ TPM evidence parsed correctly")
+		t.Log("TPM evidence parsed correctly")
 	})
 
 	t.Run("SystemMeasurement", func(t *testing.T) {
@@ -192,7 +192,7 @@ func TestParseReport_ValidReport(t *testing.T) {
 		if report.System.IOMMU.Flags != 0x07 {
 			t.Errorf("IOMMU.Flags: got 0x%02X, want 0x07", report.System.IOMMU.Flags)
 		}
-		t.Log("✓ System measurement parsed correctly")
+		t.Log("System measurement parsed correctly")
 	})
 }
 
@@ -207,7 +207,7 @@ func TestParseReport_InvalidMagic(t *testing.T) {
 		t.Fatal("Expected error for invalid magic")
 	}
 
-	t.Logf("✓ Correctly rejected invalid magic: %v", err)
+	t.Logf("Correctly rejected invalid magic: %v", err)
 }
 
 func TestParseReport_InvalidVersion(t *testing.T) {
@@ -221,7 +221,7 @@ func TestParseReport_InvalidVersion(t *testing.T) {
 		t.Fatal("Expected error for invalid version")
 	}
 
-	t.Logf("✓ Correctly rejected incompatible version: %v", err)
+	t.Logf("Correctly rejected incompatible version: %v", err)
 }
 
 func TestParseReport_TruncatedData(t *testing.T) {
@@ -246,7 +246,7 @@ func TestParseReport_TruncatedData(t *testing.T) {
 			if err == nil {
 				t.Errorf("Expected error for %d-byte report", tc.length)
 			} else {
-				t.Logf("✓ Correctly rejected %d-byte truncated report", tc.length)
+				t.Logf("Correctly rejected %d-byte truncated report", tc.length)
 			}
 		})
 	}
@@ -420,7 +420,7 @@ func TestChallenge_Serialize(t *testing.T) {
 			flags, ChallengeFlagBootCommitmentV1)
 	}
 
-	t.Log("✓ Challenge serialization correct")
+	t.Log("Challenge serialization correct")
 }
 
 func TestVerifyResult_Serialize(t *testing.T) {
@@ -449,7 +449,7 @@ func TestVerifyResult_Serialize(t *testing.T) {
 		t.Errorf("ValidUntil: got %d, want 1700003600", validUntil)
 	}
 
-	t.Log("✓ VerifyResult serialization correct")
+	t.Log("VerifyResult serialization correct")
 }
 
 // Table-driven tests for flags
@@ -492,7 +492,7 @@ func TestReportFlags(t *testing.T) {
 		})
 	}
 
-	t.Log("✓ All flag combinations verified")
+	t.Log("All flag combinations verified")
 }
 
 func TestPolicyKeys(t *testing.T) {
@@ -536,7 +536,7 @@ func TestEndianness(t *testing.T) {
 		t.Errorf("uint64 endianness:\n  got:  %x\n  want: %x", buf, expected)
 	}
 
-	t.Log("✓ Little-endian encoding correct")
+	t.Log("Little-endian encoding correct")
 }
 
 // Benchmark parsing

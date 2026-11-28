@@ -489,7 +489,6 @@ test_the_published_word_carries_the_loops_lockout(struct ipc_context *ctx,
 		FAIL("the daemon publishes a word with the lockout bit clear");
 		return;
 	}
-	PASS();
 }
 
 /* not NOT_ATTESTED: a lapsed verdict on a healthy host answers that too */
@@ -513,7 +512,6 @@ test_a_title_is_refused_with_the_lockout_code(struct ipc_context *ctx)
 		FAIL("the refusal does not name the lockout");
 		return;
 	}
-	PASS();
 }
 
 /* a lockout fails rounds, so the verdict lapses: still name the lockout */
@@ -542,7 +540,6 @@ test_a_lapsed_verdict_does_not_hide_the_lockout(struct ipc_context *ctx,
 		FAIL("the refusal does not name the lockout");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -591,7 +588,6 @@ test_a_stale_latch_does_not_outlive_the_lockout(struct ipc_context *ctx,
 		FAIL("a recovered host is refused until it is restarted");
 		goto out;
 	}
-	PASS();
 out:
 	ctx->tpm = NULL;
 	daemon_latch = false;
@@ -623,7 +619,6 @@ static void test_a_cleared_lockout_clears_the_word(struct ipc_context *ctx,
 		FAIL("a recovered host is still refused for a lockout");
 		return;
 	}
-	PASS();
 }
 
 /* A title is told the host enrolls again, not only that it is not attested */
@@ -658,7 +653,6 @@ static void test_a_reenrollment_reaches_the_word(struct ipc_context *ctx,
 		FAIL("the bit outlived the re-enrollment");
 		goto out;
 	}
-	PASS();
 out:
 	sync_reenrolling = false;
 }
@@ -669,17 +663,17 @@ int main(void)
 	struct attest_target *profiles;
 	int listen_fd, loop_fd;
 
-	printf("=== TPM lockout across the agent's two units ===\n\n");
+	test_begin("ipc lockout sync");
 
 	listen_fd = listener_open();
 	if (listen_fd < 0) {
-		printf("SKIP: cannot create a Unix socket in /tmp (%s)\n",
-		       strerror(-listen_fd));
+		SKIP("cannot create a Unix socket in /tmp (%s)",
+		     strerror(-listen_fd));
 		return 0;
 	}
 
 	if (ipc_init_activated(&ctx, listen_fd) < 0) {
-		printf("SKIP: ipc_init_activated failed\n");
+		SKIP("ipc_init_activated failed");
 		close(listen_fd);
 		unlink(test_socket);
 		return 0;
@@ -687,7 +681,7 @@ int main(void)
 
 	profiles = calloc(1, sizeof(*profiles));
 	if (!profiles) {
-		printf("FAIL: out of memory\n");
+		FAIL("out of memory");
 		ipc_cleanup(&ctx);
 		unlink(test_socket);
 		return 1;
@@ -700,7 +694,7 @@ int main(void)
 
 	loop_fd = client_open();
 	if (loop_fd < 0) {
-		printf("SKIP: cannot connect to the test socket\n");
+		SKIP("cannot connect to the test socket");
 		ipc_cleanup(&ctx);
 		free(profiles);
 		unlink(test_socket);
@@ -719,6 +713,5 @@ int main(void)
 	free(profiles);
 	unlink(test_socket);
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

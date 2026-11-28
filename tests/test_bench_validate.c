@@ -149,7 +149,7 @@ static int build(void)
 	for (unsigned int i = 0; i < NRUNS; i++) {
 		runs[i] = write_run(i);
 		if (!runs[i] || check(runs[i], one, err, sizeof(err))) {
-			printf("run %u: %s\n", i, err);
+			FAIL("run %u: %s", i, err);
 			free(one);
 			return -1;
 		}
@@ -179,7 +179,7 @@ static void test_valid(void)
 
 	for (int t = 0; d && t < T_COUNT; t++) {
 		if (check(text[t], d, err, sizeof(err))) {
-			FAIL(err);
+			FAIL("%s", err);
 			goto out;
 		}
 		if (d->kind != kinds[t]) {
@@ -192,8 +192,6 @@ static void test_valid(void)
 	    strcmp(d->plan.game.title.s, "Example Title") ||
 	    d->plan.machine.gpu[0].vendor_id != 0x1002)
 		FAIL("the summary is not what was written");
-	else
-		PASS();
 out:
 	free(d);
 }
@@ -209,7 +207,7 @@ static void test_round_trip(void)
 
 	doc = malloc(sizeof(*doc));
 	if (!doc || check(text[T_RESULT], doc, err, sizeof(err))) {
-		FAIL(doc ? err : "malloc");
+		FAIL("%s", doc ? err : "malloc");
 		free(doc);
 		doc = saved;
 		return;
@@ -221,8 +219,6 @@ static void test_round_trip(void)
 		 doc->runs[REF_RUN].config != BC_C ||
 		 doc->runs[REF_RUN].agent.v[BA_PROTECTED_MAX].v != 2)
 		FAIL("a run is not what was written");
-	else
-		PASS();
 	free(again);
 	free(doc);
 	doc = saved;
@@ -454,10 +450,9 @@ static void test_rejections(void)
 		}
 		if (strncmp(err, "offset ", 7) || !strstr(err, r->says)) {
 			snprintf(msg, sizeof(msg), "says \"%s\"", err);
-			FAIL(msg);
+			FAIL("%s", msg);
 			continue;
 		}
-		PASS();
 	}
 	free(d);
 }
@@ -478,9 +473,7 @@ static void test_truncated(void)
 			return;
 		}
 	}
-	if (d)
-		PASS();
-	else
+	if (!d)
 		FAIL("malloc");
 	free(d);
 }
@@ -502,9 +495,7 @@ static void test_offset(void)
 	snprintf(want, sizeof(want),
 		 "offset %zu:", (size_t)(strstr(bad, "\"path\"") - bad));
 	if (strncmp(err, want, strlen(want)) != 0)
-		FAIL(err);
-	else
-		PASS();
+		FAIL("%s", err);
 out:
 	free(bad);
 	free(d);
@@ -525,8 +516,6 @@ static void test_too_large(void)
 				  err, sizeof(err)) != -EINVAL ||
 		   !strstr(err, "larger than")) {
 		FAIL("accepted");
-	} else {
-		PASS();
 	}
 	free(big);
 	free(d);
@@ -550,9 +539,7 @@ static void test_nesting(void)
 	deep[n] = '\0';
 	if (bench_validate(deep, n, d, err, sizeof(err)) != -EINVAL ||
 	    !strstr(err, "offset 0: expected a lota-bench object"))
-		FAIL(err);
-	else
-		PASS();
+		FAIL("%s", err);
 out:
 	free(deep);
 	free(d);
@@ -560,13 +547,12 @@ out:
 
 int main(void)
 {
+	test_begin("bench validate");
 	int ret;
 
-	printf("lota-bench session reader:\n");
-
 	if (build()) {
-		printf("cannot write the reference session\n");
-		return 1;
+		FAIL("cannot write the reference session");
+		return test_end();
 	}
 
 	test_valid();
@@ -577,8 +563,7 @@ int main(void)
 	test_too_large();
 	test_nesting();
 
-	ret = tests_passed == tests_run ? 0 : 1;
-	printf("%d/%d tests passed\n", tests_passed, tests_run);
+	ret = test_end();
 	free(text[T_PLAN]);
 	free(text[T_RESULT]);
 	free(text[T_SUMMARY]);

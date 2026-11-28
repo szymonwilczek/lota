@@ -33,7 +33,7 @@ func TestOpenDB_InMemory(t *testing.T) {
 		t.Errorf("Schema version: got %d, want %d", version, expectedVersion)
 	}
 
-	t.Logf("✓ In-memory database opened with schema v%d", expectedVersion)
+	t.Logf("In-memory database opened with schema v%d", expectedVersion)
 }
 
 func TestOpenDB_FileSystem(t *testing.T) {
@@ -71,7 +71,7 @@ func TestOpenDB_FileSystem(t *testing.T) {
 		t.Errorf("Schema version after reopen: got %d, want %d", version, expectedVersion)
 	}
 
-	t.Log("✓ File-based database created and reopened successfully")
+	t.Log("File-based database created and reopened successfully")
 }
 
 func TestOpenDB_CreatesParentDirectory(t *testing.T) {
@@ -95,7 +95,7 @@ func TestOpenDB_CreatesParentDirectory(t *testing.T) {
 		t.Fatalf("Database file was not created: %v", err)
 	}
 
-	t.Log("✓ Missing database parent directory created")
+	t.Log("Missing database parent directory created")
 }
 
 func TestMigrations_Idempotent(t *testing.T) {
@@ -119,7 +119,7 @@ func TestMigrations_Idempotent(t *testing.T) {
 		t.Errorf("Schema version after double migration: got %d, want %d", version, expectedVersion)
 	}
 
-	t.Log("✓ Migrations are idempotent")
+	t.Log("Migrations are idempotent")
 }
 
 func TestMigrations_TablesExist(t *testing.T) {
@@ -147,7 +147,7 @@ func TestMigrations_TablesExist(t *testing.T) {
 		})
 	}
 
-	t.Log("✓ All expected tables exist")
+	t.Log("All expected tables exist")
 }
 
 func TestMigrations_IndexExists(t *testing.T) {
@@ -172,7 +172,7 @@ func TestMigrations_IndexExists(t *testing.T) {
 		})
 	}
 
-	t.Log("✓ Required indexes exist")
+	t.Log("Required indexes exist")
 }
 
 func TestMigrations_PCR14Constraint(t *testing.T) {
@@ -204,7 +204,7 @@ func TestMigrations_PCR14Constraint(t *testing.T) {
 		t.Errorf("Failed to insert valid PCR14: %v", err)
 	}
 
-	t.Log("✓ PCR14 length constraint enforced at database level")
+	t.Log("PCR14 length constraint enforced at database level")
 }
 
 func TestOpenDB_WALMode(t *testing.T) {
@@ -231,7 +231,7 @@ func TestOpenDB_WALMode(t *testing.T) {
 		t.Errorf("Journal mode: got %s, want wal", journalMode)
 	}
 
-	t.Logf("✓ WAL mode active: %s", journalMode)
+	t.Logf("WAL mode active: %s", journalMode)
 }
 
 func TestOpenDB_PragmasAppliedPerConnection(t *testing.T) {

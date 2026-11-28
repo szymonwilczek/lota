@@ -346,8 +346,6 @@ static void test_plain_server_binds_the_configured_profiles(void)
 		FAIL("the publishers were never handed to the IPC layer");
 	else if (profiles_bound != 1)
 		FAIL("the configured publisher was not among them");
-	else
-		PASS();
 }
 
 static void test_signed_server_binds_the_configured_profiles(void)
@@ -360,8 +358,6 @@ static void test_signed_server_binds_the_configured_profiles(void)
 		FAIL("the publishers were never handed to the IPC layer");
 	else if (profiles_bound != 1)
 		FAIL("the configured publisher was not among them");
-	else
-		PASS();
 }
 
 /*
@@ -393,8 +389,6 @@ static void test_socket_is_claimed_before_the_tpm(void)
 		FAIL("a key is provisioned before the socket is claimed");
 		return;
 	}
-
-	PASS();
 }
 
 /* A socket that is already held costs the machine nothing at all */
@@ -416,8 +410,6 @@ static void test_refused_socket_provisions_nothing(void)
 		FAIL("the session layers were set up for a run that cannot start");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -445,15 +437,14 @@ static void test_server_renews_the_fixture(bool sign)
 	}
 	if (lapsed_turn) {
 		FAIL("a lapsed verdict was served");
-		printf("    first at turn %d of 10, 100 s each\n", lapsed_turn);
+		FAIL("first at turn %d of 10, 100 s each", lapsed_turn);
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("=== diagnostic server startup order ===\n\n");
+	test_begin("test servers order");
 
 	test_socket_is_claimed_before_the_tpm();
 	test_refused_socket_provisions_nothing();
@@ -462,6 +453,5 @@ int main(void)
 	test_server_renews_the_fixture(false);
 	test_server_renews_the_fixture(true);
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

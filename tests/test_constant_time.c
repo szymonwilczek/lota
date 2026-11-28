@@ -20,6 +20,8 @@
 
 #include <openssl/crypto.h>
 
+#include "test.h"
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,13 +38,6 @@
 
 #define DIGEST_LEN 32
 
-static void fail(const char *msg) __attribute__((noreturn));
-static void fail(const char *msg)
-{
-	fprintf(stderr, "FAIL: %s\n", msg);
-	exit(1);
-}
-
 // CRYPTO_memcmp must see equal buffers as equal and any single-bit difference
 // as unequal, at every bit position
 static void test_functional(void)
@@ -53,18 +48,17 @@ static void test_functional(void)
 	memset(ref, 0x5A, sizeof(ref));
 	memcpy(cmp, ref, sizeof(cmp));
 
+	TEST("CRYPTO_memcmp sees equal buffers as equal");
 	if (CRYPTO_memcmp(ref, cmp, sizeof(ref)) != 0)
-		fail("equal buffers reported as different");
+		FAIL("equal buffers reported as different");
 
+	TEST("CRYPTO_memcmp detects every single-bit flip");
 	for (size_t bit = 0; bit < DIGEST_LEN * 8; bit++) {
 		cmp[bit / 8] ^= (uint8_t)(1u << (bit % 8));
 		if (CRYPTO_memcmp(ref, cmp, sizeof(ref)) == 0)
-			fail("single flipped bit not detected");
+			FAIL("flipped bit %zu not detected", bit);
 		cmp[bit / 8] ^= (uint8_t)(1u << (bit % 8)); // restore
 	}
-
-	printf("functional: equal match + all %d single-bit flips detected\n",
-	       DIGEST_LEN * 8);
 }
 
 #ifndef CT_INSTRUMENTED
@@ -121,8 +115,14 @@ static void test_timing(void)
 	uint8_t *early = malloc(TIMING_BUF);
 	uint8_t *late = malloc(TIMING_BUF);
 
-	if (!ref || !early || !late)
-		fail("allocation");
+	TEST("timing buffers allocated");
+	if (!ref || !early || !late) {
+		FAIL("allocation");
+		free(ref);
+		free(early);
+		free(late);
+		return;
+	}
 
 	memset(ref, 0x5A, TIMING_BUF);
 	memcpy(early, ref, TIMING_BUF);
@@ -138,9 +138,6 @@ static void test_timing(void)
 	double mc_ratio = mc_late / mc_early;
 	double ct_ratio = ct_late / ct_early;
 
-	printf("timing (late/early over %u bytes): memcmp=%.1fx CRYPTO_memcmp=%.2fx\n",
-	       TIMING_BUF, mc_ratio, ct_ratio);
-
 	free(ref);
 	free(early);
 	free(late);
@@ -150,24 +147,27 @@ static void test_timing(void)
 	// CRYPTO_memcmp stays flat.
 	// Generous bounds keep the check robust to scheduling noise while still
 	// proving the qualitative difference.
+	TEST("memcmp timing depends on the mismatch position");
 	if (mc_ratio < 2.0)
-		fail("memcmp did not show data-dependent timing (test setup?)");
+		FAIL("late/early ratio %.1fx, expected >= 2.0x", mc_ratio);
+	TEST("CRYPTO_memcmp timing ignores the mismatch position");
 	if (ct_ratio > 4.0)
-		fail("CRYPTO_memcmp timing depended on mismatch position");
+		FAIL("late/early ratio %.2fx, expected <= 4.0x", ct_ratio);
 }
 
 #endif /* !CT_INSTRUMENTED */
 
 int main(void)
 {
+	test_begin("constant time");
 	test_functional();
 
 #ifdef CT_INSTRUMENTED
-	printf("timing: skipped under sanitizer instrumentation\n");
+	TEST("CRYPTO_memcmp timing ignores the mismatch position");
+	SKIP("sanitizer instrumentation distorts timing");
 #else
 	test_timing();
 #endif
 
-	printf("PASS\n");
-	return 0;
+	return test_end();
 }

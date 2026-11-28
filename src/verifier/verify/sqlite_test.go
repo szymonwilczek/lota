@@ -52,7 +52,7 @@ func TestSQLiteBaseline_FirstUse(t *testing.T) {
 		t.Errorf("AttestCount: got %d, want 1", baseline.AttestCount)
 	}
 
-	t.Log("✓ First use establishes baseline")
+	t.Log("First use establishes baseline")
 }
 
 func TestSQLiteBaseline_MatchingPCR(t *testing.T) {
@@ -79,7 +79,7 @@ func TestSQLiteBaseline_MatchingPCR(t *testing.T) {
 		t.Errorf("AttestCount: got %d, want 2", baseline.AttestCount)
 	}
 
-	t.Log("✓ Matching PCR14 is accepted and count incremented")
+	t.Log("Matching PCR14 is accepted and count incremented")
 }
 
 func TestSQLiteBaseline_Mismatch(t *testing.T) {
@@ -103,7 +103,7 @@ func TestSQLiteBaseline_Mismatch(t *testing.T) {
 		t.Fatalf("SECURITY FAILURE: PCR14 tampering not detected (got %d)", result)
 	}
 
-	t.Log("✓ PCR14 mismatch correctly detected")
+	t.Log("PCR14 mismatch correctly detected")
 }
 
 func TestSQLiteBaseline_GetBaseline(t *testing.T) {
@@ -133,7 +133,7 @@ func TestSQLiteBaseline_GetBaseline(t *testing.T) {
 		t.Error("PCR14 mismatch")
 	}
 
-	t.Log("✓ Baseline retrieval works")
+	t.Log("Baseline retrieval works")
 }
 
 // A store that cannot answer is not a store without the client.
@@ -198,7 +198,7 @@ func TestSQLiteBaseline_ClearBaseline(t *testing.T) {
 		t.Errorf("Expected TOFUFirstUse after clear, got %d", result)
 	}
 
-	t.Log("✓ Clear allows baseline re-establishment")
+	t.Log("Clear allows baseline re-establishment")
 }
 
 func TestSQLiteBaseline_ListClients(t *testing.T) {
@@ -222,7 +222,7 @@ func TestSQLiteBaseline_ListClients(t *testing.T) {
 		t.Errorf("Expected 3 clients, got %d", len(clients))
 	}
 
-	t.Log("✓ ListClients returns all baseline clients")
+	t.Log("ListClients returns all baseline clients")
 }
 
 func TestSQLiteBaseline_CursorPaging(t *testing.T) {
@@ -275,7 +275,7 @@ func TestSQLiteBaseline_Stats(t *testing.T) {
 		t.Errorf("TotalClients: got %d, want 2", stats.TotalClients)
 	}
 
-	t.Log("✓ Baseline stats report correct counts")
+	t.Log("Baseline stats report correct counts")
 }
 
 func TestSQLiteBaseline_Persistence(t *testing.T) {
@@ -317,7 +317,7 @@ func TestSQLiteBaseline_Persistence(t *testing.T) {
 		t.Errorf("AttestCount: got %d, want 3", bl.AttestCount)
 	}
 
-	t.Log("✓ Baseline and counters persist across instances")
+	t.Log("Baseline and counters persist across instances")
 }
 
 // TestSQLiteBaseline_RefusesUnpinnedRow mirrors the in-memory case on the SQL store:
@@ -520,7 +520,7 @@ func TestSQLiteNonce_RecordAndContains(t *testing.T) {
 		t.Error("Should contain recorded nonce")
 	}
 
-	t.Log("✓ Record and Contains work correctly")
+	t.Log("Record and Contains work correctly")
 }
 
 func TestSQLiteNonce_Count(t *testing.T) {
@@ -546,7 +546,7 @@ func TestSQLiteNonce_Count(t *testing.T) {
 		t.Errorf("Count: got %d, want 10", backend.Count())
 	}
 
-	t.Log("✓ Count tracks number of used nonces")
+	t.Log("Count tracks number of used nonces")
 }
 
 func TestSQLiteNonce_Cleanup(t *testing.T) {
@@ -591,7 +591,7 @@ func TestSQLiteNonce_Cleanup(t *testing.T) {
 		t.Error("Old nonce should be cleaned up")
 	}
 
-	t.Log("✓ Time-based cleanup works correctly")
+	t.Log("Time-based cleanup works correctly")
 }
 
 func TestSQLiteNonce_DuplicateRecord(t *testing.T) {
@@ -615,7 +615,7 @@ func TestSQLiteNonce_DuplicateRecord(t *testing.T) {
 		t.Errorf("Count should be 1 after duplicate: got %d", backend.Count())
 	}
 
-	t.Log("✓ Duplicate recording is idempotent")
+	t.Log("Duplicate recording is idempotent")
 }
 
 func TestSQLiteNonce_Persistence(t *testing.T) {
@@ -636,10 +636,10 @@ func TestSQLiteNonce_Persistence(t *testing.T) {
 	backend2 := NewSQLiteUsedNonceBackend(db)
 
 	if !usedNonce(t, backend2, "replay-attempt-nonce") {
-		t.Fatal("SECURITY FAILURE: Used nonce lost after restart — replay attack possible!")
+		t.Fatal("SECURITY FAILURE: Used nonce lost after restart - replay attack possible!")
 	}
 
-	t.Log("✓ SECURITY: Used nonces persist across instances (anti-replay)")
+	t.Log("SECURITY: Used nonces persist across instances (anti-replay)")
 }
 
 func TestSQLiteIntegration_FullFlow(t *testing.T) {
@@ -697,7 +697,7 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 		t.Errorf("TotalAttestations: got %d, want 2", stats.TotalAttestations)
 	}
 
-	t.Log("✓ Full SQLite-backed attestation flow works")
+	t.Log("Full SQLite-backed attestation flow works")
 }
 
 func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
@@ -731,7 +731,7 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	if err != nil || result1.Result != types.VerifyOK {
 		t.Fatalf("First attestation failed: %v", err)
 	}
-	t.Log("✓ First attestation succeeded")
+	t.Log("First attestation succeeded")
 
 	// new verifier with same DB
 	aikStore2 := newCertVerifier(t)
@@ -755,7 +755,7 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 			types.VerifyNonceFail, result2.Result)
 	}
 
-	t.Logf("✓ SECURITY: Replay correctly blocked after restart: %v", err)
+	t.Logf("SECURITY: Replay correctly blocked after restart: %v", err)
 }
 
 func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
@@ -788,7 +788,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	if err != nil || r1.Result != types.VerifyOK {
 		t.Fatalf("Baseline attestation failed: %v", err)
 	}
-	t.Log("✓ Baseline established")
+	t.Log("Baseline established")
 
 	// new verifier with same DB
 	aikStore2 := newCertVerifier(t)
@@ -815,7 +815,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 			types.VerifyIntegrityMismatch, r2.Result)
 	}
 
-	t.Logf("✓ SECURITY: Baseline persists across restart, tampering detected: %v", err)
+	t.Logf("SECURITY: Baseline persists across restart, tampering detected: %v", err)
 }
 
 func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
@@ -894,7 +894,7 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 		t.Errorf("TotalAttestations: got %d, want %d", stats.TotalAttestations, expected)
 	}
 
-	t.Logf("✓ %d concurrent SQLite-backed attestations completed", expected)
+	t.Logf("%d concurrent SQLite-backed attestations completed", expected)
 }
 
 // shared key for SQLite integration tests

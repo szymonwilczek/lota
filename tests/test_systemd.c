@@ -49,7 +49,6 @@ static void test_ready_no_socket(void)
 		FAIL("expected 0");
 		return;
 	}
-	PASS();
 }
 
 static void test_ready_rejects_spoofed_notify_socket(void)
@@ -70,8 +69,6 @@ static void test_ready_rejects_spoofed_notify_socket(void)
 		FAIL("expected NOTIFY_SOCKET to be cleared after rejection");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_stopping_no_socket(void)
@@ -84,7 +81,6 @@ static void test_stopping_no_socket(void)
 		FAIL("expected 0");
 		return;
 	}
-	PASS();
 }
 
 static void test_reloading_no_socket(void)
@@ -97,7 +93,6 @@ static void test_reloading_no_socket(void)
 		FAIL("expected 0");
 		return;
 	}
-	PASS();
 }
 
 static void test_status_no_socket(void)
@@ -110,7 +105,6 @@ static void test_status_no_socket(void)
 		FAIL("expected 0");
 		return;
 	}
-	PASS();
 }
 
 static void test_status_null(void)
@@ -122,7 +116,6 @@ static void test_status_null(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_watchdog_not_enabled(void)
@@ -137,7 +130,6 @@ static void test_watchdog_not_enabled(void)
 		FAIL("expected false");
 		return;
 	}
-	PASS();
 }
 
 static void test_watchdog_ping_no_socket(void)
@@ -150,7 +142,6 @@ static void test_watchdog_ping_no_socket(void)
 		FAIL("expected 0");
 		return;
 	}
-	PASS();
 }
 
 static void test_listen_fds_none(void)
@@ -164,7 +155,6 @@ static void test_listen_fds_none(void)
 		FAIL("expected 0");
 		return;
 	}
-	PASS();
 }
 
 static void test_is_unix_socket_stdin(void)
@@ -175,7 +165,6 @@ static void test_is_unix_socket_stdin(void)
 		FAIL("stdin should not be a unix socket");
 		return;
 	}
-	PASS();
 }
 
 static void test_is_unix_socket_real(void)
@@ -209,12 +198,11 @@ static void test_is_unix_socket_real(void)
 		unlink(addr.sun_path);
 		close(fd);
 		if (saved_errno == EPERM || saved_errno == EACCES) {
-			tests_passed++;
-			printf("SKIP (AF_UNIX bind not permitted: %s)\n",
-			       strerror(saved_errno));
+			SKIP("AF_UNIX bind not permitted: %s",
+			     strerror(saved_errno));
 			return;
 		}
-		printf("FAIL: bind/listen failed: %s\n", strerror(saved_errno));
+		FAIL("bind/listen failed: %s", strerror(saved_errno));
 		return;
 	}
 
@@ -227,21 +215,18 @@ static void test_is_unix_socket_real(void)
 
 	unlink(addr.sun_path);
 	close(fd);
-	PASS();
 }
 
 static void test_journal_init_null(void)
 {
 	TEST("journal: init(NULL) does not crash");
 	journal_init(NULL);
-	PASS();
 }
 
 static void test_journal_init_ident(void)
 {
 	TEST("journal: init(\"test\") succeeds");
 	journal_init("test");
-	PASS();
 }
 
 static void test_journal_macros_no_crash(void)
@@ -258,7 +243,6 @@ static void test_journal_macros_no_crash(void)
 	lota_info("test info");
 	lota_dbg("test debug");
 	lota_notice("test notice");
-	PASS();
 }
 
 static void test_journal_level_filter(void)
@@ -276,12 +260,11 @@ static void test_journal_level_filter(void)
 	lota_err("this should be emitted");
 
 	journal_set_level(LOG_DEBUG); /* restore */
-	PASS();
 }
 
 int main(void)
 {
-	printf("=== LOTA systemd Integration Tests ===\n\n");
+	test_begin("systemd");
 
 	/* sdnotify tests */
 	test_ready_no_socket();
@@ -302,6 +285,5 @@ int main(void)
 	test_journal_macros_no_crash();
 	test_journal_level_filter();
 
-	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
-	return (tests_passed == tests_run) ? 0 : 1;
+	return test_end();
 }

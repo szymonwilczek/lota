@@ -701,12 +701,16 @@ check_unit_tests() {
     local output
 
     if output="$(env GOCACHE="${GOCACHE:-/tmp/lota-gocache}" \
-        make BUILD_DIR="${BUILD_DIR:-/tmp/lota-build}" test-unit 2>&1)"; then
+        LOTA_TEST_COLOR=never make BUILD_DIR="${BUILD_DIR:-/tmp/lota-build}" test-unit 2>&1)"; then
         pass "unit tests"
         return
     fi
 
-    printf '%s\n' "$output" | grep -E 'FAIL|Results:' | sed 's/^/  /' >&2
+    printf '%s\n' "$output" |
+        awk '/^  \[ *[0-9]+\] .* FAIL$/ { p = 1; print; next }
+             p && /^        / { print; next }
+             { p = 0 }
+             /^make: \*\*\*|^  [0-9]+ groups, |^  FAIL  /' | sed 's/^/  /' >&2
     fail "unit tests" \
          "run env GOCACHE=/tmp/lota-gocache make BUILD_DIR=/tmp/lota-build test-unit and fix the failing assertion."
 }
@@ -872,6 +876,19 @@ check_test_build_dir() {
         printf '%s\n' "$output" | sed 's/^/  /' >&2
         fail "test-build-dir" \
              "a test or an example script names the default build directory; take the path from the build so BUILD_DIR moves it too."
+    fi
+}
+
+# Test names:
+# Runs on every patch: the names live in tests the patch may not touch.
+check_test_names() {
+    local output
+    if output="$(scripts/check-test-names.sh 2>&1)"; then
+        pass "test-names"
+    else
+        printf '%s\n' "$output" | sed 's/^/  /' >&2
+        fail "test-names" \
+             "shorten the test name to 63 characters, or the group name until its header fits 80 columns."
     fi
 }
 
@@ -1285,6 +1302,7 @@ main() {
     check_player_build "${changed_files[@]}"
     check_license_boundary
     check_test_build_dir
+    check_test_names
     check_doc_diagnostics
     check_config_commands
     check_docs_strict

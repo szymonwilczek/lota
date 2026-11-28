@@ -141,7 +141,6 @@ static void test_metadata_key_derivation_round_trip(void)
 		FAIL("a host with no publisher was called shared");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -179,8 +178,6 @@ static void test_absent_metadata_claims_nothing(void)
 		FAIL("reading an absent record wrote one");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -203,7 +200,7 @@ static void test_no_record_advice_names_what_recovers(void)
 	tpm_aik_no_record_advice(&ctx, got, sizeof(got));
 	snprintf(want, sizeof(want), fmt, ctx.aik_meta_path, "aik_auth.dat");
 	if (strcmp(got, want) != 0) {
-		FAIL(got);
+		FAIL("%s", got);
 		return;
 	}
 
@@ -211,11 +208,9 @@ static void test_no_record_advice_names_what_recovers(void)
 	tpm_aik_no_record_advice(&ctx, got, sizeof(got));
 	snprintf(want, sizeof(want), fmt, ctx.aik_meta_path, "aik_auth.sealed");
 	if (strcmp(got, want) != 0) {
-		FAIL(got);
+		FAIL("%s", got);
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -254,8 +249,6 @@ static void test_recorded_shared_key_still_reads_shared(void)
 		FAIL("a recorded shared key stopped reading as shared");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -302,8 +295,6 @@ static void test_provisioning_names_an_orphaned_cert(void)
 		FAIL("a key that is there was called missing");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -342,8 +333,6 @@ static void test_shared_replacement_needs_a_key(void)
 		FAIL("a per-publisher key was called a shared one");
 		return;
 	}
-
-	PASS();
 }
 
 /* Bytes 8-31 are written zero and read past: key_derivation sits at 32 */
@@ -409,8 +398,6 @@ static void test_metadata_unused_bytes_are_ignored(void)
 		FAIL("save moved key_derivation");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_metadata_default_creation(void)
@@ -449,8 +436,6 @@ static void test_metadata_default_creation(void)
 		FAIL("metadata file created for a key that does not exist");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_new_key_metadata_persisted(void)
@@ -488,8 +473,6 @@ static void test_new_key_metadata_persisted(void)
 		FAIL("metadata defaults mismatch");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_metadata_bad_magic(void)
@@ -525,8 +508,6 @@ static void test_metadata_bad_magic(void)
 		FAIL("expected -EINVAL for bad magic");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_metadata_bad_version(void)
@@ -562,8 +543,6 @@ static void test_metadata_bad_version(void)
 		FAIL("expected -ENOTSUP for bad version");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_save_creates_dirs(void)
@@ -593,8 +572,6 @@ static void test_save_creates_dirs(void)
 		FAIL("file not created at nested path");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_metadata_truncated(void)
@@ -625,11 +602,9 @@ static void test_metadata_truncated(void)
 	if (ret != -EIO) {
 		char ebuf[32];
 		snprintf(ebuf, sizeof(ebuf), "expected -EIO, got %d", ret);
-		FAIL(ebuf);
+		FAIL("%s", ebuf);
 		return;
 	}
-
-	PASS();
 }
 
 static void test_rc_success_is_zero(void)
@@ -640,8 +615,6 @@ static void test_rc_success_is_zero(void)
 		FAIL("expected 0");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_rc_lockout_raw(void)
@@ -660,8 +633,6 @@ static void test_rc_lockout_raw(void)
 		FAIL("expected -LOTA_ERR_TPM_LOCKED for LOCKOUT");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_rc_lockout_resmgr_layer(void)
@@ -678,8 +649,6 @@ static void test_rc_lockout_resmgr_layer(void)
 		FAIL("expected -LOTA_ERR_TPM_LOCKED for layered LOCKOUT");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_rc_transient_codes(void)
@@ -698,14 +667,14 @@ static void test_rc_transient_codes(void)
 			char ebuf[64];
 			snprintf(ebuf, sizeof(ebuf), "code 0x%X not transient",
 				 (unsigned)transient[i]);
-			FAIL(ebuf);
+			FAIL("%s", ebuf);
 			return;
 		}
 		if (tpm_test_rc_to_errno(transient[i]) != -EAGAIN) {
 			char ebuf[64];
 			snprintf(ebuf, sizeof(ebuf), "code 0x%X != -EAGAIN",
 				 (unsigned)transient[i]);
-			FAIL(ebuf);
+			FAIL("%s", ebuf);
 			return;
 		}
 		if (tpm_test_rc_is_lockout(transient[i])) {
@@ -713,8 +682,6 @@ static void test_rc_transient_codes(void)
 			return;
 		}
 	}
-
-	PASS();
 }
 
 static void test_rc_auth_fail_with_session_bits(void)
@@ -739,8 +706,6 @@ static void test_rc_auth_fail_with_session_bits(void)
 		FAIL("AUTH_FAIL must not be transient");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_rc_value_and_handle(void)
@@ -755,8 +720,6 @@ static void test_rc_value_and_handle(void)
 		FAIL("HANDLE != -ENOENT");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -777,8 +740,6 @@ static void test_rc_nv_space(void)
 		FAIL("a full TPM must not be retried as transient");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_rc_tcti_layer(void)
@@ -797,8 +758,6 @@ static void test_rc_tcti_layer(void)
 		FAIL("TRY_AGAIN must be transient");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_lockout_flag_lifecycle(void)
@@ -834,8 +793,6 @@ static void test_lockout_flag_lifecycle(void)
 		FAIL("first_seen not cleared by reset");
 		return;
 	}
-
-	PASS();
 }
 
 static uint32_t g_mock_permanent;
@@ -886,8 +843,6 @@ static void test_lockout_survives_auth_free_success(void)
 		FAIL("flag kept after the TPM left lockout");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -955,8 +910,6 @@ static void test_tpm_strerror_maps_lota_private(void)
 		FAIL("tpm_strerror(0) must not be NULL");
 		return;
 	}
-
-	PASS();
 }
 
 static void fill_pattern(uint8_t *buf, size_t n, uint8_t seed)
@@ -1015,8 +968,6 @@ static void test_clock_state_save_load_round_trip(void)
 		FAIL("self_hash bytes mismatch after round-trip");
 		return;
 	}
-
-	PASS();
 }
 
 static void reference_initramfs_lock_digest(uint8_t out[LOTA_HASH_SIZE])
@@ -1062,8 +1013,6 @@ static void test_initramfs_lock_digest_matches_reference(void)
 		FAIL("NULL output must be rejected");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -1087,7 +1036,6 @@ static void test_clock_state_load_missing_is_enoent(void)
 		FAIL("expected -ENOENT, got different errno");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1154,8 +1102,6 @@ static void test_clock_state_load_rejects_corrupt(void)
 		FAIL("bad version should produce -EINVAL");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_self_hash_pin_round_trip(void)
@@ -1164,7 +1110,7 @@ static void test_self_hash_pin_round_trip(void)
 	uint8_t out[LOTA_HASH_SIZE];
 	int ret;
 
-	TEST("tpm_get_self_hash gates on self_hash_ready and round-trips bytes");
+	TEST("tpm_get_self_hash gates on self_hash_ready, round-trips bytes");
 	make_ctx(&ctx);
 
 	ret = tpm_get_self_hash(&ctx, out);
@@ -1198,8 +1144,6 @@ static void test_self_hash_pin_round_trip(void)
 		FAIL("NULL out must produce -EINVAL");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -1282,7 +1226,6 @@ static void test_call_with_backoff_no_leak_on_retry(void)
 
 	/* successful allocation owns one heap block; release it before exit */
 	free(slot);
-	PASS();
 }
 
 /*
@@ -1296,8 +1239,7 @@ static void test_call_with_backoff_no_leak_on_retry(void)
  */
 static void test_call_with_backoff_respects_wallclock_budget(void)
 {
-	TEST("tpm_call_with_backoff cumulative sleep stays under watchdog "
-	     "budget");
+	TEST("tpm_call_with_backoff sleeps less than the watchdog budget");
 	void *slot = NULL;
 	struct backoff_thunk_state state = {
 		.calls = 0,
@@ -1336,12 +1278,11 @@ static void test_call_with_backoff_respects_wallclock_budget(void)
 		snprintf(buf, sizeof(buf),
 			 "wall time %llu ms exceeded budget+slack",
 			 (unsigned long long)elapsed_ms);
-		FAIL(buf);
+		FAIL("%s", buf);
 		free(slot);
 		return;
 	}
 	free(slot);
-	PASS();
 }
 
 /*
@@ -1392,7 +1333,6 @@ static void test_call_with_backoff_gives_up_without_leak(void)
 		return;
 	}
 	free(slot);
-	PASS();
 }
 
 /*
@@ -1459,7 +1399,6 @@ static void test_aik_unique_separates_publishers(void)
 			return;
 		}
 	}
-	PASS();
 }
 
 static void test_stale_object_record_is_told_from_a_tpm_refusal(void)
@@ -1482,7 +1421,6 @@ static void test_stale_object_record_is_told_from_a_tpm_refusal(void)
 		FAIL("success, lockout or a retry would have reopened it");
 		return;
 	}
-	PASS();
 }
 
 static void test_binding_does_not_survive_a_reused_handle(void)
@@ -1525,7 +1463,6 @@ static void test_binding_does_not_survive_a_reused_handle(void)
 		FAIL("an unbound context claimed to hold this key");
 		return;
 	}
-	PASS();
 }
 
 static void test_object_change_is_read_from_the_name(void)
@@ -1561,7 +1498,6 @@ static void test_object_change_is_read_from_the_name(void)
 		FAIL("the first look reported the key as replaced");
 		return;
 	}
-	PASS();
 }
 
 /* A 24-PCR SHA-256 bank: PCR n reads n + 1 in every byte. */
@@ -1636,8 +1572,6 @@ static void test_pcr_batch_reads_past_eight(void)
 		FAIL("expected three TPM2_PCR_Read calls");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_refused_unseal_with_unmoved_pcrs_is_the_blob(void)
@@ -1716,7 +1650,6 @@ static void test_refused_unseal_with_unmoved_pcrs_is_the_blob(void)
 		FAIL("a stack error on load read as a TPM refusal");
 		return;
 	}
-	PASS();
 }
 
 static void test_failed_bind_keeps_the_bound_publisher(void)
@@ -1749,7 +1682,6 @@ static void test_failed_bind_keeps_the_bound_publisher(void)
 		FAIL("the handle moved");
 		return;
 	}
-	PASS();
 }
 
 static void test_reprovision_reads_the_record_first(void)
@@ -1797,7 +1729,6 @@ static void test_reprovision_reads_the_record_first(void)
 		FAIL("the publisher's own key was refused");
 		return;
 	}
-	PASS();
 }
 
 /* The TPM lists the bound handle; opening it needs g_key_object */
@@ -1888,7 +1819,6 @@ static void test_lost_auth_keeps_a_shared_key(void)
 		FAIL("provisioning went on to replace the key");
 		return;
 	}
-	PASS();
 }
 
 static void test_reprovision_rewrites_a_missing_record(void)
@@ -1914,14 +1844,13 @@ static void test_reprovision_rewrites_a_missing_record(void)
 	if (ret != 0) {
 		char ebuf[64];
 		snprintf(ebuf, sizeof(ebuf), "expected 0, got %d", ret);
-		FAIL(ebuf);
+		FAIL("%s", ebuf);
 		return;
 	}
 	if (ctx.aik_meta_loaded) {
 		FAIL("a record was assumed");
 		return;
 	}
-	PASS();
 }
 
 static void test_provision_ignores_the_vendor_string(void)
@@ -1949,10 +1878,9 @@ static void test_provision_ignores_the_vendor_string(void)
 	if (ret != -ENOTSUP) {
 		char ebuf[64];
 		snprintf(ebuf, sizeof(ebuf), "expected -ENOTSUP, got %d", ret);
-		FAIL(ebuf);
+		FAIL("%s", ebuf);
 		return;
 	}
-	PASS();
 }
 
 static int g_esys_session;
@@ -2006,7 +1934,6 @@ static void test_reconnect_keeps_the_aik_name(void)
 		FAIL("the cached auth or record survived");
 		return;
 	}
-	PASS();
 }
 
 static int g_quotes;
@@ -2122,7 +2049,6 @@ static void test_refused_auth_is_not_offered_again(void)
 		FAIL("a changed authorization was not offered");
 		return;
 	}
-	PASS();
 }
 
 static void publisher_paths(struct profile_paths *paths, const char *name,
@@ -2187,12 +2113,11 @@ static void test_refusal_outlives_a_publisher_switch(void)
 		FAIL("the refused authorization reached the TPM again");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("\n=== AIK Tests ===\n\n");
+	test_begin("aik rotation");
 
 	setup_tmp_dir();
 
@@ -2245,6 +2170,5 @@ int main(void)
 
 	cleanup_tmp_dir();
 
-	printf("\n  Result: %d/%d passed\n\n", tests_passed, tests_run);
-	return (tests_passed == tests_run) ? 0 : 1;
+	return test_end();
 }

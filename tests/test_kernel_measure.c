@@ -12,22 +12,11 @@
 
 #include <errno.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "../src/agent/kernel_measure.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 /* a machine's registers: value per PCR, and whether the read succeeds */
 struct fake_tpm {
@@ -79,10 +68,16 @@ static void test_grub_host_takes_pcr9(void)
 	set_pcr(&tpm, 8, 0x91);
 	set_pcr(&tpm, 4, 0x97);
 
-	CHECK(kernel_measurement_select(fake_read, &tpm, out, &pcr) == 0,
-	      "a host with an unextended PCR 11 still has a measurement");
-	CHECK(pcr == 9, "the GRUB kernel measurement comes from PCR 9");
-	CHECK(out[0] == 0x3c, "the value is the one PCR 9 holds");
+	TEST("a host with an unextended PCR 11 still has a measurement");
+	if (kernel_measurement_select(fake_read, &tpm, out, &pcr) != 0)
+		FAIL("expected: kernel_measurement_select(fake_read, &tpm, "
+		     "out, &pcr) == 0");
+	TEST("the GRUB kernel measurement comes from PCR 9");
+	if (pcr != 9)
+		FAIL("expected: pcr == 9");
+	TEST("the value is the one PCR 9 holds");
+	if (out[0] != 0x3c)
+		FAIL("expected: out[0] == 0x3c");
 }
 
 /* a unified kernel image is measured into PCR 11, and it still wins */
@@ -96,9 +91,11 @@ static void test_uki_host_takes_pcr11(void)
 	set_pcr(&tpm, 11, 0xab);
 	set_pcr(&tpm, 9, 0x3c);
 
-	CHECK(kernel_measurement_select(fake_read, &tpm, out, &pcr) == 0 &&
-		      pcr == 11 && out[0] == 0xab,
-	      "a UKI host keeps reporting PCR 11");
+	TEST("a UKI host keeps reporting PCR 11");
+	if (!(kernel_measurement_select(fake_read, &tpm, out, &pcr) == 0 &&
+	      pcr == 11 && out[0] == 0xab))
+		FAIL("expected: kernel_measurement_select(fake_read, &tpm, "
+		     "out, &pcr) == 0 && pcr == 11 && out[0] == 0xab");
 }
 
 /*
@@ -114,9 +111,13 @@ static void test_no_measurement_is_not_zeros(void)
 
 	all_readable(&tpm);
 
-	CHECK(kernel_measurement_select(fake_read, &tpm, out, &pcr) == -ENOENT,
-	      "a host with no kernel measurement reports none");
-	CHECK(pcr == -1, "and names no register");
+	TEST("a host with no kernel measurement reports none");
+	if (kernel_measurement_select(fake_read, &tpm, out, &pcr) != -ENOENT)
+		FAIL("expected: kernel_measurement_select(fake_read, &tpm, "
+		     "out, &pcr) == -ENOENT");
+	TEST("and names no register");
+	if (pcr != -1)
+		FAIL("expected: pcr == -1");
 }
 
 /* a register that cannot be read is skipped, not treated as empty */
@@ -130,9 +131,11 @@ static void test_unreadable_register_is_skipped(void)
 	tpm.readable[11] = 0;
 	set_pcr(&tpm, 9, 0x3c);
 
-	CHECK(kernel_measurement_select(fake_read, &tpm, out, &pcr) == 0 &&
-		      pcr == 9,
-	      "an unreadable register does not stop the search");
+	TEST("an unreadable register does not stop the search");
+	if (!(kernel_measurement_select(fake_read, &tpm, out, &pcr) == 0 &&
+	      pcr == 9))
+		FAIL("expected: kernel_measurement_select(fake_read, &tpm, "
+		     "out, &pcr) == 0 && pcr == 9");
 }
 
 static void test_rejects_bad_arguments(void)
@@ -141,25 +144,24 @@ static void test_rejects_bad_arguments(void)
 	uint8_t out[LOTA_HASH_SIZE];
 
 	all_readable(&tpm);
-	CHECK(kernel_measurement_select(NULL, &tpm, out, NULL) == -EINVAL,
-	      "no reader is an invalid argument");
-	CHECK(kernel_measurement_select(fake_read, &tpm, NULL, NULL) == -EINVAL,
-	      "nowhere to put the digest is an invalid argument");
+	TEST("no reader is an invalid argument");
+	if (kernel_measurement_select(NULL, &tpm, out, NULL) != -EINVAL)
+		FAIL("expected: kernel_measurement_select(NULL, &tpm, out, "
+		     "NULL) == -EINVAL");
+	TEST("nowhere to put the digest is an invalid argument");
+	if (kernel_measurement_select(fake_read, &tpm, NULL, NULL) != -EINVAL)
+		FAIL("expected: kernel_measurement_select(fake_read, &tpm, "
+		     "NULL, NULL) == -EINVAL");
 }
 
 int main(void)
 {
-	printf("=== kernel measurement source tests ===\n");
+	test_begin("kernel measure");
 	test_grub_host_takes_pcr9();
 	test_uki_host_takes_pcr11();
 	test_no_measurement_is_not_zeros();
 	test_unreadable_register_is_skipped();
 	test_rejects_bad_arguments();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll kernel measurement source tests passed\n");
-	return 0;
+	return test_end();
 }

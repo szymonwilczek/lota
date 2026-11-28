@@ -100,8 +100,6 @@ static void test_bus_answers_the_daemons_word(void)
 		FAIL("the bus answered a word the daemon did not produce");
 	else if (host_status_calls == 0)
 		FAIL("the bus never asked the daemon for the word");
-	else
-		PASS();
 
 	dbus_cleanup(ctx);
 }
@@ -123,8 +121,6 @@ static void test_version_names_this_build(void)
 		FAIL("the bus answers no version at all");
 	else if (strcmp(reported, LOTA_BUILD_VERSION_STRING) != 0)
 		FAIL("the bus names a version this build does not have");
-	else
-		PASS();
 }
 
 static void test_init_null_ipc(void)
@@ -135,14 +131,12 @@ static void test_init_null_ipc(void)
 		FAIL("expected NULL");
 		return;
 	}
-	PASS();
 }
 
 static void test_cleanup_null(void)
 {
 	TEST("cleanup: NULL context does not crash");
 	dbus_cleanup(NULL);
-	PASS();
 }
 
 static void test_get_fd_null(void)
@@ -153,7 +147,6 @@ static void test_get_fd_null(void)
 		FAIL("expected -1");
 		return;
 	}
-	PASS();
 }
 
 static void test_process_null(void)
@@ -164,7 +157,6 @@ static void test_process_null(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_emit_null_safe(void)
@@ -173,7 +165,6 @@ static void test_emit_null_safe(void)
 	dbus_emit_status_changed(NULL);
 	dbus_emit_attestation_result(NULL, true);
 	dbus_emit_mode_changed(NULL, 0);
-	PASS();
 }
 
 static void test_init_system_bus(void)
@@ -183,8 +174,7 @@ static void test_init_system_bus(void)
 	struct dbus_context *ctx = dbus_init(&test_ipc);
 	if (!ctx) {
 		/* D-Bus unavailable, eg: CI container -> pass anyway */
-		printf("SKIP (no system bus)\n");
-		tests_passed++;
+		SKIP("no system bus");
 		return;
 	}
 
@@ -210,7 +200,6 @@ static void test_init_system_bus(void)
 
 	dbus_process(ctx, 0);
 	dbus_cleanup(ctx);
-	PASS();
 }
 
 /*
@@ -314,16 +303,14 @@ static void test_signal_reaches_a_real_bus(void)
 	TEST("an emitted signal reaches a watcher on a real bus");
 
 	if (private_bus_start() < 0) {
-		printf("SKIP (no dbus-daemon)\n");
-		tests_passed++;
+		SKIP("no dbus-daemon");
 		return;
 	}
 
 	ret = sd_bus_open_system(&watcher);
 	if (ret < 0) {
 		private_bus_stop();
-		printf("SKIP (cannot open the private bus)\n");
-		tests_passed++;
+		SKIP("cannot open the private bus");
 		return;
 	}
 
@@ -371,8 +358,6 @@ static void test_signal_reaches_a_real_bus(void)
 		FAIL("the counters moved with no PropertiesChanged");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_double_cleanup(void)
@@ -381,21 +366,18 @@ static void test_double_cleanup(void)
 
 	struct dbus_context *ctx = dbus_init(&test_ipc);
 	if (!ctx) {
-		printf("SKIP (no system bus)\n");
-		tests_passed++;
+		SKIP("no system bus");
 		return;
 	}
 
 	dbus_cleanup(ctx);
 	dbus_cleanup(NULL);
-	PASS();
 }
 
 static void test_ipc_set_dbus_null(void)
 {
 	TEST("ipc_set_dbus: NULL ctx does not crash");
 	ipc_set_dbus(NULL, NULL);
-	PASS();
 }
 
 static void test_ipc_set_dbus_attach(void)
@@ -418,8 +400,6 @@ static void test_ipc_set_dbus_attach(void)
 		FAIL("dbus pointer not cleared");
 		return;
 	}
-
-	PASS();
 }
 
 struct token_reply {
@@ -452,16 +432,14 @@ static void test_bus_words_agree_on_a_real_bus(void)
 	TEST("GetToken and StatusChanged carry the bus status word");
 
 	if (private_bus_start() < 0) {
-		printf("SKIP (no dbus-daemon)\n");
-		tests_passed++;
+		SKIP("no dbus-daemon");
 		return;
 	}
 
 	ret = sd_bus_open_system(&watcher);
 	if (ret < 0) {
 		private_bus_stop();
-		printf("SKIP (cannot open the private bus)\n");
-		tests_passed++;
+		SKIP("cannot open the private bus");
 		return;
 	}
 
@@ -503,8 +481,6 @@ static void test_bus_words_agree_on_a_real_bus(void)
 		FAIL("GetToken answers the stored word");
 	else if (seen.status_word != TEST_HOST_STATUS_FLAGS)
 		FAIL("StatusChanged carries the stored word");
-	else
-		PASS();
 }
 
 struct introspect_reply {
@@ -543,16 +519,14 @@ static void test_get_token_answers_the_lota_group(void)
 	TEST("GetToken is not marked privileged on the bus");
 
 	if (private_bus_start() < 0) {
-		printf("SKIP (no dbus-daemon)\n");
-		tests_passed++;
+		SKIP("no dbus-daemon");
 		return;
 	}
 
 	ret = sd_bus_open_system(&client);
 	if (ret < 0) {
 		private_bus_stop();
-		printf("SKIP (cannot open the private bus)\n");
-		tests_passed++;
+		SKIP("cannot open the private bus");
 		return;
 	}
 
@@ -592,15 +566,13 @@ static void test_get_token_answers_the_lota_group(void)
 			"org.freedesktop.systemd1.Privileged",
 			strlen("org.freedesktop.systemd1.Privileged")))
 		FAIL("GetToken answers root only");
-	else
-		PASS();
 
 	free(reply.xml);
 }
 
 int main(void)
 {
-	printf("=== LOTA D-Bus Unit Tests ===\n\n");
+	test_begin("dbus");
 
 	setup_ipc();
 
@@ -621,6 +593,5 @@ int main(void)
 	test_get_token_answers_the_lota_group();
 	test_double_cleanup();
 
-	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
-	return (tests_passed == tests_run) ? 0 : 1;
+	return test_end();
 }
