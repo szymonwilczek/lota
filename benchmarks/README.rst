@@ -1,156 +1,177 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-LOTA benchmarks
-===============
+================
+Micro-benchmarks
+================
 
-Performance measurement for the whole tree, organised in three layers by what
-each needs to run. Numbers feed ``Documentation/performance/evaluation.rst`` and locate the hot paths worth
-optimising.
+The micro-benchmarks time the CPU-bound steps of verification, enrollment
+and the SDK, one operation at a time. They need no TPM, no agent and no
+root. The figures taken on the reference host are in
+``Documentation/performance/evaluation.rst``.
 
-Layers
-------
+Running
+=======
 
-+---------------+--------------------------------+-------------------+-------------------+
-| Layer         | What it measures               | Tooling           | Needs             |
-+===============+================================+===================+===================+
-| **L1 micro**  | pure-CPU hot paths: crypto     | Go ``testing.B``  | nothing special;  |
-|               | verify, parse/serialize, hash, | + ``benchstat``;  | runs in CI        |
-|               | codec, DB lookup,              | header-only C     |                   |
-|               | MakeCredential                 | harness           |                   |
-|               |                                | (``cbench.h``)    |                   |
-+---------------+--------------------------------+-------------------+-------------------+
-| **L2 macro**  | end-to-end CLI wall-clock:     | ``hyperfine``     | ``swtpm``, the    |
-|               | ``--attest``, enrollment       | over the swtpm    | demo sandbox      |
-|               | ceremony, verifier round-trip  | sandbox           |                   |
-+---------------+--------------------------------+-------------------+-------------------+
-| **L3 kernel** | BPF LSM hook overhead on       | ``perf stat``,    | root, loaded BPF, |
-|               | ``execve``/``mmap``/``ptrace`` | with vs without   | ``perf``          |
-|               |                                | the LSM loaded    |                   |
-+---------------+--------------------------------+-------------------+-------------------+
+.. code-block:: console
 
-L1 is the default ``make bench``. L2/L3 are operator runbooks below; they are
-not wired into ``make`` because they need a TPM sandbox or root and are not
-reproducible in GitHub Actions.
+   $ make bench          # bench-c, then bench-go
+   $ make bench-c        # the C SDK benchmarks
+   $ make bench-go       # the Go benchmarks
+   $ make bench-clean    # removes the results and build/bench_sdk
 
-L1 - micro-benchmarks (default)
--------------------------------
+``bench-go`` runs ``go test -run '^$' -bench=. -benchmem`` in
+``src/verifier``, ``sdk/server`` and ``src/attestca``, each benchmark
+``BENCH_COUNT`` times (default 6) for ``BENCH_TIME`` (default ``1s``):
 
-.. code:: sh
+.. code-block:: console
 
-   make bench                     # C + Go
-   make bench-go                  # Go only (verifier, sdk/server, attestca)
-   make bench-c                   # C SDK only
-   BENCH_COUNT=10 make bench-go   # more samples for benchstat
-   benchmarks/scripts/run_all.sh  # both + benchstat summary + host info
+   $ make bench-go BENCH_COUNT=10 BENCH_TIME=2s
 
-The ``benchmarks`` job in ``.github/workflows/ci.yml`` runs both runners on
-every push/PR as a **correctness gate** (``make bench-c`` with tiny reps,
-``make bench-go BENCH_TIME=1x``): it proves every benchmark compiles and runs
-without crashing. Shared CI runners are too noisy for real timings, so quotable
-numbers come from a pinned host into ``Documentation/performance/evaluation.rst``.
+The output goes to the terminal and to ``benchmarks/results/``:
 
-Both targets exit with the status of the runner they invoke, so a benchmark
-that fails to run fails the target. The results file is still written and holds
-the reason.
+.. list-table::
+   :header-rows: 1
+   :widths: 35 65
 
-Raw output is archived under ``benchmarks/results/``:
+   * - File
+     - Contents
+   * - ``go-src-verifier.txt``
+     - ``go test`` output of ``src/verifier``
+   * - ``go-sdk-server.txt``
+     - ``go test`` output of ``sdk/server``
+   * - ``go-src-attestca.txt``
+     - ``go test`` output of ``src/attestca``
+   * - ``c-sdk.txt``
+     - the table ``build/bench_sdk`` prints
+   * - ``c-sdk.json``
+     - one JSON object per C benchmark
 
-- ``go-src-*.txt`` - ``go test -bench`` output, one file per module (benchstat
-  input).
-- ``c-sdk.txt`` / ``c-sdk.json`` - C harness, human and machine-readable.
+Each run replaces the files. A target exits with the status of the runner
+it started; a runner that fails leaves its file behind, and the target
+reports that the file is not a measurement.
+
+``benchmarks/scripts/run_all.sh`` prints the kernel, the CPU model and the
+Go version, runs ``make bench-c`` and ``make bench-go`` with
+``BENCH_COUNT`` of 10 unless set, and then runs ``benchstat`` over each Go
+file when ``benchstat`` is installed.
 
 Go benchmarks
-~~~~~~~~~~~~~
+=============
 
-Standard ``testing.B``, co-located with each package, discovered by
-``go test -bench=. ./...``. Reported as ``ns/op``, ``B/op``, ``allocs/op``. Use
-```benchstat`` <https://pkg.go.dev/golang.org/x/perf/cmd/benchstat>`__ for mean
-+- variation and A/B comparison between two runs:
+The benchmarks are ``testing.B`` functions next to the code they time:
 
-.. code:: sh
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
 
-   go install golang.org/x/perf/cmd/benchstat@latest
-   benchstat benchmarks/results/go-src-verifier.txt
-   # compare a change:
-   git stash; make bench-go; mv benchmarks/results/go-src-verifier.txt old.txt
-   git stash pop; make bench-go
-   benchstat old.txt benchmarks/results/go-src-verifier.txt
+   * - Package
+     - Benchmarks
+   * - ``src/verifier/verify``
+     - ``RSASSAVerify``, ``RSAPSSVerify``, ``RSASSAVerifyParallel``
+   * - ``src/verifier/types``
+     - ``ParseReport``
+   * - ``sdk/server``
+     - ``VerifyToken``, ``ParseToken``
+   * - ``src/attestca/credential``
+     - ``GenerateChallenge``, ``ValidateAIK``
+   * - ``src/attestca/wire``
+     - ``EncodeBegin``, ``DecodeBegin``, ``EncodeResult``, ``DecodeResult``
 
-Covered: verifier ``verify`` (RSASSA/RSAPSS quote verify), ``types`` (report
-parse), ``store`` (sqlite AIK lookup); ``sdk/server`` (VerifyToken,
-ParseToken); ``attestca`` ``credential`` (GenerateChallenge = MakeCredential,
-ValidateAIK) and ``wire`` (codec).
+Each reports ``ns/op``, ``B/op`` and ``allocs/op``.
+``RSASSAVerifyParallel`` runs the check on ``GOMAXPROCS`` goroutines, so
+its ``-cpu`` list gives the scaling over cores.
 
-.. _c-harness-cbenchh:
+``benchstat`` (``golang.org/x/perf/cmd/benchstat``) summarises the
+samples of one file, and compares two files of the same benchmarks:
 
-C harness (``cbench.h``)
-~~~~~~~~~~~~~~~~~~~~~~~~
+.. code-block:: console
 
-Header-only. Auto-calibrates a batch size so each sample lasts
-``BENCH_TARGET_MS`` (amortising ``clock_gettime`` overhead), then collects
-``BENCH_REPS`` samples and reports median / p99 / min / stddev / ops-per-sec.
-``CLOCK_MONOTONIC_RAW`` is used so NTP slewing cannot perturb a sample.
+   $ make bench-go
+   $ cp benchmarks/results/go-src-verifier.txt old.txt
+   ... change the tree ...
+   $ make bench-go
+   $ benchstat old.txt benchmarks/results/go-src-verifier.txt
 
-.. code:: sh
+C benchmarks
+============
 
-   BENCH_REPS=100 BENCH_TARGET_MS=10 make bench-c   # tighter distribution
-   BENCH_EXE_KIB=8192 build/bench_sdk               # hash an 8 MiB image
-   BENCH_JSON=/tmp/c.json build/bench_sdk           # append machine-readable rows
+``build/bench_sdk`` (``benchmarks/c/bench_sdk.c``) times three SDK calls:
 
-Covered: game-binding hash (SHA-256 over the executable image), token
-serialize, token parse.
+``game_binding_hash``
+   ``lota_ac_compute_game_binding_hash()`` over a file of
+   ``BENCH_EXE_KIB`` KiB (default 1024), written under ``/tmp`` at start
+   and removed at exit.
 
-.. _l2---macro--end-to-end-swtpm:
+``token_serialize``
+   ``lota_token_serialize()`` of a token with a 120-byte quote and a
+   256-byte signature.
 
-L2 - macro / end-to-end (swtpm)
--------------------------------
+``token_parse``
+   ``lota_server_parse_token()`` of that token, which checks no signature.
 
-Wall-clock of the real binaries against the demo's isolated swtpm sandbox.
-Bring the sandbox up first (``examples/demo/setup.sh --keep-tmp``), then:
+Before the table it prints the file size and the token's wire size to
+standard error, as ``suite=sdk exe_bytes=... token_wire=...``.
 
-.. code:: sh
+The harness, ``benchmarks/include/cbench.h``, needs only the header.
+For each benchmark it doubles a batch of calls until one batch takes
+``BENCH_TARGET_MS``, runs ``BENCH_WARMUP`` batches it discards, then times
+``BENCH_REPS`` batches with ``CLOCK_MONOTONIC_RAW``. A sample is the
+batch's time over its size. It prints the median, the 99th percentile,
+the minimum and the standard deviation of the samples in nanoseconds, and
+the calls per second at the median.
 
-   sudo dnf install hyperfine
+.. list-table::
+   :header-rows: 1
+   :widths: 30 15 55
 
-   # Attestation round-trip latency (agent <-> verifier), warmed up:
-   hyperfine --warmup 3 --runs 50 \
-     'lota-agent --attest --verifier 127.0.0.1:9443 --ca-cert <ca.crt>'
+   * - Variable
+     - Default
+     - Meaning
+   * - ``BENCH_REPS``
+     - 50
+     - samples per benchmark
+   * - ``BENCH_WARMUP``
+     - 5
+     - batches run and discarded
+   * - ``BENCH_TARGET_MS``
+     - 5
+     - the time of one batch, in milliseconds
+   * - ``BENCH_JSON``
+     - unset
+     - a file to append one JSON object per benchmark to
+   * - ``BENCH_EXE_KIB``
+     - 1024
+     - the size of the hashed file, in KiB
 
-   # Enrollment ceremony (EK verify + MakeCredential + ActivateCredential):
-   hyperfine --warmup 2 --runs 30 \
-     'lota-agent --enroll --ca-server 127.0.0.1 --ca-port 8444 --ca-cert <tls.crt>'
+For the four numeric variables, an empty value, a value of zero, or one
+that ``strtoull(3)`` does not read to its end leaves the default.
+``make bench-c`` removes ``c-sdk.json`` and sets ``BENCH_JSON`` to it. An
+object carries ``suite``, ``name``, ``median_ns``, ``p99_ns``, ``min_ns``,
+``stddev_ns``, ``ops_per_sec``, ``samples`` and ``batch``.
 
-Report p50/p95 wall-clock. These include IPC, the TPM quote, and TLS, so they
-are the numbers a deploying studio actually feels per session.
+.. code-block:: console
 
-.. _l3---kernel--bpf-lsm-overhead-root:
+   $ BENCH_REPS=100 BENCH_TARGET_MS=10 make bench-c
+   $ BENCH_EXE_KIB=8192 build/bench_sdk
 
-L3 - kernel / BPF LSM overhead (root)
--------------------------------------
+In CI
+=====
 
-The cost the LSM adds to the syscalls it gates. Measure a tight workload with
-the agent's BPF programs loaded vs unloaded:
+The ``benchmarks`` job of ``.github/workflows/ci.yml`` runs ``make
+bench-c`` with ``BENCH_REPS=3``, ``BENCH_TARGET_MS=1`` and
+``BENCH_EXE_KIB=64``, and ``make bench-go BENCH_COUNT=1 BENCH_TIME=1x``. It
+fails when a benchmark does not build or does not run. The runners are
+shared, so their timings are not figures.
 
-.. code:: sh
+Taking figures
+==============
 
-   # exec hook (bprm_creds_for_exec): many execve of /bin/true
-   perf stat -r 20 -- sh -c 'for i in $(seq 1 2000); do /bin/true; done'
+The figures in ``evaluation.rst`` carry the host, the date and the commit
+they were taken at. To take them again:
 
-   # mmap/mprotect W^X gate: a microbench doing N mmap+mprotect cycles
-   perf stat -r 20 -- ./mmap_churn 100000
-
-Run each twice - once with ``lota-agent --mode enforce`` active, once with the
-LSM unloaded - and report the per-operation delta (microseconds/op).
-
-Methodology notes
------------------
-
-- Pin the governor to ``performance`` and disable turbo for stable numbers:
-  ``sudo cpupower frequency-set -g performance``.
-- Quiesce the box (no browser, no compiles) during a run.
-- L1 is single-threaded per benchmark; throughput figures are per-core.
-  Multiply by core count only after confirming the path has no shared lock (the
-  verifier's per-attestation crypto is independent; the sqlite store serialises
-  writes).
-- Commit a refreshed ``Documentation/performance/evaluation.rst`` whenever a hot path changes materially.
+* set the ``performance`` governor, for instance with ``cpupower
+  frequency-set -g performance``;
+* leave the host idle during the run;
+* run ``make bench-c`` and ``make bench-go`` at a clean tree, and record
+  the commit with the figures.

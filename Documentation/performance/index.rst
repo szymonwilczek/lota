@@ -5,20 +5,14 @@
 Performance
 ===========
 
-* :doc:`Performance evaluation <evaluation>` -- baseline measurements of the
-  LOTA hot paths.
-* :doc:`Load testing with the synthetic fleet <load-testing>` -- driving a
-  verifier at fleet scale with ``lota-loadgen``.
-* :doc:`Measuring a game with lota-bench <lota-bench>` -- sampling what LOTA
-  costs a running game into a shareable result file.
-* :doc:`What the agent reports under --bench <agent-bench>` -- the agent's
-  own cost, and the protected set's, from inside the daemon.
-
-Methodology, tooling, and the L2/L3 runbooks live in :ghsrc:`benchmarks/README.rst`;
-regenerate the raw data with ``make bench`` or :ghsrc:`benchmarks/scripts/run_all.sh`.
+These pages cover the tools that measure LOTA and the figures they gave.
+The micro-benchmarks time the verification and SDK hot paths
+(:ghsrc:`benchmarks/README.rst`), ``lota-loadgen`` drives a verifier with a
+synthetic fleet, and ``lota-bench`` measures what LOTA costs a running game.
+None of these three ships in the packages.
 
 .. toctree::
-   :hidden:
+   :maxdepth: 1
 
    evaluation
    load-testing
