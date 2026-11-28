@@ -174,10 +174,8 @@ static int lay_out(const char *name, char *dir, size_t cap)
 	return 0;
 }
 
-static int run(const char *dir, const char *opt, const char *val)
+static int run_argv(int argc, char **argv)
 {
-	char *argv[5] = { "run", (char *)dir, (char *)opt, (char *)val, NULL };
-	int argc = opt ? 4 : 2;
 	int fd, saved, ret;
 
 	/* what it prints for a person is not under test */
@@ -196,6 +194,13 @@ static int run(const char *dir, const char *opt, const char *val)
 		close(saved);
 	}
 	return ret;
+}
+
+static int run(const char *dir, const char *opt, const char *val)
+{
+	char *argv[5] = { "run", (char *)dir, (char *)opt, (char *)val, NULL };
+
+	return run_argv(opt ? 4 : 2, argv);
 }
 
 static void test_assemble(void)
@@ -237,6 +242,15 @@ static void test_assemble(void)
 static void test_refusals(void)
 {
 	char dir[128], path[256], target[256];
+	char *dense[] = { "run",
+			  dir,
+			  "--game",
+			  "Example Title",
+			  "--duration-s",
+			  "3600",
+			  "--interval-ms",
+			  "100",
+			  NULL };
 	char *other;
 
 	TEST("a run file under another run's name is refused");
@@ -286,6 +300,20 @@ static void test_refusals(void)
 	snprintf(dir, sizeof(dir), "%s/a,b", base);
 	if (run(dir, "--game", "Example Title") != 1 || exists(base, "a,b"))
 		FAIL("began a session under a ','");
+	else
+		PASS();
+
+	TEST("a session refused for its options leaves no directory");
+	snprintf(dir, sizeof(dir), "%s/refused", base);
+	if (run(dir, "--rounds", "3") != EXIT_BENCH_USAGE ||
+	    exists(base, "refused"))
+		FAIL("left the directory without --game");
+	else if (run_argv(8, dense) != 1 || exists(base, "refused"))
+		FAIL("left the directory past the sample limit");
+	else if (mkdir(dir, 0755) ||
+		 run(dir, "--rounds", "3") != EXIT_BENCH_USAGE ||
+		 !exists(base, "refused"))
+		FAIL("removed a directory it did not make");
 	else
 		PASS();
 }

@@ -686,7 +686,7 @@ static int run_consistent(struct vctx *v, const struct bench_run *r)
 		return bad(v, here(v), "agent figures without --bench");
 	if (r->config == BC_A) {
 		if (r->mode != BMO_NONE || r->agent_bench || agent_ran ||
-		    r->agent.present)
+		    r->totals[BS_LOTA_ATTEST].present || r->agent.present)
 			return bad(v, here(v), "LOTA ran during an A run");
 		return 0;
 	}

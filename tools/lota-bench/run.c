@@ -1214,15 +1214,19 @@ static bool path_fits_launch(const char *p)
 	return true;
 }
 
-static int open_session(const char *arg, bool create, char *path)
+static int open_session(const char *arg, bool create, char *path, bool *made)
 {
 	int dir;
 
 	if (!path_fits_launch(arg))
 		goto bad_path;
-	if (create && mkdir(arg, 0755) && errno != EEXIST) {
-		fprintf(stderr, "lota-bench: %s: %s\n", arg, strerror(errno));
-		return -1;
+	if (create) {
+		*made = !mkdir(arg, 0755);
+		if (!*made && errno != EEXIST) {
+			fprintf(stderr, "lota-bench: %s: %s\n", arg,
+				strerror(errno));
+			return -1;
+		}
 	}
 	dir = open(arg, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 	if (dir < 0) {
@@ -1300,6 +1304,7 @@ int bench_main_run(int argc, char **argv)
 	struct bench_doc *d;
 	unsigned int index, nruns;
 	int dir, ret, status = 1;
+	bool made = false;
 
 	ret = parse_opts(argc, argv, &o);
 	if (ret)
@@ -1313,7 +1318,7 @@ int bench_main_run(int argc, char **argv)
 		perror("lota-bench");
 		return 1;
 	}
-	dir = open_session(argv[optind], o.any, path);
+	dir = open_session(argv[optind], o.any, path, &made);
 	if (dir < 0)
 		goto out_doc;
 
@@ -1390,6 +1395,8 @@ int bench_main_run(int argc, char **argv)
 out:
 	close(dir);
 out_doc:
+	if (made && status)
+		rmdir(argv[optind]);
 	free(d);
 	return status;
 }
