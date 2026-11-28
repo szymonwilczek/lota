@@ -11,8 +11,16 @@ The micro-benchmarks time the verification and SDK hot paths
 synthetic fleet, and ``lota-bench`` measures what LOTA costs a running game.
 None of these three ships in the packages.
 
+* :doc:`evaluation` -- the figures the tools gave on one reference host.
+* :doc:`load-testing` -- ``lota-loadgen`` and a synthetic fleet against a
+  live verifier.
+* :doc:`lota-bench` -- the cost of LOTA to a running game, from cgroups
+  and frame times.
+* :doc:`agent-bench` -- what ``lota-agent --bench`` writes about the
+  daemon, its BPF programs and the processes it protects.
+
 .. toctree::
-   :maxdepth: 1
+   :hidden:
 
    evaluation
    load-testing

@@ -12,8 +12,13 @@ the protected processes (:doc:`../agent/protection`), and records what the
 agent measures. The definitions it shares with user space are in
 :ghsrc:`include/lota.h`; the loader is :ghsrc:`src/agent/bpf_loader.c`.
 
+Contents
+========
+
+* :doc:`coding` -- rules for changing the program.
+
 .. toctree::
-   :maxdepth: 1
+   :hidden:
 
    coding
 

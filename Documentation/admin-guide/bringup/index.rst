@@ -13,18 +13,15 @@ before each change (:doc:`../lota-install`). The requirements of the
 platform are in :doc:`../platform-support`, and the order in which the
 daemon checks them in :doc:`../../agent/index`.
 
-* :doc:`Startup checks <gate-matrix>` -- what the daemon checks before it
-  starts, what a failed check does, and ``scripts/lota-dev-bringup.sh``,
-  which meets them on a development host.
-* :doc:`Manual steps <manual-reference>` -- the enforcement key, the
-  SELinux module and the label of the TPM device, the initramfs lock, the
-  kernel command line, the IMA policy, and clearing the agent's state.
-* :doc:`Attestation CA enrollment <ca-enrollment>` -- the CA of a publisher
-  and enrolling a host with it.
-* :doc:`Sealed keys <sealed-keys>` -- secrets the TPM releases only in an
-  expected boot state.
-* :doc:`After bring-up <limitations>` -- what still fails on a host that
-  passes every check.
+* :doc:`gate-matrix` -- what the daemon checks before it starts, what a failed
+  check does, and ``scripts/lota-dev-bringup.sh``, which meets them on a
+  development host.
+* :doc:`manual-reference` -- the enforcement key, the SELinux module and the
+  label of the TPM device, the initramfs lock, the kernel command line, the IMA
+  policy, and clearing the agent's state.
+* :doc:`ca-enrollment` -- the CA of a publisher and enrolling a host with it.
+* :doc:`sealed-keys` -- secrets the TPM releases only in an expected boot state.
+* :doc:`limitations` -- what still fails on a host that passes every check.
 
 .. toctree::
    :hidden:
