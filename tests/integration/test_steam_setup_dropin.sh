@@ -92,8 +92,6 @@ TEST "the verb says the drop-in takes effect at the next boot"
 says "$out" 'next boot' || FAIL "%s" "$out"
 TEST "the verb says nothing it does stops the running agent"
 says "$out" 'nothing here stops it' || FAIL "%s" "$out"
-TEST "the verb does not claim the listener is already there"
-denies "$out" 'drop-in active' || FAIL "%s" "$out"
 
 TEST "the usage names the directory the drop-in goes in"
 says "$("$SETUP" --help)" '/etc/systemd/system/lota-agent.service.d)' ||

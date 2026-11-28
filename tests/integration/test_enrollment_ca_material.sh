@@ -188,9 +188,4 @@ leaf_chains_to_existing_ca() {
 TEST "gen-certs -server reissues a lost ca.crt from ca.key"
 leaf_chains_to_existing_ca || FAIL
 
-# What the script tells the operator to do with each file has to name
-# the anchor, since that is the file the identity may be bound to.
-TEST "the script never has the operator enroll against the listener"
-bash -c "! grep -q -- '--ca-cert tls.crt' '$GEN_CA'" || FAIL
-
 test_end

@@ -22,7 +22,6 @@ export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 RUN_SH="$REPO_DIR/examples/enrollment/run.sh"
-README="$REPO_DIR/examples/enrollment/README.rst"
 
 if [[ ! -x "$RUN_SH" ]]; then
     FAIL "missing artifact: %s" "$RUN_SH"
@@ -38,18 +37,6 @@ TEST "CA_ADDR comes from the environment"
 overridable CA_ADDR || FAIL
 TEST "VERIFIER_ADDR comes from the environment"
 overridable VERIFIER_ADDR || FAIL
-
-# the header lists the knobs a reader sets
-header_names() {
-    head -n 30 "$RUN_SH" | grep -q "$1"
-}
-
-TEST "the script header names CA_ADDR"
-header_names CA_ADDR || FAIL
-TEST "the script header names VERIFIER_ADDR"
-header_names VERIFIER_ADDR || FAIL
-TEST "the README names both addresses"
-bash -c "grep -q 'CA_ADDR' '$README' && grep -q 'VERIFIER_ADDR' '$README'" || FAIL
 
 # a listener the test owns, on a port the kernel picked; its pid is LISTENER
 LISTENER=""

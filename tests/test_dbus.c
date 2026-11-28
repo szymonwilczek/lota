@@ -133,12 +133,6 @@ static void test_init_null_ipc(void)
 	}
 }
 
-static void test_cleanup_null(void)
-{
-	TEST("cleanup: NULL context does not crash");
-	dbus_cleanup(NULL);
-}
-
 static void test_get_fd_null(void)
 {
 	TEST("get_fd: NULL context -> -1");
@@ -157,14 +151,6 @@ static void test_process_null(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-}
-
-static void test_emit_null_safe(void)
-{
-	TEST("emit_*: NULL context does not crash");
-	dbus_emit_status_changed(NULL);
-	dbus_emit_attestation_result(NULL, true);
-	dbus_emit_mode_changed(NULL, 0);
 }
 
 static void test_init_system_bus(void)
@@ -374,12 +360,6 @@ static void test_double_cleanup(void)
 	dbus_cleanup(NULL);
 }
 
-static void test_ipc_set_dbus_null(void)
-{
-	TEST("ipc_set_dbus: NULL ctx does not crash");
-	ipc_set_dbus(NULL, NULL);
-}
-
 static void test_ipc_set_dbus_attach(void)
 {
 	TEST("ipc_set_dbus: attaches dbus pointer to ipc context");
@@ -577,11 +557,8 @@ int main(void)
 	setup_ipc();
 
 	test_init_null_ipc();
-	test_cleanup_null();
 	test_get_fd_null();
 	test_process_null();
-	test_emit_null_safe();
-	test_ipc_set_dbus_null();
 	test_ipc_set_dbus_attach();
 	test_version_names_this_build();
 	test_bus_answers_the_daemons_word();

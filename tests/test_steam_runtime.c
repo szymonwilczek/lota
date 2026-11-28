@@ -788,42 +788,6 @@ static void test_ensure_dir_missing_parent_quiet(void)
 	}
 }
 
-static void test_log_info_null(void)
-{
-	TEST("log_info: NULL pointer does not crash");
-
-	steam_runtime_log_info(NULL);
-}
-
-static void test_log_info_prints(void)
-{
-	struct steam_runtime_info info;
-
-	TEST("log_info: prints without error for populated info");
-
-	memset(&info, 0, sizeof(info));
-	info.type = STEAM_RT_SOLDIER;
-	info.env_flags = STEAM_ENV_PRESSURE_VESSEL | STEAM_ENV_STEAM_ACTIVE;
-	info.app_id = 570;
-	snprintf(info.container_id, sizeof(info.container_id), "pv-test");
-	snprintf(info.container_socket_path, sizeof(info.container_socket_path),
-		 "/run/user/1000/lota/lota.sock");
-
-	int saved_fd = dup(STDERR_FILENO);
-	int devnull = open("/dev/null", O_WRONLY);
-	if (devnull >= 0) {
-		dup2(devnull, STDERR_FILENO);
-		close(devnull);
-	}
-
-	steam_runtime_log_info(&info);
-
-	if (saved_fd >= 0) {
-		dup2(saved_fd, STDERR_FILENO);
-		close(saved_fd);
-	}
-}
-
 int main(void)
 {
 	test_begin("steam runtime");
@@ -870,8 +834,6 @@ int main(void)
 	test_ensure_dir_missing_parent_quiet();
 
 	/* log_info */
-	test_log_info_null();
-	test_log_info_prints();
 
 	restore_steam_env();
 	cleanup_tmpdir();

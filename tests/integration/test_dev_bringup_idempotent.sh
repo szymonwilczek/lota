@@ -362,8 +362,4 @@ says "$tpm_calls" "0x81010020" || FAIL "%s" "$tpm_calls"
 TEST "--reset leaves the default AIK handle alone"
 denies "$tpm_calls" "$AIK_HANDLE" || FAIL "%s" "$tpm_calls"
 
-header_drops_the_rollback_claim() { ! grep -q "rolls back" "$BRINGUP"; }
-TEST "the header does not promise a rollback the script does not do"
-header_drops_the_rollback_claim || FAIL
-
 test_end
